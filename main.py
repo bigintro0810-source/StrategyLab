@@ -1,28 +1,52 @@
+from config.strategy_config import StrategyConfig
+from engine.backtest import Backtest
 from engine.data_loader import DataLoader
-from engine.indicators import ema, sma, rsi, atr
+from engine.indicator_manager import IndicatorManager
+from engine.metrics import Metrics
+from strategies.test_strategy import TestStrategy
 
 
 def main():
     print("=== Strategy Lab ===")
 
+    # 設定
+    config = StrategyConfig()
+
+    # データ読み込み
     loader = DataLoader()
-    df = loader.load("1m")
+    df = loader.load(config.timeframe)
 
-    df = df.head(1000).copy()
+    # 動作確認用
+    df = df.head(1000)
 
-    df["sma_20"] = sma(df["close"], 20)
-    df["ema_20"] = ema(df["close"], 20)
-    df["rsi_14"] = rsi(df["close"], 14)
-    df["atr_14"] = atr(df, 14)
+    # インジケーター追加
+    manager = IndicatorManager(df)
+    manager.add_ema(config.ema_period)
+    manager.add_rsi(config.rsi_period)
+    df = manager.data
 
-    print(df[[
-        "datetime",
-        "close",
-        "sma_20",
-        "ema_20",
-        "rsi_14",
-        "atr_14",
-    ]].tail(20))
+    # ストラテジー
+    strategy = TestStrategy(config)
+
+    # バックテスト
+    backtest = Backtest(df, strategy)
+    trades = backtest.run()
+
+    # 成績
+    metrics = Metrics(trades)
+    summary = metrics.summary()
+
+    print("\n=== 検証結果 ===")
+    print(f"時間足: {config.timeframe}")
+    print(f"EMA期間: {config.ema_period}")
+    print(f"RSI期間: {config.rsi_period}")
+    print(f"RSI閾値: {config.rsi_threshold}")
+
+    print(f"\nトレード数: {summary['total_trades']}")
+    print(f"勝率: {summary['win_rate']:.2f}%")
+    print(f"総利益: {summary['total_profit']:.3f}")
+    print(f"PF: {summary['profit_factor']:.3f}")
+    print(f"期待値: {summary['average_profit']:.3f}")
 
 
 if __name__ == "__main__":
