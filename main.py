@@ -1,7 +1,7 @@
 from config.strategy_config import StrategyConfig
 from engine.backtest import Backtest
+from engine.cache import IndicatorCache
 from engine.data_loader import DataLoader
-from engine.indicator_manager import IndicatorManager
 from engine.metrics import Metrics
 from strategies.test_strategy import TestStrategy
 
@@ -16,14 +16,12 @@ def main():
     loader = DataLoader()
     df = loader.load(config.timeframe)
 
-    # 動作確認用
+    # 動作確認用（本番では削除）
     df = df.head(1000)
 
-    # インジケーター追加
-    manager = IndicatorManager(df)
-    manager.add_ema(config.ema_period)
-    manager.add_rsi(config.rsi_period)
-    df = manager.data
+    # インジケーターを一度だけ計算
+    cache = IndicatorCache(df)
+    df = cache.preload()
 
     # ストラテジー
     strategy = TestStrategy(config)
