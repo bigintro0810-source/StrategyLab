@@ -1,16 +1,28 @@
-from engine.metrics import calculate_metrics
+import pandas as pd
+
+from engine.broker import Broker
 
 
-def run_backtest(df, strategy):
+class Backtest:
+    def __init__(self, data: pd.DataFrame, strategy):
+        self.data = data
+        self.strategy = strategy
+        self.broker = Broker()
 
-    print()
+    def run(self):
+        for i in range(len(self.data)):
+            row = self.data.iloc[i]
 
-    print("=" * 50)
-    print("Backtest Start")
-    print("=" * 50)
+            self.broker.check_exit(
+                time=row["datetime"],
+                high=row["high"],
+                low=row["low"],
+            )
 
-    trades = strategy(df)
+            if not self.broker.has_position():
+                order = self.strategy.next(i, self.data)
 
-    result = calculate_metrics(trades)
+                if order is not None:
+                    self.broker.open_position(order)
 
-    return result
+        return self.broker.trades

@@ -1,70 +1,33 @@
-from config import *
-
-from engine.loader import load_csv
-from engine.normalizer import normalize_ohlc_columns
-from engine.data_info import show_data_info
-from engine.validator import validate_ohlc_data
-from engine.backtest import run_backtest
-
-from strategies.ema_sample import ema_sample_strategy
-
-from indicators import ta
+from engine.data_loader import DataLoader
+from engine.backtest import Backtest
+from engine.metrics import Metrics
+from strategies.test_strategy import TestStrategy
 
 
 def main():
+    print("=== Strategy Lab ===")
 
-    print("=" * 50)
-    print("Strategy Lab")
-    print("=" * 50)
+    loader = DataLoader()
+    df = loader.load("1m")
 
-    file = RAW_DATA_DIR / "USDJPY_2003_2026_15m.csv"
+    df = df.head(1000)
 
-    df = load_csv(file)
-    df = normalize_ohlc_columns(df)
+    strategy = TestStrategy()
+    backtest = Backtest(df, strategy)
 
-    show_data_info(
-        df,
-        symbol="USDJPY",
-        timeframe="15m"
-    )
+    trades = backtest.run()
 
-    if not validate_ohlc_data(df):
-        print("CSVに問題があるため終了します。")
-        return
+    metrics = Metrics(trades)
+    summary = metrics.summary()
 
-    df["EMA200"] = ta.ema(df["Close"], 200)
-    df["SMA200"] = ta.sma(df["Close"], 200)
-    df["RSI14"] = ta.rsi(df["Close"], 14)
-    df["ATR14"] = ta.atr(df, 14)
-
-    print()
-    print("=" * 50)
-    print("Indicator Test")
-    print("=" * 50)
-
-    print(
-        df[
-            [
-                "Close",
-                "EMA200",
-                "SMA200",
-                "RSI14",
-                "ATR14"
-            ]
-        ].tail(10)
-    )
-
-    result = run_backtest(
-        df,
-        ema_sample_strategy
-    )
-
-    print()
-    print("=" * 50)
-    print("Backtest Result")
-    print("=" * 50)
-
-    print(result)
+    print("\n=== 検証結果 ===")
+    print(f"トレード数: {summary['total_trades']}")
+    print(f"勝率: {summary['win_rate']:.2f}%")
+    print(f"総利益: {summary['total_profit']:.3f}")
+    print(f"総利益額: {summary['gross_profit']:.3f}")
+    print(f"総損失額: {summary['gross_loss']:.3f}")
+    print(f"PF: {summary['profit_factor']:.3f}")
+    print(f"期待値: {summary['average_profit']:.3f}")
 
 
 if __name__ == "__main__":
