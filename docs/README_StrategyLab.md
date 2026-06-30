@@ -87,3 +87,16 @@ Pine Scriptを生成する。
 ・お気に入り
 ・研究ノート
 ・戦略比較
+
+## Current Features
+
+- Numba高速バックテスト
+- Indicator Cache
+- Signal Cache
+- ATR Filter
+- Session Filter
+- Configurable Scoring
+- CSV Reranking
+- Yearly Stability
+- Monthly Stability
+- Max Win/Loss Streak
