@@ -8,6 +8,7 @@ def run_numba_backtest(
     high_array,
     low_array,
     year_array,
+    month_index_array,
     signal_array,
     direction_code,
     stop_loss_pips,
@@ -35,9 +36,18 @@ def run_numba_backtest(
 
     base_year = 1970
     max_years = 100
+    max_months = 1200
 
     yearly_profit = np.zeros(max_years)
     yearly_trades = np.zeros(max_years)
+
+    monthly_profit = np.zeros(max_months)
+    monthly_trades = np.zeros(max_months)
+
+    current_win_streak = 0
+    current_loss_streak = 0
+    max_consecutive_wins = 0
+    max_consecutive_losses = 0
 
     n = len(close_array)
 
@@ -65,13 +75,34 @@ def run_numba_backtest(
                     if profit > 0:
                         win_trades += 1
                         gross_profit += profit
+
+                        current_win_streak += 1
+                        current_loss_streak = 0
+
+                        if current_win_streak > max_consecutive_wins:
+                            max_consecutive_wins = current_win_streak
+
                     elif profit < 0:
                         gross_loss += -profit
+
+                        current_loss_streak += 1
+                        current_win_streak = 0
+
+                        if current_loss_streak > max_consecutive_losses:
+                            max_consecutive_losses = current_loss_streak
+                    else:
+                        current_win_streak = 0
+                        current_loss_streak = 0
 
                     year_index = year_array[i] - base_year
                     if 0 <= year_index < max_years:
                         yearly_profit[year_index] += profit
                         yearly_trades[year_index] += 1
+
+                    month_index = month_index_array[i]
+                    if 0 <= month_index < max_months:
+                        monthly_profit[month_index] += profit
+                        monthly_trades[month_index] += 1
 
                     if equity > peak:
                         peak = equity
@@ -100,13 +131,34 @@ def run_numba_backtest(
                     if profit > 0:
                         win_trades += 1
                         gross_profit += profit
+
+                        current_win_streak += 1
+                        current_loss_streak = 0
+
+                        if current_win_streak > max_consecutive_wins:
+                            max_consecutive_wins = current_win_streak
+
                     elif profit < 0:
                         gross_loss += -profit
+
+                        current_loss_streak += 1
+                        current_win_streak = 0
+
+                        if current_loss_streak > max_consecutive_losses:
+                            max_consecutive_losses = current_loss_streak
+                    else:
+                        current_win_streak = 0
+                        current_loss_streak = 0
 
                     year_index = year_array[i] - base_year
                     if 0 <= year_index < max_years:
                         yearly_profit[year_index] += profit
                         yearly_trades[year_index] += 1
+
+                    month_index = month_index_array[i]
+                    if 0 <= month_index < max_months:
+                        monthly_profit[month_index] += profit
+                        monthly_trades[month_index] += 1
 
                     if equity > peak:
                         peak = equity
@@ -133,7 +185,9 @@ def run_numba_backtest(
     if total_trades == 0:
         return (
             0, 0.0, 0.0, 0.0, 0.0, 0.0, -999999.0,
-            0, 0, 0, 0, 0.0, 0.0, 0.0
+            0, 0, 0, 0, 0.0, 0.0, 0.0,
+            0, 0, 0, 0, 0.0, 0.0, 0.0,
+            0, 0
         )
 
     win_rate = win_trades / total_trades * 100.0
@@ -176,6 +230,38 @@ def run_numba_backtest(
         avg_yearly_profit = 0.0
         yearly_stability = 0.0
 
+    active_months = 0
+    winning_months = 0
+    losing_months = 0
+    flat_months = 0
+    monthly_profit_sum = 0.0
+    min_monthly_profit = 0.0
+
+    for j in range(max_months):
+        if monthly_trades[j] > 0:
+            active_months += 1
+            mp = monthly_profit[j]
+            monthly_profit_sum += mp
+
+            if active_months == 1:
+                min_monthly_profit = mp
+            elif mp < min_monthly_profit:
+                min_monthly_profit = mp
+
+            if mp > 0:
+                winning_months += 1
+            elif mp < 0:
+                losing_months += 1
+            else:
+                flat_months += 1
+
+    if active_months > 0:
+        avg_monthly_profit = monthly_profit_sum / active_months
+        monthly_stability = winning_months / active_months * 100.0
+    else:
+        avg_monthly_profit = 0.0
+        monthly_stability = 0.0
+
     score_pf = profit_factor
     if score_pf > 10.0:
         score_pf = 10.0
@@ -203,6 +289,15 @@ def run_numba_backtest(
         avg_yearly_profit,
         min_yearly_profit,
         yearly_stability,
+        active_months,
+        winning_months,
+        losing_months,
+        flat_months,
+        avg_monthly_profit,
+        min_monthly_profit,
+        monthly_stability,
+        max_consecutive_wins,
+        max_consecutive_losses,
     )
 
 
@@ -213,6 +308,11 @@ class NumbaBacktest:
         self.low_array = data["low"].to_numpy(copy=False)
         self.year_array = data["datetime"].dt.year.to_numpy(copy=False)
 
+        year = data["datetime"].dt.year.to_numpy(copy=False)
+        month = data["datetime"].dt.month.to_numpy(copy=False)
+
+        self.month_index_array = (year - 1970) * 12 + (month - 1)
+
     def run(self, config, signal_array):
         direction_code = 1 if config.direction == "long" else -1
         start_index = max(config.ema_period, config.rsi_period)
@@ -222,6 +322,7 @@ class NumbaBacktest:
             self.high_array,
             self.low_array,
             self.year_array,
+            self.month_index_array,
             signal_array,
             direction_code,
             config.stop_loss_pips,

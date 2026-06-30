@@ -18,6 +18,15 @@ class ScoringConfig:
     avg_yearly_profit_weight: float = 5.0
     min_yearly_profit_weight: float = 5.0
 
+    monthly_stability_weight: float = 20.0
+    winning_months_weight: float = 2.0
+    losing_months_weight: float = 2.0
+    avg_monthly_profit_weight: float = 10.0
+    min_monthly_profit_weight: float = 10.0
+
+    max_consecutive_wins_weight: float = 0.0
+    max_consecutive_losses_weight: float = 20.0
+
     minimum_trades: int = 1000
     minimum_profit: float = 0.0
     minimum_pf: float = 1.05
@@ -26,6 +35,9 @@ class ScoringConfig:
     maximum_drawdown: float = 999999.0
     minimum_win_rate: float = 0.0
     minimum_average_profit: float = -999999.0
+
+    minimum_monthly_stability: float = 0.0
+    maximum_consecutive_losses: int = 999999
 
     exclude_long: int = 0
     exclude_short: int = 0

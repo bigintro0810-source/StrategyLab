@@ -100,6 +100,15 @@ class Optimizer:
                 avg_yearly_profit,
                 min_yearly_profit,
                 yearly_stability,
+                active_months,
+                winning_months,
+                losing_months,
+                flat_months,
+                avg_monthly_profit,
+                min_monthly_profit,
+                monthly_stability,
+                max_consecutive_wins,
+                max_consecutive_losses,
             ) = self.backtest.run(config, signal_array)
 
             if profit_factor >= 999999.0:
@@ -133,6 +142,15 @@ class Optimizer:
                 avg_yearly_profit=avg_yearly_profit,
                 min_yearly_profit=min_yearly_profit,
                 yearly_stability=yearly_stability,
+                active_months=active_months,
+                winning_months=winning_months,
+                losing_months=losing_months,
+                flat_months=flat_months,
+                avg_monthly_profit=avg_monthly_profit,
+                min_monthly_profit=min_monthly_profit,
+                monthly_stability=monthly_stability,
+                max_consecutive_wins=max_consecutive_wins,
+                max_consecutive_losses=max_consecutive_losses,
             )
 
             results.append(result)

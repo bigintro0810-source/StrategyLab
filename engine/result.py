@@ -38,6 +38,17 @@ class Result:
     min_yearly_profit: float = 0.0
     yearly_stability: float = 0.0
 
+    active_months: int = 0
+    winning_months: int = 0
+    losing_months: int = 0
+    flat_months: int = 0
+    avg_monthly_profit: float = 0.0
+    min_monthly_profit: float = 0.0
+    monthly_stability: float = 0.0
+
+    max_consecutive_wins: int = 0
+    max_consecutive_losses: int = 0
+
     def to_dict(self):
         return {
             "timeframe": self.timeframe,
@@ -67,4 +78,13 @@ class Result:
             "avg_yearly_profit": self.avg_yearly_profit,
             "min_yearly_profit": self.min_yearly_profit,
             "yearly_stability": self.yearly_stability,
+            "active_months": self.active_months,
+            "winning_months": self.winning_months,
+            "losing_months": self.losing_months,
+            "flat_months": self.flat_months,
+            "avg_monthly_profit": self.avg_monthly_profit,
+            "min_monthly_profit": self.min_monthly_profit,
+            "monthly_stability": self.monthly_stability,
+            "max_consecutive_wins": self.max_consecutive_wins,
+            "max_consecutive_losses": self.max_consecutive_losses,
         }
