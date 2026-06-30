@@ -1,53 +1,64 @@
-from engine.result import Result
+from config.scoring_config import ScoringConfig
 
 
 class Ranking:
-    def __init__(self, results: list[Result]):
+    def __init__(self, results):
         self.results = results
+        self.config = ScoringConfig()
 
-    def valid_results(self, min_trades: int = 1):
-        return [
-            r for r in self.results
-            if r.total_trades >= min_trades and r.score > -999999
-        ]
+    def _score(self, r):
 
-    def by_score(self, top: int = 20, min_trades: int = 1):
+        if r.total_trades < self.config.minimum_trades:
+            return -999999999
+
+        expectancy = r.average_profit
+
+        return (
+            r.profit_factor * self.config.pf_weight
+            + r.total_profit * self.config.profit_weight
+            + expectancy * self.config.expectancy_weight
+            + r.win_rate * self.config.win_rate_weight
+            - r.max_drawdown * self.config.drawdown_weight
+            + r.total_trades * self.config.trades_weight
+        )
+
+    def by_score(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.score,
+            self.results,
+            key=self._score,
             reverse=True
         )[:top]
 
-    def by_profit_factor(self, top: int = 20, min_trades: int = 1):
+    def by_profit_factor(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.profit_factor,
+            self.results,
+            key=lambda x: x.profit_factor,
             reverse=True
         )[:top]
 
-    def by_total_profit(self, top: int = 20, min_trades: int = 1):
+    def by_total_profit(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.total_profit,
+            self.results,
+            key=lambda x: x.total_profit,
             reverse=True
         )[:top]
 
-    def by_win_rate(self, top: int = 20, min_trades: int = 1):
+    def by_win_rate(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.win_rate,
+            self.results,
+            key=lambda x: x.win_rate,
             reverse=True
         )[:top]
 
-    def by_average_profit(self, top: int = 20, min_trades: int = 1):
+    def by_average_profit(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.average_profit,
+            self.results,
+            key=lambda x: x.average_profit,
             reverse=True
         )[:top]
 
-    def by_drawdown(self, top: int = 20, min_trades: int = 1):
+    def by_drawdown(self, top=10):
         return sorted(
-            self.valid_results(min_trades),
-            key=lambda r: r.max_drawdown
+            self.results,
+            key=lambda x: x.max_drawdown
         )[:top]
