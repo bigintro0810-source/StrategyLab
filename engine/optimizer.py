@@ -1,4 +1,4 @@
-from engine.backtest import Backtest
+from engine.fast_backtest import FastBacktest
 from engine.metrics import Metrics
 from engine.parameter_grid import ParameterGrid
 from engine.result import Result
@@ -17,7 +17,7 @@ class Optimizer:
 
         for index, config in enumerate(self.grid.generate(), start=1):
             strategy = self.strategy_class(config)
-            backtest = Backtest(self.data, strategy)
+            backtest = FastBacktest(self.data, strategy)
             trades = backtest.run()
 
             metrics = Metrics(trades)
