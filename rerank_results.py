@@ -1,13 +1,13 @@
 import pandas as pd
 
-from config.scoring_config import ScoringConfig
+from config.scoring_config import load_scoring_config
 
 
 INPUT_CSV = "output/optimizer_results_session.csv"
 OUTPUT_CSV = "output/reranked_results.csv"
 
 
-config = ScoringConfig()
+config = load_scoring_config()
 
 
 def get_value(row, column_name, default=0.0):
@@ -17,29 +17,62 @@ def get_value(row, column_name, default=0.0):
     return default
 
 
-def calculate_score(row):
-
+def is_excluded(row):
     total_trades = get_value(row, "total_trades")
     total_profit = get_value(row, "total_profit")
     profit_factor = get_value(row, "profit_factor")
     yearly_stability = get_value(row, "yearly_stability")
+    max_drawdown = get_value(row, "max_drawdown")
+    win_rate = get_value(row, "win_rate")
+    average_profit = get_value(row, "average_profit")
+    direction = get_value(row, "direction", "")
+    session_name = get_value(row, "session_name", "")
 
     if total_trades < config.minimum_trades:
-        return -999999999
+        return True
 
     if total_profit < config.minimum_profit:
-        return -999999999
+        return True
 
     if profit_factor < config.minimum_pf:
-        return -999999999
+        return True
 
     if yearly_stability < config.minimum_yearly_stability:
+        return True
+
+    if max_drawdown > config.maximum_drawdown:
+        return True
+
+    if win_rate < config.minimum_win_rate:
+        return True
+
+    if average_profit < config.minimum_average_profit:
+        return True
+
+    if config.exclude_long == 1 and direction == "long":
+        return True
+
+    if config.exclude_short == 1 and direction == "short":
+        return True
+
+    if config.only_session != "" and session_name != config.only_session:
+        return True
+
+    return False
+
+
+def calculate_score(row):
+    if is_excluded(row):
         return -999999999
 
+    total_trades = get_value(row, "total_trades")
+    total_profit = get_value(row, "total_profit")
+    profit_factor = get_value(row, "profit_factor")
     average_profit = get_value(row, "average_profit")
     win_rate = get_value(row, "win_rate")
     max_drawdown = get_value(row, "max_drawdown")
 
+    yearly_stability = get_value(row, "yearly_stability")
     winning_years = get_value(row, "winning_years")
     losing_years = get_value(row, "losing_years")
     avg_yearly_profit = get_value(row, "avg_yearly_profit")
@@ -63,10 +96,11 @@ def calculate_score(row):
 
 
 def main():
-
     df = pd.read_csv(INPUT_CSV)
 
     df["new_score"] = df.apply(calculate_score, axis=1)
+
+    df = df[df["new_score"] > -999999999]
 
     df = df.sort_values("new_score", ascending=False)
 
@@ -76,8 +110,14 @@ def main():
     print("========== 新ランキング TOP10 ==========")
     print()
 
-    for i, row in enumerate(df.head(10).itertuples(index=False), start=1):
+    if len(df) == 0:
+        print("条件を満たすストラテジーはありません。")
+        print()
+        print("CSV保存完了")
+        print(OUTPUT_CSV)
+        return
 
+    for i, row in enumerate(df.head(10).itertuples(index=False), start=1):
         yearly_stability = getattr(row, "yearly_stability", 0.0)
         winning_years = getattr(row, "winning_years", 0)
         losing_years = getattr(row, "losing_years", 0)
