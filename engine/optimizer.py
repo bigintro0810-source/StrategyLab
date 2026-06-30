@@ -1,3 +1,5 @@
+from engine.condition_config import ConditionConfig
+from engine.condition_engine import ConditionEngine
 from engine.numba_backtest import NumbaBacktest
 from engine.parameter_grid import ParameterGrid
 from engine.result import Result
@@ -10,12 +12,30 @@ class Optimizer:
         self.grid = ParameterGrid()
         self.backtest = NumbaBacktest(data)
 
+        self.condition_config = ConditionConfig()
+        self.condition_engine = ConditionEngine(
+            data,
+            self.condition_config
+        )
+
     def run(self):
         results = []
 
         total = self.grid.count()
 
         for index, config in enumerate(self.grid.generate(), start=1):
+
+            ema_column = f"ema_{config.ema_period}"
+            rsi_column = f"rsi_{config.rsi_period}"
+
+            ema_array = self.data[ema_column].to_numpy(copy=False)
+            rsi_array = self.data[rsi_column].to_numpy(copy=False)
+
+            signal_array = self.condition_engine.build_signal(
+                ema_array=ema_array,
+                rsi_array=rsi_array,
+                rsi_threshold=config.rsi_threshold,
+            )
 
             (
                 total_trades,
@@ -25,7 +45,7 @@ class Optimizer:
                 average_profit,
                 max_drawdown,
                 score,
-            ) = self.backtest.run(config)
+            ) = self.backtest.run(config, signal_array)
 
             if profit_factor >= 999999.0:
                 profit_factor = float("inf")

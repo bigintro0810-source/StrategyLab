@@ -6,12 +6,10 @@ def run_numba_backtest(
     close_array,
     high_array,
     low_array,
-    ema_array,
-    rsi_array,
+    signal_array,
     direction_code,
     stop_loss_pips,
     take_profit_pips,
-    rsi_threshold,
     start_index,
     size,
 ):
@@ -102,12 +100,8 @@ def run_numba_backtest(
                     has_position = False
 
         if not has_position and i >= start_index:
-            close_price = close_array[i]
-            ema_value = ema_array[i]
-            rsi_value = rsi_array[i]
-
-            if close_price > ema_value and rsi_value > rsi_threshold:
-                entry_price = close_price
+            if signal_array[i]:
+                entry_price = close_array[i]
 
                 if direction_code == 1:
                     stop_loss = entry_price - stop_loss_pips * pip
@@ -160,19 +154,11 @@ def run_numba_backtest(
 
 class NumbaBacktest:
     def __init__(self, data):
-        self.data = data
-
         self.close_array = data["close"].to_numpy(copy=False)
         self.high_array = data["high"].to_numpy(copy=False)
         self.low_array = data["low"].to_numpy(copy=False)
 
-    def run(self, config):
-        ema_column = f"ema_{config.ema_period}"
-        rsi_column = f"rsi_{config.rsi_period}"
-
-        ema_array = self.data[ema_column].to_numpy(copy=False)
-        rsi_array = self.data[rsi_column].to_numpy(copy=False)
-
+    def run(self, config, signal_array):
         direction_code = 1 if config.direction == "long" else -1
 
         start_index = max(
@@ -184,12 +170,10 @@ class NumbaBacktest:
             self.close_array,
             self.high_array,
             self.low_array,
-            ema_array,
-            rsi_array,
+            signal_array,
             direction_code,
             config.stop_loss_pips,
             config.take_profit_pips,
-            config.rsi_threshold,
             start_index,
             config.size,
         )
