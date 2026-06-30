@@ -13,7 +13,10 @@ class ParameterGrid:
         self.rsi_thresholds = [40, 50, 60]
 
         self.atr_periods = [14]
-        self.atr_thresholds = [0.0]
+
+        # 0.0 はATRフィルターOFF
+        # 0.03 = 3pips, 0.05 = 5pips, 0.07 = 7pips, 0.10 = 10pips
+        self.atr_thresholds = [0.0, 0.03, 0.05, 0.07, 0.10]
 
         self.directions = ["long", "short"]
 

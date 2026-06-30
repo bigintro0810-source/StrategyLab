@@ -12,11 +12,66 @@ class Optimizer:
         self.grid = ParameterGrid()
         self.backtest = NumbaBacktest(data)
 
-        self.condition_config = ConditionConfig()
-        self.condition_engine = ConditionEngine(
-            data,
-            self.condition_config
+        self.signal_cache = {}
+
+    def _build_signal_cache_key(self, config):
+        return (
+            config.ema_period,
+            config.rsi_period,
+            config.rsi_threshold,
+            config.atr_period,
+            config.atr_threshold,
         )
+
+    def _get_signal_array(self, config):
+        cache_key = self._build_signal_cache_key(config)
+
+        if cache_key in self.signal_cache:
+            return self.signal_cache[cache_key]
+
+        use_atr = config.atr_threshold > 0.0
+
+        condition_config = ConditionConfig(
+            use_ema=True,
+            ema_above=True,
+            ema_below=False,
+
+            use_rsi=True,
+            rsi_above=True,
+            rsi_below=False,
+
+            use_atr=use_atr,
+            atr_above=use_atr,
+            atr_below=False,
+        )
+
+        condition_engine = ConditionEngine(
+            self.data,
+            condition_config
+        )
+
+        ema_column = f"ema_{config.ema_period}"
+        rsi_column = f"rsi_{config.rsi_period}"
+        atr_column = f"atr_{config.atr_period}"
+
+        ema_array = self.data[ema_column].to_numpy(copy=False)
+        rsi_array = self.data[rsi_column].to_numpy(copy=False)
+
+        atr_array = None
+        if use_atr:
+            atr_array = self.data[atr_column].to_numpy(copy=False)
+
+        signal_array = condition_engine.build_signal(
+            ema_array=ema_array,
+            rsi_array=rsi_array,
+            atr_array=atr_array,
+            rsi_threshold=config.rsi_threshold,
+            atr_threshold=config.atr_threshold,
+        )
+
+        self.signal_cache[cache_key] = signal_array
+
+        return signal_array
 
     def run(self):
         results = []
@@ -25,17 +80,7 @@ class Optimizer:
 
         for index, config in enumerate(self.grid.generate(), start=1):
 
-            ema_column = f"ema_{config.ema_period}"
-            rsi_column = f"rsi_{config.rsi_period}"
-
-            ema_array = self.data[ema_column].to_numpy(copy=False)
-            rsi_array = self.data[rsi_column].to_numpy(copy=False)
-
-            signal_array = self.condition_engine.build_signal(
-                ema_array=ema_array,
-                rsi_array=rsi_array,
-                rsi_threshold=config.rsi_threshold,
-            )
+            signal_array = self._get_signal_array(config)
 
             (
                 total_trades,
@@ -55,6 +100,8 @@ class Optimizer:
                 ema_period=config.ema_period,
                 rsi_period=config.rsi_period,
                 rsi_threshold=config.rsi_threshold,
+                atr_period=config.atr_period,
+                atr_threshold=config.atr_threshold,
                 direction=config.direction,
                 stop_loss_pips=config.stop_loss_pips,
                 take_profit_pips=config.take_profit_pips,

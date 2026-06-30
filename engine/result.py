@@ -13,6 +13,9 @@ class Result:
     rsi_period: int
     rsi_threshold: float
 
+    atr_period: int
+    atr_threshold: float
+
     direction: str
 
     stop_loss_pips: float
@@ -45,6 +48,8 @@ class Result:
             "ema_period": self.ema_period,
             "rsi_period": self.rsi_period,
             "rsi_threshold": self.rsi_threshold,
+            "atr_period": self.atr_period,
+            "atr_threshold": self.atr_threshold,
             "direction": self.direction,
             "stop_loss_pips": self.stop_loss_pips,
             "take_profit_pips": self.take_profit_pips,
