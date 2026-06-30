@@ -35,11 +35,9 @@ class Optimizer:
             use_ema=True,
             ema_above=True,
             ema_below=False,
-
             use_rsi=True,
             rsi_above=True,
             rsi_below=False,
-
             use_atr=use_atr,
             atr_above=use_atr,
             atr_below=False,
@@ -79,7 +77,6 @@ class Optimizer:
         total = self.grid.count()
 
         for index, config in enumerate(self.grid.generate(), start=1):
-
             signal_array = self._get_signal_array(config)
 
             (

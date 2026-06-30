@@ -49,7 +49,6 @@ def run_numba_backtest(
 
                 if should_exit:
                     profit = (exit_price - entry_price) * size
-
                     total_trades += 1
                     total_profit += profit
                     equity += profit
@@ -79,7 +78,6 @@ def run_numba_backtest(
 
                 if should_exit:
                     profit = (entry_price - exit_price) * size
-
                     total_trades += 1
                     total_profit += profit
                     equity += profit
@@ -113,33 +111,35 @@ def run_numba_backtest(
                 has_position = True
 
     if total_trades == 0:
-        win_rate = 0.0
-        profit_factor = 0.0
-        average_profit = 0.0
-        score = -999999.0
-    else:
-        win_rate = win_trades / total_trades * 100.0
-        average_profit = total_profit / total_trades
-
-        if gross_loss == 0.0:
-            if gross_profit > 0.0:
-                profit_factor = 999999.0
-            else:
-                profit_factor = 0.0
-        else:
-            profit_factor = gross_profit / gross_loss
-
-        score_pf = profit_factor
-        if score_pf > 10.0:
-            score_pf = 10.0
-
-        score = (
-            score_pf * 100.0
-            + average_profit * 1000.0
-            + win_rate
-            - max_drawdown * 50.0
-            + total_trades * 0.1
+        return (
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -999999.0,
         )
+
+    win_rate = win_trades / total_trades * 100.0
+    average_profit = total_profit / total_trades
+
+    if gross_loss == 0.0:
+        profit_factor = 999999.0 if gross_profit > 0.0 else 0.0
+    else:
+        profit_factor = gross_profit / gross_loss
+
+    score_pf = profit_factor
+    if score_pf > 10.0:
+        score_pf = 10.0
+
+    score = (
+        score_pf * 100.0
+        + average_profit * 1000.0
+        + win_rate
+        - max_drawdown * 50.0
+        + total_trades * 0.1
+    )
 
     return (
         total_trades,
@@ -160,11 +160,7 @@ class NumbaBacktest:
 
     def run(self, config, signal_array):
         direction_code = 1 if config.direction == "long" else -1
-
-        start_index = max(
-            config.ema_period,
-            config.rsi_period
-        )
+        start_index = max(config.ema_period, config.rsi_period)
 
         return run_numba_backtest(
             self.close_array,
