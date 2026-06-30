@@ -93,6 +93,13 @@ class Optimizer:
                 average_profit,
                 max_drawdown,
                 score,
+                active_years,
+                winning_years,
+                losing_years,
+                flat_years,
+                avg_yearly_profit,
+                min_yearly_profit,
+                yearly_stability,
             ) = self.backtest.run(config, signal_array)
 
             if profit_factor >= 999999.0:
@@ -119,6 +126,13 @@ class Optimizer:
                 max_drawdown=max_drawdown,
                 sharpe_ratio=0.0,
                 score=score,
+                active_years=active_years,
+                winning_years=winning_years,
+                losing_years=losing_years,
+                flat_years=flat_years,
+                avg_yearly_profit=avg_yearly_profit,
+                min_yearly_profit=min_yearly_profit,
+                yearly_stability=yearly_stability,
             )
 
             results.append(result)

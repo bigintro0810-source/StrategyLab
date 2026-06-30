@@ -30,6 +30,14 @@ class Result:
     sharpe_ratio: float
     score: float
 
+    active_years: int = 0
+    winning_years: int = 0
+    losing_years: int = 0
+    flat_years: int = 0
+    avg_yearly_profit: float = 0.0
+    min_yearly_profit: float = 0.0
+    yearly_stability: float = 0.0
+
     def to_dict(self):
         return {
             "timeframe": self.timeframe,
@@ -52,4 +60,11 @@ class Result:
             "max_drawdown": self.max_drawdown,
             "sharpe_ratio": self.sharpe_ratio,
             "score": self.score,
+            "active_years": self.active_years,
+            "winning_years": self.winning_years,
+            "losing_years": self.losing_years,
+            "flat_years": self.flat_years,
+            "avg_yearly_profit": self.avg_yearly_profit,
+            "min_yearly_profit": self.min_yearly_profit,
+            "yearly_stability": self.yearly_stability,
         }

@@ -10,26 +10,53 @@ OUTPUT_CSV = "output/reranked_results.csv"
 config = ScoringConfig()
 
 
+def get_value(row, column_name, default=0.0):
+    if column_name in row.index:
+        return row[column_name]
+
+    return default
+
+
 def calculate_score(row):
 
-    if row["total_trades"] < config.minimum_trades:
+    total_trades = get_value(row, "total_trades")
+    total_profit = get_value(row, "total_profit")
+    profit_factor = get_value(row, "profit_factor")
+    yearly_stability = get_value(row, "yearly_stability")
+
+    if total_trades < config.minimum_trades:
         return -999999999
 
-    if row["total_profit"] < config.minimum_profit:
+    if total_profit < config.minimum_profit:
         return -999999999
 
-    if row["profit_factor"] < config.minimum_pf:
+    if profit_factor < config.minimum_pf:
         return -999999999
 
-    expectancy = row["average_profit"]
+    if yearly_stability < config.minimum_yearly_stability:
+        return -999999999
+
+    average_profit = get_value(row, "average_profit")
+    win_rate = get_value(row, "win_rate")
+    max_drawdown = get_value(row, "max_drawdown")
+
+    winning_years = get_value(row, "winning_years")
+    losing_years = get_value(row, "losing_years")
+    avg_yearly_profit = get_value(row, "avg_yearly_profit")
+    min_yearly_profit = get_value(row, "min_yearly_profit")
 
     score = (
-        row["profit_factor"] * config.pf_weight
-        + row["total_profit"] * config.profit_weight
-        + expectancy * config.expectancy_weight
-        + row["win_rate"] * config.win_rate_weight
-        - row["max_drawdown"] * config.drawdown_weight
-        + row["total_trades"] * config.trades_weight
+        profit_factor * config.pf_weight
+        + total_profit * config.profit_weight
+        + average_profit * config.expectancy_weight
+        + win_rate * config.win_rate_weight
+        - max_drawdown * config.drawdown_weight
+        + total_trades * config.trades_weight
+        + yearly_stability * config.yearly_stability_weight
+        + winning_years * config.winning_years_weight
+        - losing_years * config.losing_years_weight
+        + avg_yearly_profit * config.avg_yearly_profit_weight
+        + min_yearly_profit * config.min_yearly_profit_weight
     )
 
     return score
@@ -51,6 +78,10 @@ def main():
 
     for i, row in enumerate(df.head(10).itertuples(index=False), start=1):
 
+        yearly_stability = getattr(row, "yearly_stability", 0.0)
+        winning_years = getattr(row, "winning_years", 0)
+        losing_years = getattr(row, "losing_years", 0)
+
         print(
             f"{i:2d}. "
             f"Score={row.new_score:.2f} | "
@@ -58,6 +89,9 @@ def main():
             f"利益={row.total_profit:.2f} | "
             f"DD={row.max_drawdown:.2f} | "
             f"勝率={row.win_rate:.2f}% | "
+            f"年安定={yearly_stability:.2f}% | "
+            f"勝年={winning_years} | "
+            f"負年={losing_years} | "
             f"回数={row.total_trades} | "
             f"{row.direction} | "
             f"EMA{row.ema_period} | "
