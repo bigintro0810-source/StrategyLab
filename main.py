@@ -36,16 +36,13 @@ def print_results(title, results):
 def main():
 
     print("=" * 60)
-    print("Strategy Lab Optimizer v1.2 Speed Test 1M")
+    print("Strategy Lab Optimizer v2.0 Full Data Numba")
     print("=" * 60)
 
     loader = DataLoader()
     df = loader.load("1m")
 
     print(f"読み込み件数: {len(df):,}")
-
-    df = df.head(1000000)
-
     print(f"検証件数: {len(df):,}")
 
     cache = IndicatorCache(df)
@@ -75,7 +72,7 @@ def main():
 
     path = exporter.export(
         results,
-        "optimizer_results_1m.csv"
+        "optimizer_results_full_numba.csv"
     )
 
     print("\nCSV保存完了")
