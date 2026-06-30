@@ -1,13 +1,16 @@
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class StrategyConfig:
     timeframe: str = "1m"
 
     ema_period: int = 20
     rsi_period: int = 14
     rsi_threshold: float = 50.0
+
+    atr_period: int = 14
+    atr_threshold: float = 0.0
 
     direction: str = "long"
     size: float = 1.0
