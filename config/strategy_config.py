@@ -12,6 +12,10 @@ class StrategyConfig:
     atr_period: int = 14
     atr_threshold: float = 0.0
 
+    session_name: str = "all"
+    session_start: int = 0
+    session_end: int = 24
+
     direction: str = "long"
     size: float = 1.0
 

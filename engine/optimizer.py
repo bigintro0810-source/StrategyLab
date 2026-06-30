@@ -11,7 +11,6 @@ class Optimizer:
         self.strategy_class = strategy_class
         self.grid = ParameterGrid()
         self.backtest = NumbaBacktest(data)
-
         self.signal_cache = {}
 
     def _build_signal_cache_key(self, config):
@@ -21,6 +20,9 @@ class Optimizer:
             config.rsi_threshold,
             config.atr_period,
             config.atr_threshold,
+            config.session_name,
+            config.session_start,
+            config.session_end,
         )
 
     def _get_signal_array(self, config):
@@ -30,6 +32,7 @@ class Optimizer:
             return self.signal_cache[cache_key]
 
         use_atr = config.atr_threshold > 0.0
+        use_session = config.session_name != "all"
 
         condition_config = ConditionConfig(
             use_ema=True,
@@ -41,6 +44,9 @@ class Optimizer:
             use_atr=use_atr,
             atr_above=use_atr,
             atr_below=False,
+            use_session=use_session,
+            session_start=config.session_start,
+            session_end=config.session_end,
         )
 
         condition_engine = ConditionEngine(
@@ -99,6 +105,9 @@ class Optimizer:
                 rsi_threshold=config.rsi_threshold,
                 atr_period=config.atr_period,
                 atr_threshold=config.atr_threshold,
+                session_name=config.session_name,
+                session_start=config.session_start,
+                session_end=config.session_end,
                 direction=config.direction,
                 stop_loss_pips=config.stop_loss_pips,
                 take_profit_pips=config.take_profit_pips,

@@ -28,6 +28,8 @@ def print_results(title, results):
             f"{r.direction} | "
             f"EMA{r.ema_period} | "
             f"RSI>{r.rsi_threshold} | "
+            f"ATR>{r.atr_threshold} | "
+            f"Session={r.session_name} | "
             f"SL={r.stop_loss_pips} | "
             f"TP={r.take_profit_pips}"
         )
@@ -36,7 +38,7 @@ def print_results(title, results):
 def main():
 
     print("=" * 60)
-    print("Strategy Lab Optimizer v2.0 Full Data Numba")
+    print("Strategy Lab Optimizer v2.1 Session Filter")
     print("=" * 60)
 
     loader = DataLoader()
@@ -72,7 +74,7 @@ def main():
 
     path = exporter.export(
         results,
-        "optimizer_results_full_numba.csv"
+        "optimizer_results_session.csv"
     )
 
     print("\nCSV保存完了")

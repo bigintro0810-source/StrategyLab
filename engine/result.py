@@ -3,10 +3,6 @@ from dataclasses import dataclass
 
 @dataclass
 class Result:
-    # -----------------------
-    # Strategy
-    # -----------------------
-
     timeframe: str
 
     ema_period: int
@@ -16,31 +12,23 @@ class Result:
     atr_period: int
     atr_threshold: float
 
+    session_name: str
+    session_start: int
+    session_end: int
+
     direction: str
 
     stop_loss_pips: float
     take_profit_pips: float
 
-    # -----------------------
-    # Performance
-    # -----------------------
-
     total_trades: int
     win_rate: float
-
     total_profit: float
-
     profit_factor: float
-
     average_profit: float
-
     max_drawdown: float
-
     sharpe_ratio: float
-
     score: float
-
-    # -----------------------
 
     def to_dict(self):
         return {
@@ -50,6 +38,9 @@ class Result:
             "rsi_threshold": self.rsi_threshold,
             "atr_period": self.atr_period,
             "atr_threshold": self.atr_threshold,
+            "session_name": self.session_name,
+            "session_start": self.session_start,
+            "session_end": self.session_end,
             "direction": self.direction,
             "stop_loss_pips": self.stop_loss_pips,
             "take_profit_pips": self.take_profit_pips,
