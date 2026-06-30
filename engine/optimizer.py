@@ -2,12 +2,12 @@ from engine.backtest import Backtest
 from engine.metrics import Metrics
 from engine.parameter_grid import ParameterGrid
 from engine.result import Result
-from strategies.test_strategy import TestStrategy
 
 
 class Optimizer:
-    def __init__(self, data):
+    def __init__(self, data, strategy_class):
         self.data = data
+        self.strategy_class = strategy_class
         self.grid = ParameterGrid()
 
     def run(self):
@@ -16,7 +16,7 @@ class Optimizer:
         total = self.grid.count()
 
         for index, config in enumerate(self.grid.generate(), start=1):
-            strategy = TestStrategy(config)
+            strategy = self.strategy_class(config)
             backtest = Backtest(self.data, strategy)
             trades = backtest.run()
 

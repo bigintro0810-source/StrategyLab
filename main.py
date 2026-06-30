@@ -3,6 +3,7 @@ from engine.csv_export import CsvExporter
 from engine.data_loader import DataLoader
 from engine.optimizer import Optimizer
 from engine.ranking import Ranking
+from strategies.test_strategy import TestStrategy
 
 
 def print_results(title, results):
@@ -35,61 +36,46 @@ def print_results(title, results):
 def main():
 
     print("=" * 60)
-    print("Strategy Lab Optimizer v0.4")
+    print("Strategy Lab Optimizer v1.2 Speed Test 1M")
     print("=" * 60)
-
-    # -----------------------
-    # Load Data
-    # -----------------------
 
     loader = DataLoader()
     df = loader.load("1m")
 
-    # 動作確認用
-    # 本番では削除
-    df = df.head(1000)
+    print(f"読み込み件数: {len(df):,}")
 
-    # -----------------------
-    # Indicator Cache
-    # -----------------------
+    df = df.head(1000000)
+
+    print(f"検証件数: {len(df):,}")
 
     cache = IndicatorCache(df)
     df = cache.preload()
 
-    # -----------------------
-    # Optimize
-    # -----------------------
+    print("インジケーター計算完了")
 
-    optimizer = Optimizer(df)
+    optimizer = Optimizer(
+        df,
+        strategy_class=TestStrategy
+    )
+
     results = optimizer.run()
 
-    # -----------------------
-    # Ranking
-    # -----------------------
+    print(f"\nバックテスト完了 : {len(results)} パターン")
 
     ranking = Ranking(results)
 
     print_results("総合ランキング TOP10", ranking.by_score(10))
-
     print_results("PFランキング TOP10", ranking.by_profit_factor(10))
-
     print_results("利益ランキング TOP10", ranking.by_total_profit(10))
-
     print_results("勝率ランキング TOP10", ranking.by_win_rate(10))
-
     print_results("期待値ランキング TOP10", ranking.by_average_profit(10))
-
     print_results("DDランキング TOP10", ranking.by_drawdown(10))
-
-    # -----------------------
-    # CSV
-    # -----------------------
 
     exporter = CsvExporter()
 
     path = exporter.export(
         results,
-        "optimizer_results.csv"
+        "optimizer_results_1m.csv"
     )
 
     print("\nCSV保存完了")

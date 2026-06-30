@@ -105,8 +105,7 @@ class Metrics:
     # -----------------------
 
     def score(self):
-
-        if self.total_trades() < 30:
+        if self.total_trades() == 0:
             return -999999
 
         pf = self.profit_factor()
@@ -119,6 +118,7 @@ class Metrics:
             + self.average_profit() * 1000
             + self.win_rate()
             - self.max_drawdown() * 50
+            + self.total_trades() * 0.1
         )
 
         return score
