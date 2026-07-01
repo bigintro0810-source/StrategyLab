@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import itertools
 import os
 import time
@@ -18,10 +19,22 @@ DATA_CANDIDATES = [
 
 OUTPUT_DIR = Path("output")
 
-# 16GBメモリなので、まずは8並列が安全
 MAX_WORKERS = 8
 
 _WORKER_DF = None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Strategy Lab optimizer")
+
+    parser.add_argument(
+        "--mode",
+        choices=["dev", "full"],
+        default="dev",
+        help="dev=軽量テスト / full=全パラメータ検証",
+    )
+
+    return parser.parse_args()
 
 
 def find_data_file() -> Path:
@@ -73,24 +86,43 @@ def load_price_data(path: Path) -> pd.DataFrame:
     return df
 
 
-def build_parameter_grid() -> list[dict]:
-    grid = {
-        "ema_length": [150, 200, 250],
-        "min_body_pips": [15.0, 20.0, 25.0],
-        "max_body_pips": [0.0],
-        "max_wick_pips": [0.0],
-        "lookahead_bars": [15],
-        "breakout_bars": [30],
-        "ema_distance_pips": [40.0, 50.0, 60.0],
-        "rsi_min": [65.0, 70.0, 75.0],
-        "rr": [1.0, 1.2, 1.5],
-        "session_start": [8],
-        "session_end": [3],
-        "use_weekend_exit": [True],
-        "weekend_exit_hour": [4],
-        "use_daily_exit": [False],
-        "daily_exit_hour": [4],
-    }
+def build_parameter_grid(mode: str) -> list[dict]:
+    if mode == "dev":
+        grid = {
+            "ema_length": [200],
+            "min_body_pips": [20.0],
+            "max_body_pips": [0.0],
+            "max_wick_pips": [0.0],
+            "lookahead_bars": [15],
+            "breakout_bars": [30],
+            "ema_distance_pips": [50.0],
+            "rsi_min": [70.0],
+            "rr": [1.2],
+            "session_start": [8],
+            "session_end": [3],
+            "use_weekend_exit": [True],
+            "weekend_exit_hour": [4],
+            "use_daily_exit": [False],
+            "daily_exit_hour": [4],
+        }
+    else:
+        grid = {
+            "ema_length": [150, 200, 250],
+            "min_body_pips": [15.0, 20.0, 25.0],
+            "max_body_pips": [0.0],
+            "max_wick_pips": [0.0],
+            "lookahead_bars": [15],
+            "breakout_bars": [30],
+            "ema_distance_pips": [40.0, 50.0, 60.0],
+            "rsi_min": [65.0, 70.0, 75.0],
+            "rr": [1.0, 1.2, 1.5],
+            "session_start": [8],
+            "session_end": [3],
+            "use_weekend_exit": [True],
+            "weekend_exit_hour": [4],
+            "use_daily_exit": [False],
+            "daily_exit_hour": [4],
+        }
 
     keys = list(grid.keys())
     combos = itertools.product(*[grid[key] for key in keys])
@@ -180,10 +212,33 @@ def format_seconds(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def build_best_params(best_row: dict) -> dict:
+    return {
+        "ema_length": int(best_row["ema_length"]),
+        "min_body_pips": float(best_row["min_body_pips"]),
+        "max_body_pips": float(best_row["max_body_pips"]),
+        "max_wick_pips": float(best_row["max_wick_pips"]),
+        "lookahead_bars": int(best_row["lookahead_bars"]),
+        "breakout_bars": int(best_row["breakout_bars"]),
+        "ema_distance_pips": float(best_row["ema_distance_pips"]),
+        "rsi_min": float(best_row["rsi_min"]),
+        "rr": float(best_row["rr"]),
+        "session_start": int(best_row["session_start"]),
+        "session_end": int(best_row["session_end"]),
+        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
+        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
+        "use_daily_exit": bool(best_row["use_daily_exit"]),
+        "daily_exit_hour": int(best_row["daily_exit_hour"]),
+    }
+
+
 def main() -> None:
+    args = parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     data_path = find_data_file()
+    print(f"モード: {args.mode}")
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
@@ -191,12 +246,12 @@ def main() -> None:
     print(f"データ数: {len(df):,}")
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
 
-    parameter_list = build_parameter_grid()
+    parameter_list = build_parameter_grid(args.mode)
     tasks = list(enumerate(parameter_list, start=1))
 
     total_tasks = len(tasks)
 
-    workers = min(MAX_WORKERS, os.cpu_count() or 1)
+    workers = min(MAX_WORKERS, os.cpu_count() or 1, total_tasks)
 
     print(f"検証パターン数: {total_tasks}")
     print(f"並列数: {workers}")
@@ -233,24 +288,7 @@ def main() -> None:
     ranking_total = pd.read_csv(ranking_paths["total"])
 
     best_row = ranking_total.iloc[0].to_dict()
-
-    best_params = {
-        "ema_length": int(best_row["ema_length"]),
-        "min_body_pips": float(best_row["min_body_pips"]),
-        "max_body_pips": float(best_row["max_body_pips"]),
-        "max_wick_pips": float(best_row["max_wick_pips"]),
-        "lookahead_bars": int(best_row["lookahead_bars"]),
-        "breakout_bars": int(best_row["breakout_bars"]),
-        "ema_distance_pips": float(best_row["ema_distance_pips"]),
-        "rsi_min": float(best_row["rsi_min"]),
-        "rr": float(best_row["rr"]),
-        "session_start": int(best_row["session_start"]),
-        "session_end": int(best_row["session_end"]),
-        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
-        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
-        "use_daily_exit": bool(best_row["use_daily_exit"]),
-        "daily_exit_hour": int(best_row["daily_exit_hour"]),
-    }
+    best_params = build_best_params(best_row)
 
     _, best_trade_log = run_backtest(
         df=df,
