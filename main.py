@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 
 from engine.backtest_engine import run_backtest
+from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 
 
 DATA_CANDIDATES = [
@@ -617,6 +618,11 @@ def main() -> None:
     monthly_df = export_monthly_analysis(best_trade_log)
     stability_df = export_stability_analysis(yearly_df, monthly_df)
 
+    monte_carlo_results, monte_carlo_summary = export_monte_carlo(
+        trade_log=best_trade_log,
+        output_dir=OUTPUT_DIR,
+    )
+
     elapsed_total = time.time() - start_time
 
     print("完了")
@@ -629,11 +635,14 @@ def main() -> None:
     print(f"年別分析出力: {OUTPUT_DIR / 'yearly_analysis.csv'}")
     print(f"月別分析出力: {OUTPUT_DIR / 'monthly_analysis.csv'}")
     print(f"安定度分析出力: {OUTPUT_DIR / 'stability_analysis.csv'}")
+    print(f"Monte Carlo出力: {OUTPUT_DIR / 'monte_carlo_results.csv'}")
+    print(f"Monte Carloサマリー出力: {OUTPUT_DIR / 'monte_carlo_summary.csv'}")
     print("")
     print("総合ランキング 上位20件")
     print(ranking_total.head(20).to_string(index=False))
 
     print_analysis_summary(yearly_df, monthly_df, stability_df)
+    print_monte_carlo_summary(monte_carlo_results, monte_carlo_summary)
 
 
 if __name__ == "__main__":
