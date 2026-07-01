@@ -23,6 +23,16 @@ def calc_max_dd(profits: np.ndarray) -> float:
     return float(drawdown.max())
 
 
+def judge_monte_carlo(dd95: float) -> tuple[str, str]:
+    if dd95 <= 2.0:
+        return "A", "非常に安定しています。"
+    if dd95 <= 3.0:
+        return "B", "安定しています。"
+    if dd95 <= 4.0:
+        return "C", "実運用可能ですがDDに注意してください。"
+    return "D", "DDが大きく、改善を推奨します。"
+
+
 def main() -> None:
     if not INPUT_CSV.exists():
         raise FileNotFoundError(
@@ -60,6 +70,9 @@ def main() -> None:
 
     dd_values = result_df["max_dd"]
 
+    dd_95 = round(float(dd_values.quantile(0.95)), 5)
+    rating, comment = judge_monte_carlo(dd_95)
+
     summary = {
         "simulations": SIMULATIONS,
         "trades": len(profits),
@@ -67,10 +80,12 @@ def main() -> None:
         "avg_max_dd": round(float(dd_values.mean()), 5),
         "median_max_dd": round(float(dd_values.median()), 5),
         "dd_90": round(float(dd_values.quantile(0.90)), 5),
-        "dd_95": round(float(dd_values.quantile(0.95)), 5),
+        "dd_95": dd_95,
         "dd_99": round(float(dd_values.quantile(0.99)), 5),
         "worst_max_dd": round(float(dd_values.max()), 5),
         "best_max_dd": round(float(dd_values.min()), 5),
+        "rating": rating,
+        "comment": comment,
     }
 
     summary_df = pd.DataFrame([summary])
@@ -94,6 +109,10 @@ def main() -> None:
     print(f"DD99%: {summary['dd_99']}")
     print(f"最悪最大DD: {summary['worst_max_dd']}")
     print(f"最良最大DD: {summary['best_max_dd']}")
+    print()
+    print("----- 評価 -----")
+    print(f"Monte Carlo評価: {summary['rating']}")
+    print(summary["comment"])
     print()
     print("----- ワースト5 -----")
     print(worst_5.to_string(index=False))
