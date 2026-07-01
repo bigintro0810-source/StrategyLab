@@ -55,6 +55,69 @@ def calc_max_dd(profits: np.ndarray) -> float:
     return float(drawdown.max())
 
 
+def prepare_indicator_columns(
+    df: pd.DataFrame,
+    ema_lengths: list[int] | tuple[int, ...],
+    rsi_length: int = 14,
+) -> pd.DataFrame:
+    """
+    Optimizer高速化用。
+
+    main.py側で最初に一度だけ呼び出し、
+    ema_150 / ema_200 / ema_250 / rsi_14 のような列を作っておく。
+
+    run_backtest側は、これらの列があれば再計算せずに使う。
+    """
+    work = df.copy()
+
+    for length in sorted(set(int(x) for x in ema_lengths)):
+        col = f"ema_{length}"
+        if col not in work.columns:
+            work[col] = ema(work["close"], length)
+
+    rsi_col = f"rsi_{rsi_length}"
+    if rsi_col not in work.columns:
+        work[rsi_col] = rsi(work["close"], rsi_length)
+
+    return work
+
+
+def resolve_ema_series(work: pd.DataFrame, ema_length: int) -> pd.Series:
+    """
+    優先順位:
+    1. ema_XXX 列
+    2. TradingView CSVの EMA200 列
+    3. その場で計算
+    """
+    cached_col = f"ema_{int(ema_length)}"
+
+    if cached_col in work.columns:
+        return pd.to_numeric(work[cached_col], errors="coerce")
+
+    if int(ema_length) == 200 and "EMA200" in work.columns:
+        return pd.to_numeric(work["EMA200"], errors="coerce")
+
+    return ema(work["close"], int(ema_length))
+
+
+def resolve_rsi_series(work: pd.DataFrame, rsi_length: int = 14) -> pd.Series:
+    """
+    優先順位:
+    1. rsi_14 列
+    2. TradingView CSVの RSI 列
+    3. その場で計算
+    """
+    cached_col = f"rsi_{int(rsi_length)}"
+
+    if cached_col in work.columns:
+        return pd.to_numeric(work[cached_col], errors="coerce")
+
+    if int(rsi_length) == 14 and "RSI" in work.columns:
+        return pd.to_numeric(work["RSI"], errors="coerce")
+
+    return rsi(work["close"], int(rsi_length))
+
+
 def run_backtest(
     df: pd.DataFrame,
     params: dict[str, Any] | BacktestConfig,
@@ -69,16 +132,9 @@ def run_backtest(
 
     work = df.copy()
 
-    # TradingView CSVにplot済みのEMA/RSIがある場合は、それを優先する
-    if "EMA200" in work.columns:
-        work["ema"] = pd.to_numeric(work["EMA200"], errors="coerce")
-    else:
-        work["ema"] = ema(work["close"], int(p["ema_length"]))
-
-    if "RSI" in work.columns:
-        work["rsi"] = pd.to_numeric(work["RSI"], errors="coerce")
-    else:
-        work["rsi"] = rsi(work["close"], 14)
+    ema_length = int(p["ema_length"])
+    work["ema"] = resolve_ema_series(work, ema_length)
+    work["rsi"] = resolve_rsi_series(work, 14)
 
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
@@ -92,20 +148,17 @@ def run_backtest(
     sl = 0.0
     tp = 0.0
 
-    # Pineの signalLow / signalHigh / signalBar
     signal_low = np.nan
     signal_high = np.nan
     signal_bar = None
     signal_time = None
 
-    # strategy.entry 発行後、次バー始値で約定する注文
     pending_entry = False
     pending_signal_low = np.nan
     pending_signal_high = np.nan
     pending_signal_bar = None
     pending_signal_time = None
 
-    # 保有中ポジションに紐づくSignal情報
     position_signal_low = np.nan
     position_signal_high = np.nan
     position_signal_bar = None
@@ -117,10 +170,6 @@ def run_backtest(
         hour = int(dt.hour)
         weekday = int(dt.weekday())
 
-        # ==================================================
-        # Pending Entry
-        # Pineの strategy.entry は通常、条件成立バーの次バー始値で約定
-        # ==================================================
         if pending_entry and not in_position:
             entry_price = float(row["open"])
             entry_time = dt
@@ -146,14 +195,10 @@ def run_backtest(
             pending_signal_bar = None
             pending_signal_time = None
 
-        # =========================
-        # 保有中決済
-        # =========================
         if in_position:
             exit_reason = None
             exit_price = None
 
-            # Pine: Asia/Tokyo 土曜4時以降
             if (
                 bool(p["use_weekend_exit"])
                 and weekday == 5
@@ -219,11 +264,6 @@ def run_backtest(
 
             continue
 
-        # =========================
-        # Entry条件判定
-        # Pine:
-        # withinBars and close < signalLow
-        # =========================
         if signal_bar is not None:
             bars_from_signal = i - signal_bar
             within_bars = (
@@ -253,14 +293,9 @@ def run_backtest(
                 signal_bar = None
                 signal_time = None
 
-        # Signal Active中は新規Signalを作らない
         if signal_bar is not None:
             continue
 
-        # =========================
-        # 新規Signal判定
-        # Pineの signalCandle
-        # =========================
         if not is_in_session(
             hour=hour,
             start_hour=int(p["session_start"]),
@@ -268,11 +303,9 @@ def run_backtest(
         ):
             continue
 
-        # close > open
         if float(row["close"]) <= float(row["open"]):
             continue
 
-        # bodySize = close - open
         body_size = float(row["close"]) - float(row["open"])
         if body_size < float(p["min_body_pips"]) * pip:
             continue
@@ -286,7 +319,6 @@ def run_backtest(
         if float(p["max_wick_pips"]) > 0 and wick_pips > float(p["max_wick_pips"]):
             continue
 
-        # CloseAboveEMA_Distance
         if float(row["close"]) <= float(row["ema"]):
             continue
 
@@ -294,11 +326,9 @@ def run_backtest(
         if ema_distance < float(p["ema_distance_pips"]) * pip:
             continue
 
-        # Pineは rsi > rsiMin
         if float(row["rsi"]) <= float(p["rsi_min"]):
             continue
 
-        # close > ta.highest(high, breakoutBars)[1]
         lookback = int(p["breakout_bars"])
         if i - lookback < 0:
             continue

@@ -1,8 +1,21 @@
+from __future__ import annotations
+
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Any
+
+import pandas as pd
+
+from engine.backtest_engine import run_backtest
 from engine.condition_config import ConditionConfig
 from engine.condition_engine import ConditionEngine
 from engine.numba_backtest import NumbaBacktest
 from engine.parameter_grid import ParameterGrid
 from engine.result import Result
+
+
+_WORKER_DF: pd.DataFrame | None = None
 
 
 class Optimizer:
@@ -49,10 +62,7 @@ class Optimizer:
             session_end=config.session_end,
         )
 
-        condition_engine = ConditionEngine(
-            self.data,
-            condition_config
-        )
+        condition_engine = ConditionEngine(self.data, condition_config)
 
         ema_column = f"ema_{config.ema_period}"
         rsi_column = f"rsi_{config.rsi_period}"
@@ -158,3 +168,82 @@ class Optimizer:
             print(f"{index}/{total} 完了")
 
         return results
+
+
+def format_seconds(seconds: float) -> str:
+    seconds = int(seconds)
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def init_parallel_worker(df: pd.DataFrame) -> None:
+    global _WORKER_DF
+    _WORKER_DF = df
+
+
+def run_parallel_task(task: tuple[int, dict[str, Any]]) -> dict[str, Any]:
+    global _WORKER_DF
+
+    if _WORKER_DF is None:
+        raise RuntimeError("Worker data is not initialized.")
+
+    param_id, params = task
+
+    result = run_backtest(
+        df=_WORKER_DF,
+        params=params,
+        return_trades=False,
+    )
+
+    result["param_id"] = param_id
+
+    return result
+
+
+def run_parallel_optimizer(
+    df: pd.DataFrame,
+    parameter_list: list[dict[str, Any]],
+    max_workers: int = 8,
+    progress_interval: int = 10,
+) -> pd.DataFrame:
+    total_tasks = len(parameter_list)
+
+    if total_tasks == 0:
+        return pd.DataFrame()
+
+    tasks = list(enumerate(parameter_list, start=1))
+    workers = min(max_workers, os.cpu_count() or 1)
+
+    print(f"検証パターン数: {total_tasks}")
+    print(f"並列数: {workers}")
+
+    start_time = time.time()
+    results: list[dict[str, Any]] = []
+
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=init_parallel_worker,
+        initargs=(df,),
+    ) as executor:
+        futures = [executor.submit(run_parallel_task, task) for task in tasks]
+
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            results.append(result)
+
+            if completed % progress_interval == 0 or completed == total_tasks:
+                elapsed = time.time() - start_time
+                avg_per_task = elapsed / completed
+                remaining = avg_per_task * (total_tasks - completed)
+
+                print(
+                    f"{completed}/{total_tasks} 完了 "
+                    f"経過 {format_seconds(elapsed)} "
+                    f"残り予想 {format_seconds(remaining)}"
+                )
+
+    return pd.DataFrame(results)
