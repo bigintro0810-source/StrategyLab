@@ -1,9 +1,12 @@
 from pathlib import Path
 import itertools
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from engine.backtest_engine import BacktestConfig, run_backtest
+from engine.backtest_engine import run_backtest
 
 
 DATA_CANDIDATES = [
@@ -14,6 +17,11 @@ DATA_CANDIDATES = [
 ]
 
 OUTPUT_DIR = Path("output")
+
+# 16GBメモリなので、まずは8並列が安全
+MAX_WORKERS = 8
+
+_WORKER_DF = None
 
 
 def find_data_file() -> Path:
@@ -67,15 +75,15 @@ def load_price_data(path: Path) -> pd.DataFrame:
 
 def build_parameter_grid() -> list[dict]:
     grid = {
-        "ema_length": [200],
-        "min_body_pips": [20.0],
+        "ema_length": [150, 200, 250],
+        "min_body_pips": [15.0, 20.0, 25.0],
         "max_body_pips": [0.0],
         "max_wick_pips": [0.0],
         "lookahead_bars": [15],
         "breakout_bars": [30],
-        "ema_distance_pips": [50.0],
-        "rsi_min": [70.0],
-        "rr": [1.2],
+        "ema_distance_pips": [40.0, 50.0, 60.0],
+        "rsi_min": [65.0, 70.0, 75.0],
+        "rr": [1.0, 1.2, 1.5],
         "session_start": [8],
         "session_end": [3],
         "use_weekend_exit": [True],
@@ -90,6 +98,88 @@ def build_parameter_grid() -> list[dict]:
     return [dict(zip(keys, combo)) for combo in combos]
 
 
+def init_worker(df: pd.DataFrame) -> None:
+    global _WORKER_DF
+    _WORKER_DF = df
+
+
+def run_one_backtest(task: tuple[int, dict]) -> dict:
+    global _WORKER_DF
+
+    if _WORKER_DF is None:
+        raise RuntimeError("Worker data is not initialized.")
+
+    param_id, params = task
+
+    result = run_backtest(
+        df=_WORKER_DF,
+        params=params,
+        return_trades=False,
+    )
+
+    result["param_id"] = param_id
+
+    return result
+
+
+def add_rank_column(df: pd.DataFrame) -> pd.DataFrame:
+    ranked = df.reset_index(drop=True).copy()
+    ranked.insert(0, "rank", range(1, len(ranked) + 1))
+    return ranked
+
+
+def export_rankings(result_df: pd.DataFrame) -> dict[str, Path]:
+    rankings = {
+        "total": result_df.sort_values(
+            by=["profit_factor", "net_profit", "max_dd", "trades"],
+            ascending=[False, False, True, False],
+        ),
+        "pf": result_df.sort_values(
+            by=["profit_factor", "net_profit", "max_dd"],
+            ascending=[False, False, True],
+        ),
+        "dd": result_df.sort_values(
+            by=["max_dd", "profit_factor", "net_profit"],
+            ascending=[True, False, False],
+        ),
+        "win_rate": result_df.sort_values(
+            by=["win_rate", "profit_factor", "net_profit"],
+            ascending=[False, False, False],
+        ),
+        "profit": result_df.sort_values(
+            by=["net_profit", "profit_factor", "max_dd"],
+            ascending=[False, False, True],
+        ),
+        "expected_value": result_df.sort_values(
+            by=["expected_value", "profit_factor", "net_profit"],
+            ascending=[False, False, False],
+        ),
+    }
+
+    paths: dict[str, Path] = {}
+
+    for name, ranking_df in rankings.items():
+        output_path = OUTPUT_DIR / f"ranking_{name}.csv"
+        add_rank_column(ranking_df).to_csv(
+            output_path,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        paths[name] = output_path
+
+    return paths
+
+
+def format_seconds(seconds: float) -> str:
+    seconds = int(seconds)
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,46 +192,87 @@ def main() -> None:
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
 
     parameter_list = build_parameter_grid()
+    tasks = list(enumerate(parameter_list, start=1))
 
-    print(f"検証パターン数: {len(parameter_list)}")
+    total_tasks = len(tasks)
 
+    workers = min(MAX_WORKERS, os.cpu_count() or 1)
+
+    print(f"検証パターン数: {total_tasks}")
+    print(f"並列数: {workers}")
+
+    start_time = time.time()
     results = []
-    best_trade_log = pd.DataFrame()
 
-    for index, params in enumerate(parameter_list, start=1):
-        result, trade_log = run_backtest(
-            df=df,
-            params=params,
-            return_trades=True,
-        )
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=init_worker,
+        initargs=(df,),
+    ) as executor:
+        futures = [executor.submit(run_one_backtest, task) for task in tasks]
 
-        result["param_id"] = index
-        results.append(result)
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            results.append(result)
 
-        if index == 1:
-            best_trade_log = trade_log.copy()
+            if completed % 10 == 0 or completed == total_tasks:
+                elapsed = time.time() - start_time
+                avg_per_task = elapsed / completed
+                remaining = avg_per_task * (total_tasks - completed)
 
-        print(f"{index}/{len(parameter_list)} 完了")
+                print(
+                    f"{completed}/{total_tasks} 完了 "
+                    f"経過 {format_seconds(elapsed)} "
+                    f"残り予想 {format_seconds(remaining)}"
+                )
 
     result_df = pd.DataFrame(results)
 
-    result_df = result_df.sort_values(
-        by=["profit_factor", "net_profit", "max_dd", "trades"],
-        ascending=[False, False, True, False],
-    ).reset_index(drop=True)
+    ranking_paths = export_rankings(result_df)
 
-    result_df.insert(0, "rank", range(1, len(result_df) + 1))
+    ranking_total = pd.read_csv(ranking_paths["total"])
 
-    ranking_path = OUTPUT_DIR / "ranking_total.csv"
+    best_row = ranking_total.iloc[0].to_dict()
+
+    best_params = {
+        "ema_length": int(best_row["ema_length"]),
+        "min_body_pips": float(best_row["min_body_pips"]),
+        "max_body_pips": float(best_row["max_body_pips"]),
+        "max_wick_pips": float(best_row["max_wick_pips"]),
+        "lookahead_bars": int(best_row["lookahead_bars"]),
+        "breakout_bars": int(best_row["breakout_bars"]),
+        "ema_distance_pips": float(best_row["ema_distance_pips"]),
+        "rsi_min": float(best_row["rsi_min"]),
+        "rr": float(best_row["rr"]),
+        "session_start": int(best_row["session_start"]),
+        "session_end": int(best_row["session_end"]),
+        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
+        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
+        "use_daily_exit": bool(best_row["use_daily_exit"]),
+        "daily_exit_hour": int(best_row["daily_exit_hour"]),
+    }
+
+    _, best_trade_log = run_backtest(
+        df=df,
+        params=best_params,
+        return_trades=True,
+    )
+
     trade_log_path = OUTPUT_DIR / "trade_log.csv"
-
-    result_df.to_csv(ranking_path, index=False, encoding="utf-8-sig")
     best_trade_log.to_csv(trade_log_path, index=False, encoding="utf-8-sig")
 
+    elapsed_total = time.time() - start_time
+
     print("完了")
-    print(f"ランキング出力: {ranking_path}")
+    print(f"総実行時間: {format_seconds(elapsed_total)}")
+    print("ランキング出力:")
+    for name, path in ranking_paths.items():
+        print(f"  {name}: {path}")
+
     print(f"取引履歴出力: {trade_log_path}")
-    print(result_df.head(20).to_string(index=False))
+    print("")
+    print("総合ランキング 上位20件")
+    print(ranking_total.head(20).to_string(index=False))
 
 
 if __name__ == "__main__":
