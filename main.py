@@ -232,6 +232,251 @@ def build_best_params(best_row: dict) -> dict:
     }
 
 
+def calc_profit_factor(profits: pd.Series) -> float:
+    gross_profit = profits[profits > 0].sum()
+    gross_loss = profits[profits < 0].sum()
+
+    if gross_loss < 0:
+        return float(gross_profit / abs(gross_loss))
+
+    if gross_profit > 0:
+        return 999.0
+
+    return 0.0
+
+
+def export_yearly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
+    output_path = OUTPUT_DIR / "yearly_analysis.csv"
+
+    if trade_log.empty:
+        result_df = pd.DataFrame()
+        result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return result_df
+
+    df = trade_log.copy()
+    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
+    df["year"] = df["entry_time"].dt.year
+
+    rows = []
+
+    for year, group in df.groupby("year"):
+        profits = group["profit"]
+
+        trades = len(group)
+        wins = int((profits > 0).sum())
+        losses = int((profits < 0).sum())
+        win_rate = wins / trades * 100 if trades else 0.0
+
+        net_profit = profits.sum()
+        gross_profit = profits[profits > 0].sum()
+        gross_loss = profits[profits < 0].sum()
+        profit_factor = calc_profit_factor(profits)
+
+        rows.append(
+            {
+                "year": int(year),
+                "trades": trades,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(win_rate, 2),
+                "net_profit": round(net_profit, 5),
+                "gross_profit": round(gross_profit, 5),
+                "gross_loss": round(gross_loss, 5),
+                "profit_factor": round(profit_factor, 3),
+            }
+        )
+
+    result_df = pd.DataFrame(rows).sort_values("year")
+    result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+    return result_df
+
+
+def export_monthly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
+    output_path = OUTPUT_DIR / "monthly_analysis.csv"
+
+    if trade_log.empty:
+        result_df = pd.DataFrame()
+        result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return result_df
+
+    df = trade_log.copy()
+    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
+    df["year_month"] = df["entry_time"].dt.to_period("M").astype(str)
+
+    rows = []
+
+    for year_month, group in df.groupby("year_month"):
+        profits = group["profit"]
+
+        trades = len(group)
+        wins = int((profits > 0).sum())
+        losses = int((profits < 0).sum())
+        win_rate = wins / trades * 100 if trades else 0.0
+
+        net_profit = profits.sum()
+        gross_profit = profits[profits > 0].sum()
+        gross_loss = profits[profits < 0].sum()
+        profit_factor = calc_profit_factor(profits)
+
+        rows.append(
+            {
+                "year_month": year_month,
+                "trades": trades,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(win_rate, 2),
+                "net_profit": round(net_profit, 5),
+                "gross_profit": round(gross_profit, 5),
+                "gross_loss": round(gross_loss, 5),
+                "profit_factor": round(profit_factor, 3),
+            }
+        )
+
+    result_df = pd.DataFrame(rows).sort_values("year_month")
+    result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+    return result_df
+
+
+def safe_mean(series: pd.Series) -> float:
+    if series.empty:
+        return 0.0
+    return float(series.mean())
+
+
+def calc_positive_rate(profits: pd.Series) -> float:
+    if len(profits) == 0:
+        return 0.0
+    return float((profits > 0).sum() / len(profits) * 100)
+
+
+def calc_stability_score(profits: pd.Series) -> float:
+    if len(profits) == 0:
+        return 0.0
+
+    positive_rate = calc_positive_rate(profits)
+    avg_profit = safe_mean(profits)
+
+    if avg_profit <= 0:
+        return round(positive_rate * 0.5, 2)
+
+    volatility = float(profits.std()) if len(profits) >= 2 else 0.0
+
+    if volatility <= 0:
+        return 100.0 if avg_profit > 0 else 0.0
+
+    stability = avg_profit / volatility
+    score = positive_rate * 0.7 + min(stability * 30, 30)
+
+    return round(max(0.0, min(score, 100.0)), 2)
+
+
+def export_stability_analysis(
+    yearly_df: pd.DataFrame,
+    monthly_df: pd.DataFrame,
+) -> pd.DataFrame:
+    output_path = OUTPUT_DIR / "stability_analysis.csv"
+
+    if yearly_df.empty or monthly_df.empty:
+        result_df = pd.DataFrame()
+        result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return result_df
+
+    yearly_profits = yearly_df["net_profit"]
+    monthly_profits = monthly_df["net_profit"]
+
+    yearly_positive_rate = calc_positive_rate(yearly_profits)
+    monthly_positive_rate = calc_positive_rate(monthly_profits)
+
+    yearly_stability = calc_stability_score(yearly_profits)
+    monthly_stability = calc_stability_score(monthly_profits)
+
+    total_profit = float(yearly_profits.sum())
+
+    profitable_years = int((yearly_profits > 0).sum())
+    losing_years = int((yearly_profits < 0).sum())
+    flat_years = int((yearly_profits == 0).sum())
+
+    profitable_months = int((monthly_profits > 0).sum())
+    losing_months = int((monthly_profits < 0).sum())
+    flat_months = int((monthly_profits == 0).sum())
+
+    avg_yearly_profit = safe_mean(yearly_profits)
+    avg_monthly_profit = safe_mean(monthly_profits)
+
+    worst_year_profit = float(yearly_profits.min()) if len(yearly_profits) else 0.0
+    best_year_profit = float(yearly_profits.max()) if len(yearly_profits) else 0.0
+
+    worst_month_profit = float(monthly_profits.min()) if len(monthly_profits) else 0.0
+    best_month_profit = float(monthly_profits.max()) if len(monthly_profits) else 0.0
+
+    overall_stability = round(
+        yearly_stability * 0.6 + monthly_stability * 0.4,
+        2,
+    )
+
+    if overall_stability >= 80:
+        rating = "A"
+    elif overall_stability >= 65:
+        rating = "B"
+    elif overall_stability >= 50:
+        rating = "C"
+    else:
+        rating = "D"
+
+    result = {
+        "total_profit": round(total_profit, 5),
+        "profitable_years": profitable_years,
+        "losing_years": losing_years,
+        "flat_years": flat_years,
+        "yearly_positive_rate": round(yearly_positive_rate, 2),
+        "avg_yearly_profit": round(avg_yearly_profit, 5),
+        "best_year_profit": round(best_year_profit, 5),
+        "worst_year_profit": round(worst_year_profit, 5),
+        "yearly_stability_score": yearly_stability,
+        "profitable_months": profitable_months,
+        "losing_months": losing_months,
+        "flat_months": flat_months,
+        "monthly_positive_rate": round(monthly_positive_rate, 2),
+        "avg_monthly_profit": round(avg_monthly_profit, 5),
+        "best_month_profit": round(best_month_profit, 5),
+        "worst_month_profit": round(worst_month_profit, 5),
+        "monthly_stability_score": monthly_stability,
+        "overall_stability_score": overall_stability,
+        "rating": rating,
+    }
+
+    result_df = pd.DataFrame([result])
+    result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+    return result_df
+
+
+def print_analysis_summary(
+    yearly_df: pd.DataFrame,
+    monthly_df: pd.DataFrame,
+    stability_df: pd.DataFrame,
+) -> None:
+    print("")
+    print("========== Period Analysis ==========")
+    print("")
+
+    if not yearly_df.empty:
+        print("年別分析")
+        print(yearly_df.to_string(index=False))
+        print("")
+
+    if not stability_df.empty:
+        row = stability_df.iloc[0]
+        print("安定度")
+        print(f"  年別安定度: {row['yearly_stability_score']}")
+        print(f"  月別安定度: {row['monthly_stability_score']}")
+        print(f"  総合安定度: {row['overall_stability_score']}")
+        print(f"  評価: {row['rating']}")
+        print("")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -299,6 +544,10 @@ def main() -> None:
     trade_log_path = OUTPUT_DIR / "trade_log.csv"
     best_trade_log.to_csv(trade_log_path, index=False, encoding="utf-8-sig")
 
+    yearly_df = export_yearly_analysis(best_trade_log)
+    monthly_df = export_monthly_analysis(best_trade_log)
+    stability_df = export_stability_analysis(yearly_df, monthly_df)
+
     elapsed_total = time.time() - start_time
 
     print("完了")
@@ -308,9 +557,14 @@ def main() -> None:
         print(f"  {name}: {path}")
 
     print(f"取引履歴出力: {trade_log_path}")
+    print(f"年別分析出力: {OUTPUT_DIR / 'yearly_analysis.csv'}")
+    print(f"月別分析出力: {OUTPUT_DIR / 'monthly_analysis.csv'}")
+    print(f"安定度分析出力: {OUTPUT_DIR / 'stability_analysis.csv'}")
     print("")
     print("総合ランキング 上位20件")
     print(ranking_total.head(20).to_string(index=False))
+
+    print_analysis_summary(yearly_df, monthly_df, stability_df)
 
 
 if __name__ == "__main__":
