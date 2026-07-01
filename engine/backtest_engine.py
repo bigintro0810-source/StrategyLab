@@ -47,9 +47,11 @@ def is_in_session(hour: int, start_hour: int, end_hour: int) -> bool:
 def calc_max_dd(profits: np.ndarray) -> float:
     if len(profits) == 0:
         return 0.0
+
     equity = profits.cumsum()
     running_max = np.maximum.accumulate(equity)
     drawdown = running_max - equity
+
     return float(drawdown.max())
 
 
@@ -66,25 +68,48 @@ def run_backtest(
     pip = 0.01
 
     work = df.copy()
-    work["ema"] = ema(work["close"], int(p["ema_length"]))
-    work["rsi"] = rsi(work["close"], 14)
+
+    # TradingView CSVにplot済みのEMA/RSIがある場合は、それを優先する
+    if "EMA200" in work.columns:
+        work["ema"] = pd.to_numeric(work["EMA200"], errors="coerce")
+    else:
+        work["ema"] = ema(work["close"], int(p["ema_length"]))
+
+    if "RSI" in work.columns:
+        work["rsi"] = pd.to_numeric(work["RSI"], errors="coerce")
+    else:
+        work["rsi"] = rsi(work["close"], 14)
 
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
 
     in_position = False
+
     entry_price = 0.0
     entry_time = None
+    entry_bar_index = None
+
     sl = 0.0
     tp = 0.0
 
+    # Pineの signalLow / signalHigh / signalBar
     signal_low = np.nan
     signal_high = np.nan
     signal_bar = None
     signal_time = None
-    stop_reference_high = np.nan
 
+    # strategy.entry 発行後、次バー始値で約定する注文
     pending_entry = False
+    pending_signal_low = np.nan
+    pending_signal_high = np.nan
+    pending_signal_bar = None
+    pending_signal_time = None
+
+    # 保有中ポジションに紐づくSignal情報
+    position_signal_low = np.nan
+    position_signal_high = np.nan
+    position_signal_bar = None
+    position_signal_time = None
 
     for i in range(250, len(work)):
         row = work.iloc[i]
@@ -92,12 +117,21 @@ def run_backtest(
         hour = int(dt.hour)
         weekday = int(dt.weekday())
 
-        # Pineのstrategy.entryは通常、条件成立足の次足始値で約定
+        # ==================================================
+        # Pending Entry
+        # Pineの strategy.entry は通常、条件成立バーの次バー始値で約定
+        # ==================================================
         if pending_entry and not in_position:
             entry_price = float(row["open"])
             entry_time = dt
-            stop_reference_high = signal_high
+            entry_bar_index = i
 
+            position_signal_low = pending_signal_low
+            position_signal_high = pending_signal_high
+            position_signal_bar = pending_signal_bar
+            position_signal_time = pending_signal_time
+
+            stop_reference_high = float(position_signal_high)
             stop_price = entry_price + ((stop_reference_high - entry_price) * 1.0)
             risk_distance = stop_price - entry_price
 
@@ -107,12 +141,14 @@ def run_backtest(
                 in_position = True
 
             pending_entry = False
-            signal_low = np.nan
-            signal_high = np.nan
-            signal_bar = None
-            signal_time = None
+            pending_signal_low = np.nan
+            pending_signal_high = np.nan
+            pending_signal_bar = None
+            pending_signal_time = None
 
+        # =========================
         # 保有中決済
+        # =========================
         if in_position:
             exit_reason = None
             exit_price = None
@@ -125,9 +161,11 @@ def run_backtest(
             ):
                 exit_reason = "Weekend"
                 exit_price = float(row["close"])
+
             elif bool(p["use_daily_exit"]) and hour == int(p["daily_exit_hour"]):
                 exit_reason = "DailyExit"
                 exit_price = float(row["close"])
+
             else:
                 hit_sl = float(row["high"]) >= sl
                 hit_tp = float(row["low"]) <= tp
@@ -149,35 +187,63 @@ def run_backtest(
                 trade_logs.append(
                     {
                         "entry_time": entry_time,
+                        "entry_bar_index": entry_bar_index,
                         "entry_price": round(entry_price, 5),
                         "exit_time": dt,
+                        "exit_bar_index": i,
                         "exit_price": round(float(exit_price), 5),
                         "sl": round(sl, 5),
                         "tp": round(tp, 5),
                         "profit": round(profit, 5),
                         "exit_reason": exit_reason,
-                        "signal_time": signal_time,
-                        "signal_low": round(float(signal_low), 5) if not pd.isna(signal_low) else "",
-                        "signal_high": round(float(stop_reference_high), 5),
+                        "signal_time": position_signal_time,
+                        "signal_bar_index": position_signal_bar,
+                        "signal_low": round(float(position_signal_low), 5),
+                        "signal_high": round(float(position_signal_high), 5),
                     }
                 )
 
                 in_position = False
+
                 entry_price = 0.0
                 entry_time = None
+                entry_bar_index = None
+
                 sl = 0.0
                 tp = 0.0
 
+                position_signal_low = np.nan
+                position_signal_high = np.nan
+                position_signal_bar = None
+                position_signal_time = None
+
             continue
 
-        # エントリー判定：close < signalLow
+        # =========================
+        # Entry条件判定
+        # Pine:
+        # withinBars and close < signalLow
+        # =========================
         if signal_bar is not None:
             bars_from_signal = i - signal_bar
-
-            within_bars = bars_from_signal > 0 and bars_from_signal <= int(p["lookahead_bars"])
+            within_bars = (
+                bars_from_signal > 0
+                and bars_from_signal <= int(p["lookahead_bars"])
+            )
 
             if within_bars and float(row["close"]) < float(signal_low):
                 pending_entry = True
+
+                pending_signal_low = signal_low
+                pending_signal_high = signal_high
+                pending_signal_bar = signal_bar
+                pending_signal_time = signal_time
+
+                signal_low = np.nan
+                signal_high = np.nan
+                signal_bar = None
+                signal_time = None
+
                 continue
 
             expired = bars_from_signal > int(p["lookahead_bars"])
@@ -187,10 +253,14 @@ def run_backtest(
                 signal_bar = None
                 signal_time = None
 
-        # 新規基準足判定：signalBarがnaの時だけ
+        # Signal Active中は新規Signalを作らない
         if signal_bar is not None:
             continue
 
+        # =========================
+        # 新規Signal判定
+        # Pineの signalCandle
+        # =========================
         if not is_in_session(
             hour=hour,
             start_hour=int(p["session_start"]),
@@ -198,9 +268,11 @@ def run_backtest(
         ):
             continue
 
+        # close > open
         if float(row["close"]) <= float(row["open"]):
             continue
 
+        # bodySize = close - open
         body_size = float(row["close"]) - float(row["open"])
         if body_size < float(p["min_body_pips"]) * pip:
             continue
@@ -214,15 +286,19 @@ def run_backtest(
         if float(p["max_wick_pips"]) > 0 and wick_pips > float(p["max_wick_pips"]):
             continue
 
+        # CloseAboveEMA_Distance
         if float(row["close"]) <= float(row["ema"]):
             continue
 
-        if (float(row["close"]) - float(row["ema"])) < float(p["ema_distance_pips"]) * pip:
+        ema_distance = float(row["close"]) - float(row["ema"])
+        if ema_distance < float(p["ema_distance_pips"]) * pip:
             continue
 
+        # Pineは rsi > rsiMin
         if float(row["rsi"]) <= float(p["rsi_min"]):
             continue
 
+        # close > ta.highest(high, breakoutBars)[1]
         lookback = int(p["breakout_bars"])
         if i - lookback < 0:
             continue
