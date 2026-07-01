@@ -60,14 +60,6 @@ def prepare_indicator_columns(
     ema_lengths: list[int] | tuple[int, ...],
     rsi_length: int = 14,
 ) -> pd.DataFrame:
-    """
-    Optimizer高速化用。
-
-    main.py側で最初に一度だけ呼び出し、
-    ema_150 / ema_200 / ema_250 / rsi_14 のような列を作っておく。
-
-    run_backtest側は、これらの列があれば再計算せずに使う。
-    """
     work = df.copy()
 
     for length in sorted(set(int(x) for x in ema_lengths)):
@@ -82,40 +74,33 @@ def prepare_indicator_columns(
     return work
 
 
-def resolve_ema_series(work: pd.DataFrame, ema_length: int) -> pd.Series:
-    """
-    優先順位:
-    1. ema_XXX 列
-    2. TradingView CSVの EMA200 列
-    3. その場で計算
-    """
+def resolve_ema_series(df: pd.DataFrame, ema_length: int) -> pd.Series:
     cached_col = f"ema_{int(ema_length)}"
 
-    if cached_col in work.columns:
-        return pd.to_numeric(work[cached_col], errors="coerce")
+    if cached_col in df.columns:
+        return pd.to_numeric(df[cached_col], errors="coerce")
 
-    if int(ema_length) == 200 and "EMA200" in work.columns:
-        return pd.to_numeric(work["EMA200"], errors="coerce")
+    if int(ema_length) == 200 and "EMA200" in df.columns:
+        return pd.to_numeric(df["EMA200"], errors="coerce")
 
-    return ema(work["close"], int(ema_length))
+    return ema(df["close"], int(ema_length))
 
 
-def resolve_rsi_series(work: pd.DataFrame, rsi_length: int = 14) -> pd.Series:
-    """
-    優先順位:
-    1. rsi_14 列
-    2. TradingView CSVの RSI 列
-    3. その場で計算
-    """
+def resolve_rsi_series(df: pd.DataFrame, rsi_length: int = 14) -> pd.Series:
     cached_col = f"rsi_{int(rsi_length)}"
 
-    if cached_col in work.columns:
-        return pd.to_numeric(work[cached_col], errors="coerce")
+    if cached_col in df.columns:
+        return pd.to_numeric(df[cached_col], errors="coerce")
 
-    if int(rsi_length) == 14 and "RSI" in work.columns:
-        return pd.to_numeric(work["RSI"], errors="coerce")
+    if int(rsi_length) == 14 and "RSI" in df.columns:
+        return pd.to_numeric(df["RSI"], errors="coerce")
 
-    return rsi(work["close"], int(rsi_length))
+    return rsi(df["close"], int(rsi_length))
+
+
+def build_previous_high_array(high_arr: np.ndarray, lookback: int) -> np.ndarray:
+    high_series = pd.Series(high_arr)
+    return high_series.rolling(window=lookback).max().shift(1).to_numpy(dtype=float)
 
 
 def run_backtest(
@@ -130,11 +115,41 @@ def run_backtest(
 
     pip = 0.01
 
-    work = df.copy()
-
     ema_length = int(p["ema_length"])
-    work["ema"] = resolve_ema_series(work, ema_length)
-    work["rsi"] = resolve_rsi_series(work, 14)
+    lookahead_bars = int(p["lookahead_bars"])
+    breakout_bars = int(p["breakout_bars"])
+
+    min_body_price = float(p["min_body_pips"]) * pip
+    max_body_pips = float(p["max_body_pips"])
+    max_wick_pips = float(p["max_wick_pips"])
+    ema_distance_price = float(p["ema_distance_pips"]) * pip
+    rsi_min = float(p["rsi_min"])
+    rr = float(p["rr"])
+
+    session_start = int(p["session_start"])
+    session_end = int(p["session_end"])
+
+    use_weekend_exit = bool(p["use_weekend_exit"])
+    weekend_exit_hour = int(p["weekend_exit_hour"])
+
+    use_daily_exit = bool(p["use_daily_exit"])
+    daily_exit_hour = int(p["daily_exit_hour"])
+
+    datetime_arr = df["datetime"].to_numpy()
+
+    datetime_series = pd.to_datetime(df["datetime"])
+    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
+    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+
+    open_arr = df["open"].to_numpy(dtype=float)
+    high_arr = df["high"].to_numpy(dtype=float)
+    low_arr = df["low"].to_numpy(dtype=float)
+    close_arr = df["close"].to_numpy(dtype=float)
+
+    ema_arr = resolve_ema_series(df, ema_length).to_numpy(dtype=float)
+    rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
+
+    previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
@@ -164,14 +179,20 @@ def run_backtest(
     position_signal_bar = None
     position_signal_time = None
 
-    for i in range(250, len(work)):
-        row = work.iloc[i]
-        dt = row["datetime"]
-        hour = int(dt.hour)
-        weekday = int(dt.weekday())
+    for i in range(250, len(df)):
+        dt = datetime_arr[i]
+        hour = int(hour_arr[i])
+        weekday = int(weekday_arr[i])
+
+        open_price = float(open_arr[i])
+        high_price = float(high_arr[i])
+        low_price = float(low_arr[i])
+        close_price = float(close_arr[i])
+        ema_value = float(ema_arr[i])
+        rsi_value = float(rsi_arr[i])
 
         if pending_entry and not in_position:
-            entry_price = float(row["open"])
+            entry_price = open_price
             entry_time = dt
             entry_bar_index = i
 
@@ -186,7 +207,7 @@ def run_backtest(
 
             if risk_distance > 0:
                 sl = stop_price
-                tp = entry_price - risk_distance * float(p["rr"])
+                tp = entry_price - risk_distance * rr
                 in_position = True
 
             pending_entry = False
@@ -199,21 +220,17 @@ def run_backtest(
             exit_reason = None
             exit_price = None
 
-            if (
-                bool(p["use_weekend_exit"])
-                and weekday == 5
-                and hour >= int(p["weekend_exit_hour"])
-            ):
+            if use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
                 exit_reason = "Weekend"
-                exit_price = float(row["close"])
+                exit_price = close_price
 
-            elif bool(p["use_daily_exit"]) and hour == int(p["daily_exit_hour"]):
+            elif use_daily_exit and hour == daily_exit_hour:
                 exit_reason = "DailyExit"
-                exit_price = float(row["close"])
+                exit_price = close_price
 
             else:
-                hit_sl = float(row["high"]) >= sl
-                hit_tp = float(row["low"]) <= tp
+                hit_sl = high_price >= sl
+                hit_tp = low_price <= tp
 
                 if hit_sl and hit_tp:
                     exit_reason = "SL_and_TP_SL_first"
@@ -229,24 +246,25 @@ def run_backtest(
                 profit = entry_price - float(exit_price)
                 profits.append(profit)
 
-                trade_logs.append(
-                    {
-                        "entry_time": entry_time,
-                        "entry_bar_index": entry_bar_index,
-                        "entry_price": round(entry_price, 5),
-                        "exit_time": dt,
-                        "exit_bar_index": i,
-                        "exit_price": round(float(exit_price), 5),
-                        "sl": round(sl, 5),
-                        "tp": round(tp, 5),
-                        "profit": round(profit, 5),
-                        "exit_reason": exit_reason,
-                        "signal_time": position_signal_time,
-                        "signal_bar_index": position_signal_bar,
-                        "signal_low": round(float(position_signal_low), 5),
-                        "signal_high": round(float(position_signal_high), 5),
-                    }
-                )
+                if return_trades:
+                    trade_logs.append(
+                        {
+                            "entry_time": entry_time,
+                            "entry_bar_index": entry_bar_index,
+                            "entry_price": round(entry_price, 5),
+                            "exit_time": dt,
+                            "exit_bar_index": i,
+                            "exit_price": round(float(exit_price), 5),
+                            "sl": round(sl, 5),
+                            "tp": round(tp, 5),
+                            "profit": round(profit, 5),
+                            "exit_reason": exit_reason,
+                            "signal_time": position_signal_time,
+                            "signal_bar_index": position_signal_bar,
+                            "signal_low": round(float(position_signal_low), 5),
+                            "signal_high": round(float(position_signal_high), 5),
+                        }
+                    )
 
                 in_position = False
 
@@ -266,12 +284,9 @@ def run_backtest(
 
         if signal_bar is not None:
             bars_from_signal = i - signal_bar
-            within_bars = (
-                bars_from_signal > 0
-                and bars_from_signal <= int(p["lookahead_bars"])
-            )
+            within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
 
-            if within_bars and float(row["close"]) < float(signal_low):
+            if within_bars and close_price < float(signal_low):
                 pending_entry = True
 
                 pending_signal_low = signal_low
@@ -286,7 +301,7 @@ def run_backtest(
 
                 continue
 
-            expired = bars_from_signal > int(p["lookahead_bars"])
+            expired = bars_from_signal > lookahead_bars
             if expired:
                 signal_low = np.nan
                 signal_high = np.nan
@@ -298,47 +313,46 @@ def run_backtest(
 
         if not is_in_session(
             hour=hour,
-            start_hour=int(p["session_start"]),
-            end_hour=int(p["session_end"]),
+            start_hour=session_start,
+            end_hour=session_end,
         ):
             continue
 
-        if float(row["close"]) <= float(row["open"]):
+        if close_price <= open_price:
             continue
 
-        body_size = float(row["close"]) - float(row["open"])
-        if body_size < float(p["min_body_pips"]) * pip:
+        body_size = close_price - open_price
+        if body_size < min_body_price:
             continue
 
-        body_pips = abs(float(row["close"]) - float(row["open"])) / pip
-        wick_pips = (float(row["high"]) - float(row["low"])) / pip
+        body_pips = abs(close_price - open_price) / pip
+        wick_pips = (high_price - low_price) / pip
 
-        if float(p["max_body_pips"]) > 0 and body_pips > float(p["max_body_pips"]):
+        if max_body_pips > 0 and body_pips > max_body_pips:
             continue
 
-        if float(p["max_wick_pips"]) > 0 and wick_pips > float(p["max_wick_pips"]):
+        if max_wick_pips > 0 and wick_pips > max_wick_pips:
             continue
 
-        if float(row["close"]) <= float(row["ema"]):
+        if close_price <= ema_value:
             continue
 
-        ema_distance = float(row["close"]) - float(row["ema"])
-        if ema_distance < float(p["ema_distance_pips"]) * pip:
+        ema_distance = close_price - ema_value
+        if ema_distance < ema_distance_price:
             continue
 
-        if float(row["rsi"]) <= float(p["rsi_min"]):
+        if rsi_value <= rsi_min:
             continue
 
-        lookback = int(p["breakout_bars"])
-        if i - lookback < 0:
+        recent_high = float(previous_high_arr[i])
+        if np.isnan(recent_high):
             continue
 
-        recent_high = float(work["high"].iloc[i - lookback:i].max())
-        if float(row["close"]) <= recent_high:
+        if close_price <= recent_high:
             continue
 
-        signal_low = float(row["low"])
-        signal_high = float(row["high"])
+        signal_low = low_price
+        signal_high = high_price
         signal_bar = i
         signal_time = dt
 
