@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from engine.backtest_engine import prepare_indicator_columns, run_backtest
+from engine.backtest_engine import run_backtest
 
 
 DATA_CANDIDATES = [
@@ -98,10 +98,6 @@ def build_parameter_grid() -> list[dict]:
     return [dict(zip(keys, combo)) for combo in combos]
 
 
-def get_required_ema_lengths(parameter_list: list[dict]) -> list[int]:
-    return sorted({int(params["ema_length"]) for params in parameter_list})
-
-
 def init_worker(df: pd.DataFrame) -> None:
     global _WORKER_DF
     _WORKER_DF = df
@@ -184,26 +180,6 @@ def format_seconds(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def build_best_params(best_row: dict) -> dict:
-    return {
-        "ema_length": int(best_row["ema_length"]),
-        "min_body_pips": float(best_row["min_body_pips"]),
-        "max_body_pips": float(best_row["max_body_pips"]),
-        "max_wick_pips": float(best_row["max_wick_pips"]),
-        "lookahead_bars": int(best_row["lookahead_bars"]),
-        "breakout_bars": int(best_row["breakout_bars"]),
-        "ema_distance_pips": float(best_row["ema_distance_pips"]),
-        "rsi_min": float(best_row["rsi_min"]),
-        "rr": float(best_row["rr"]),
-        "session_start": int(best_row["session_start"]),
-        "session_end": int(best_row["session_end"]),
-        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
-        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
-        "use_daily_exit": bool(best_row["use_daily_exit"]),
-        "daily_exit_hour": int(best_row["daily_exit_hour"]),
-    }
-
-
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -219,18 +195,8 @@ def main() -> None:
     tasks = list(enumerate(parameter_list, start=1))
 
     total_tasks = len(tasks)
+
     workers = min(MAX_WORKERS, os.cpu_count() or 1)
-
-    ema_lengths = get_required_ema_lengths(parameter_list)
-
-    print("インジケーター事前計算中...")
-    print(f"EMAキャッシュ対象: {ema_lengths}")
-    df = prepare_indicator_columns(
-        df=df,
-        ema_lengths=ema_lengths,
-        rsi_length=14,
-    )
-    print("インジケーター事前計算完了")
 
     print(f"検証パターン数: {total_tasks}")
     print(f"並列数: {workers}")
@@ -265,8 +231,26 @@ def main() -> None:
     ranking_paths = export_rankings(result_df)
 
     ranking_total = pd.read_csv(ranking_paths["total"])
+
     best_row = ranking_total.iloc[0].to_dict()
-    best_params = build_best_params(best_row)
+
+    best_params = {
+        "ema_length": int(best_row["ema_length"]),
+        "min_body_pips": float(best_row["min_body_pips"]),
+        "max_body_pips": float(best_row["max_body_pips"]),
+        "max_wick_pips": float(best_row["max_wick_pips"]),
+        "lookahead_bars": int(best_row["lookahead_bars"]),
+        "breakout_bars": int(best_row["breakout_bars"]),
+        "ema_distance_pips": float(best_row["ema_distance_pips"]),
+        "rsi_min": float(best_row["rsi_min"]),
+        "rr": float(best_row["rr"]),
+        "session_start": int(best_row["session_start"]),
+        "session_end": int(best_row["session_end"]),
+        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
+        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
+        "use_daily_exit": bool(best_row["use_daily_exit"]),
+        "daily_exit_hour": int(best_row["daily_exit_hour"]),
+    }
 
     _, best_trade_log = run_backtest(
         df=df,
