@@ -11,12 +11,9 @@ from engine.backtest_engine import run_backtest
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 
 
-DATA_CANDIDATES = [
-    "data/raw/USDJPY_2003_2026_15m.csv",
-    "data/USDJPY_2003_2026_15m.csv",
-    "input/USDJPY_2003_2026_15m.csv",
-    "USDJPY_2003_2026_15m.csv",
-]
+AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+DATA_DIRS = ["data/raw", "data", "input", "."]
 
 OUTPUT_DIR = Path("output")
 
@@ -35,17 +32,33 @@ def parse_args() -> argparse.Namespace:
         help="dev=軽量テスト / full=全パラメータ検証",
     )
 
+    parser.add_argument(
+        "--timeframe",
+        choices=AVAILABLE_TIMEFRAMES,
+        default="15m",
+        help="使用する時間足 (デフォルト: 15m)",
+    )
+
     return parser.parse_args()
 
 
-def find_data_file() -> Path:
-    for file_path in DATA_CANDIDATES:
+def build_data_candidates(timeframe: str) -> list[str]:
+    filenames = [
+        f"USDJPY_2003_2026_{timeframe}.csv",
+        f"USDJPY_2003_2026_{timeframe}_TV_NY.csv",
+    ]
+
+    return [str(Path(d) / name) for d in DATA_DIRS for name in filenames]
+
+
+def find_data_file(timeframe: str = "15m") -> Path:
+    for file_path in build_data_candidates(timeframe):
         path = Path(file_path)
         if path.exists():
             return path
 
     raise FileNotFoundError(
-        "USDJPY_2003_2026_15m.csv が見つかりません。data/raw に置いてください。"
+        f"USDJPY_2003_2026_{timeframe}.csv が見つかりません。data/raw に置いてください。"
     )
 
 
@@ -552,8 +565,9 @@ def main() -> None:
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    data_path = find_data_file()
+    data_path = find_data_file(args.timeframe)
     print(f"モード: {args.mode}")
+    print(f"時間足: {args.timeframe}")
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
