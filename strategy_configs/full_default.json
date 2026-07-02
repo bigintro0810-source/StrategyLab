@@ -16,6 +16,7 @@
     "use_weekend_exit": [true],
     "weekend_exit_hour": [4],
     "use_daily_exit": [false],
-    "daily_exit_hour": [4]
+    "daily_exit_hour": [4],
+    "pip_size": [0.01]
   }
 }

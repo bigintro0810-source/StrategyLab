@@ -123,7 +123,7 @@ def run_backtest(
     else:
         p = dict(params)
 
-    pip = 0.01
+    pip = float(p.get("pip_size", 0.01))
 
     ema_length = int(p["ema_length"])
     lookahead_bars = int(p["lookahead_bars"])

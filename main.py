@@ -146,6 +146,9 @@ def load_price_data(path: Path) -> pd.DataFrame:
     return df
 
 
+USDJPY_PIP_SIZE = 0.01
+
+
 def build_parameter_space(mode: str) -> dict[str, list]:
     if mode == "dev":
         return {
@@ -164,6 +167,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
             "weekend_exit_hour": [4],
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
+            "pip_size": [USDJPY_PIP_SIZE],
         }
 
     return {
@@ -182,6 +186,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
         "weekend_exit_hour": [4],
         "use_daily_exit": [False],
         "daily_exit_hour": [4],
+        "pip_size": [USDJPY_PIP_SIZE],
     }
 
 
@@ -330,6 +335,7 @@ def build_best_params(best_row: dict) -> dict:
         "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
         "use_daily_exit": bool(best_row["use_daily_exit"]),
         "daily_exit_hour": int(best_row["daily_exit_hour"]),
+        "pip_size": float(best_row.get("pip_size", USDJPY_PIP_SIZE)),
     }
 
 
