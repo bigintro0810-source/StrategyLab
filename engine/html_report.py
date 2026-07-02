@@ -16,7 +16,13 @@ table.heatmap td { padding: 6px 12px; }
 .summary .value { font-size: 20px; font-weight: bold; }
 .chart-wrap { margin-bottom: 24px; }
 .chart-wrap svg { border: 1px solid #ddd; border-radius: 6px; background: #fff; }
+.legend { margin-bottom: 8px; font-size: 13px; }
 """
+
+MULTI_SERIES_COLORS = [
+    "#2e8b3f", "#c0392b", "#2b7cd3", "#e67e22",
+    "#8e44ad", "#16a085", "#d4ac0d", "#7f8c8d",
+]
 
 CHART_WIDTH = 880
 CHART_HEIGHT = 240
@@ -152,6 +158,63 @@ def build_drawdown_curve_svg(equity_df: pd.DataFrame) -> str:
         f'<polyline points="{polyline}" fill="none" stroke="#c0392b" stroke-width="1.5" />'
         "</svg>"
     )
+
+
+def build_multi_equity_curve_svg(series: dict[str, list[float]]) -> str:
+    series = {label: values for label, values in series.items() if values}
+    if not series:
+        return "<p>データがありません。</p>"
+
+    all_values = [v for values in series.values() for v in values]
+    vmin = min(all_values)
+    vmax = max(all_values)
+    if vmax == vmin:
+        vmax = vmin + 1.0
+
+    plot_w = CHART_WIDTH - CHART_PAD_LEFT - CHART_PAD_RIGHT
+
+    lines = []
+    legend_items = []
+    for i, (label, values) in enumerate(series.items()):
+        color = MULTI_SERIES_COLORS[i % len(MULTI_SERIES_COLORS)]
+        n = len(values)
+        points = []
+        for idx, value in enumerate(values):
+            x = CHART_PAD_LEFT + (idx / (n - 1) if n > 1 else 0.0) * plot_w
+            y = _value_to_y(value, vmin, vmax)
+            points.append(f"{x:.1f},{y:.1f}")
+        lines.append(
+            f'<polyline points="{" ".join(points)}" '
+            f'fill="none" stroke="{color}" stroke-width="1.5" />'
+        )
+        legend_items.append((label, color))
+
+    zero_line = ""
+    if vmin < 0 < vmax:
+        zero_y = _value_to_y(0.0, vmin, vmax)
+        zero_line = (
+            f'<line x1="{CHART_PAD_LEFT}" y1="{zero_y:.1f}" '
+            f'x2="{CHART_WIDTH - CHART_PAD_RIGHT}" y2="{zero_y:.1f}" '
+            f'stroke="#999" stroke-dasharray="4,4" />'
+        )
+
+    legend_html = "".join(
+        f'<span style="color:{color}; margin-right:16px;">■ {label}</span>'
+        for label, color in legend_items
+    )
+
+    svg = (
+        f'<svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" xmlns="http://www.w3.org/2000/svg">'
+        f'<text x="{CHART_PAD_LEFT - 8}" y="{CHART_PAD_TOP}" text-anchor="end" font-size="11">{vmax:.2f}</text>'
+        f'<text x="{CHART_PAD_LEFT - 8}" y="{CHART_HEIGHT - CHART_PAD_BOTTOM}" text-anchor="end" font-size="11">{vmin:.2f}</text>'
+        f'<text x="{CHART_PAD_LEFT}" y="{CHART_HEIGHT - 8}" font-size="11">0%</text>'
+        f'<text x="{CHART_WIDTH - CHART_PAD_RIGHT}" y="{CHART_HEIGHT - 8}" text-anchor="end" font-size="11">100%</text>'
+        f"{zero_line}"
+        f"{''.join(lines)}"
+        "</svg>"
+    )
+
+    return f'<div class="legend">{legend_html}</div>{svg}'
 
 
 def build_summary_cards(

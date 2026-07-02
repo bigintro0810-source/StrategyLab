@@ -11,6 +11,7 @@ from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
+from engine.strategy_registry import save_strategy
 
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -40,6 +41,12 @@ def parse_args() -> argparse.Namespace:
         choices=AVAILABLE_TIMEFRAMES,
         default="15m",
         help="使用する時間足 (デフォルト: 15m)",
+    )
+
+    parser.add_argument(
+        "--save-as",
+        default=None,
+        help="指定した名前でこの実行のベスト戦略をsaved_strategies/に保存する",
     )
 
     return parser.parse_args()
@@ -667,6 +674,17 @@ def main() -> None:
         equity_df=equity_df,
         monte_carlo_summary=monte_carlo_summary,
     )
+
+    if args.save_as:
+        saved_entry = save_strategy(
+            output_dir=OUTPUT_DIR,
+            mode=args.mode,
+            timeframe=args.timeframe,
+            best_row=best_row,
+            params=best_params,
+            name=args.save_as,
+        )
+        print(f"戦略を保存しました: {saved_entry['id']} ({saved_entry['name']})")
 
     elapsed_total = time.time() - start_time
 
