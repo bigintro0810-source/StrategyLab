@@ -250,31 +250,149 @@ Version完成時はタグ付け。
 
 # Version2.0予定
 
-優先順位
+複数通貨対応は後回し（V4.0）。
 
-① 複数通貨対応
+時間足・評価・可視化・戦略管理を先に固める。
 
-② グラフ表示
+## V2.0-1 複数時間足対応
 
-③ HTMLレポート
+15分足決め打ちを可変化。
 
-④ GUI
+1分〜月足のCSV読み込み・リサンプリング対応。
 
-⑤ AI評価
+## V2.0-2 評価指標拡充
 
-⑥ 複数ストラテジー比較
+Sharpe Ratio
+
+Sortino Ratio
+
+Calmar Ratio
+
+CAGR
+
+Recovery Factor
+
+Profit/DD
+
+既存ランキングへ組み込み。
+
+## V2.0-3 可視化・レポート
+
+Equity Curveグラフ化
+
+Drawdown Curveグラフ化
+
+Monthly Heatmap
+
+Yearly Heatmap
+
+HTMLレポート出力
+
+## V2.0-4 複数ストラテジー管理・比較
+
+戦略の保存
+
+タグ管理
+
+メモ機能
+
+お気に入り
+
+横断比較
 
 ---
 
 # Version3.0予定
 
+指標ライブラリ拡充（FVG / Order Block / BOS / CHoCH / Liquidity Sweep / Bollinger / Donchian / SuperTrend等）
+
+条件ベースのストラテジー定義（コード直書き依存を減らす）
+
+最適化強化（ランダムサーチ / 遺伝的アルゴリズム / ベイズ最適化）
+
+信頼性評価拡充（Robustness Score / 過剰最適化判定 / パラメータ感度分析 / Confidence Score）
+
+---
+
+# Version4.0予定
+
+複数通貨対応
+
+・pip値/小数桁/データパスをconfig化
+
+・EURUSD等を追加
+
+複数時間足と合わせてデータ軸の拡張として実施。
+
+GUI化（Streamlit等）
+
+・GUIからのストラテジー条件設定
+
+・PDF/Excel出力
+
+---
+
+# Version5.0予定
+
 Pine Script自動生成
 
-TradingView連携
+Strategy自動生成
 
-インジケータ生成
+Indicator自動生成
 
-最適化AI
+アラートコード生成
+
+TradingView一致検証の自動化
+
+---
+
+# Version6.0予定
+
+自然言語からのストラテジー作成
+
+改善提案
+
+過剰最適化検出
+
+フィルター提案
+
+自動レポート生成
+
+---
+
+# Version7.0以降予定
+
+GPU最適化・並列化強化
+
+通貨相性分析・共通パターン発見
+
+夜間自動バックテスト・定期レポート
+
+MT5 / cTrader / API連携
+
+Discord / LINE通知
+
+Web版・クラウド実行
+
+---
+
+# 最終目標（完成形）
+
+「世界最高レベルの個人向けストラテジー研究プラットフォーム」を作ること。
+
+理想のワークフロー：
+
+アイデアを自然言語やGUIで入力
+
+数十年・複数通貨・複数時間足で高速検証
+
+Walk Forward・Monte Carlo・安定度などで信頼性を自動評価
+
+AIが改善案を提案
+
+採用した戦略をTradingView用のPine Scriptとして自動生成
+
+必要に応じて実運用や監視へつなげる
 
 ---
 
