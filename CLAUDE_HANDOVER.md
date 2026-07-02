@@ -24,11 +24,18 @@ Strategy Lab は Python 製のFXストラテジー研究・開発ツールです
 
 現在
 
-**Version 2.0（進行中、未タグ付け）**
+**Version 2.0 / 3.0 とも進行中（未タグ付け）**
 
 V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTMLレポート）/ V2.0-4（保存済みストラテジーのタグ・メモ・お気に入り・横断比較。`strategy_manager.py`）は完了。
 
 V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe Ratio / Sortino Ratio / Calmar Ratio / CAGR / Profit-DDの5指標は未実装のまま保留（2026-07-02、ユーザー判断によりV3.0を優先）。
+
+V3.0のうち、指標ライブラリ拡充を除く3項目が完了（2026-07-02）：
+- 最適化強化：`--optimizer {grid,random,genetic}`（`engine/optimizer_search.py`）。Bayesian最適化は依存ライブラリ導入判断待ちで未着手。
+- 信頼性評価拡充：パラメータ感度分析（`analyze_sensitivity.py`）、既存のstability/Monte Carlo/walk-forwardレーティングを束ねたConfidence Score（`engine/robustness.py` / `analyze_confidence.py`）。
+- 条件ベースのストラテジー定義：JSON設定ファイルでパラメータグリッドを外出し（`--strategy-config`, `strategy_configs/*.json`）。戦略ロジック自体のDSL化ではなく、値の選択を設定ファイル化するスコープに限定。
+
+指標ライブラリ拡充（FVG/OrderBlock/BOS/CHoCH/LiquiditySweep/Bollinger/Donchian/SuperTrend）は保留。理由：リポジトリ内で既にRSI/ATRの計算式が2系統あり数値が食い違っており（`indicators/`のWilder平滑 vs `engine/indicators.py`の単純移動平均）、「正」を決めないまま指標を追加すると同じ問題を再生産するため。着手前にユーザーが計算式の基準を決める必要がある。
 
 Git Tag
 
