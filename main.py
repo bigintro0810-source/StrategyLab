@@ -8,7 +8,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday
+from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
+from engine.html_report import export_html_report
 
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -644,9 +646,26 @@ def main() -> None:
     monthly_df = export_monthly_analysis(best_trade_log)
     stability_df = export_stability_analysis(yearly_df, monthly_df)
 
+    equity_df = export_equity_curve(
+        trade_log=best_trade_log,
+        output_dir=OUTPUT_DIR,
+    )
+
     monte_carlo_results, monte_carlo_summary = export_monte_carlo(
         trade_log=best_trade_log,
         output_dir=OUTPUT_DIR,
+    )
+
+    report_path = export_html_report(
+        output_dir=OUTPUT_DIR,
+        mode=args.mode,
+        timeframe=args.timeframe,
+        ranking_total=ranking_total,
+        yearly_df=yearly_df,
+        monthly_df=monthly_df,
+        stability_df=stability_df,
+        equity_df=equity_df,
+        monte_carlo_summary=monte_carlo_summary,
     )
 
     elapsed_total = time.time() - start_time
@@ -661,8 +680,10 @@ def main() -> None:
     print(f"年別分析出力: {OUTPUT_DIR / 'yearly_analysis.csv'}")
     print(f"月別分析出力: {OUTPUT_DIR / 'monthly_analysis.csv'}")
     print(f"安定度分析出力: {OUTPUT_DIR / 'stability_analysis.csv'}")
+    print(f"Equity Curve出力: {OUTPUT_DIR / 'equity_curve.csv'}")
     print(f"Monte Carlo出力: {OUTPUT_DIR / 'monte_carlo_results.csv'}")
     print(f"Monte Carloサマリー出力: {OUTPUT_DIR / 'monte_carlo_summary.csv'}")
+    print(f"HTMLレポート出力: {report_path}")
     print("")
     print("総合ランキング 上位20件")
     print(ranking_total.head(20).to_string(index=False))
