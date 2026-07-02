@@ -24,11 +24,13 @@ Strategy Lab は Python 製のFXストラテジー研究・開発ツールです
 
 現在
 
-**Version 1.0 完成**
+**Version 2.0（V2.0-1〜V2.0-4 実装完了、未タグ付け）**
+
+直近完成：複数時間足対応 / 評価指標拡充（Recovery Factor等） / Equity・Drawdownグラフ入りHTMLレポート / 保存済みストラテジーのタグ・メモ・お気に入り・横断比較（`strategy_manager.py`）。
 
 Git Tag
 
-v1.0.0
+v1.0.0（V2.0系はまだタグ未作成。v2.0.0タグを打つかはユーザー判断待ち）
 
 ---
 
