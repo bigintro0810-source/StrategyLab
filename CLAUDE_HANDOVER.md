@@ -329,17 +329,17 @@ HTMLレポート出力
 
 複数通貨対応
 
-・pip値/小数桁/データパスをconfig化
+・pip値/小数桁/データパスをconfig化 → pip値のハードコード解消は完了（2026-07-02）。EURUSD等の追加は`data/raw/`に該当通貨のヒストリカルデータが無いため未着手（データ入手待ち）。
 
-・EURUSD等を追加
+・EURUSD等を追加 → 未着手（上記と同じ理由）
 
 複数時間足と合わせてデータ軸の拡張として実施。
 
-GUI化（Streamlit等）
+GUI化（Streamlit等） → 完了（2026-07-02）。`gui_app.py`（`streamlit run gui_app.py`）。バックテスト実行タブ・保存済み戦略管理タブ（一覧/タグ/メモ/お気に入り/横断比較）。本リポジトリ初のサードパーティ依存として`requirements.txt`を新規作成。
 
-・GUIからのストラテジー条件設定
+・GUIからのストラテジー条件設定 → 完了（mode/timeframe/optimizer/strategy-configの指定、実行、レポート閲覧）
 
-・PDF/Excel出力
+・PDF/Excel出力 → 未着手。ランキングCSVダウンロードのみ実装（ExcelはCSVで開けるため最低限は満たすが、xlsx/PDF専用出力ではない）。追加ライブラリ（openpyxl/reportlab等）の導入判断が必要。
 
 ---
 
