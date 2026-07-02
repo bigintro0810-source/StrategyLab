@@ -561,7 +561,12 @@ def print_analysis_summary(
 
 
 def main() -> None:
+    global OUTPUT_DIR
+
     args = parse_args()
+
+    if args.timeframe != "15m":
+        OUTPUT_DIR = Path("output") / args.timeframe
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
