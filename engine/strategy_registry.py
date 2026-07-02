@@ -55,6 +55,7 @@ def save_strategy(
     tags: list[str] | None = None,
     memo: str = "",
     favorite: bool = False,
+    strategy_config: str | None = None,
 ) -> dict:
     strategy_id = _new_id(mode, timeframe)
     snapshot_dir = REGISTRY_DIR / strategy_id
@@ -77,6 +78,7 @@ def save_strategy(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "mode": mode,
         "timeframe": timeframe,
+        "strategy_config": strategy_config,
         "tags": tags or [],
         "memo": memo,
         "favorite": favorite,

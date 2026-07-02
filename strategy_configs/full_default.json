@@ -1,0 +1,21 @@
+{
+  "name": "full_default",
+  "description": "main.py --mode full と同じグリッド。--strategy-config の動作確認・移行の起点用。",
+  "params": {
+    "ema_length": [150, 200, 250],
+    "min_body_pips": [15.0, 20.0, 25.0],
+    "max_body_pips": [0.0],
+    "max_wick_pips": [0.0],
+    "lookahead_bars": [15],
+    "breakout_bars": [30],
+    "ema_distance_pips": [40.0, 50.0, 60.0],
+    "rsi_min": [65.0, 70.0, 75.0],
+    "rr": [1.0, 1.2, 1.5],
+    "session_start": [8],
+    "session_end": [3],
+    "use_weekend_exit": [true],
+    "weekend_exit_hour": [4],
+    "use_daily_exit": [false],
+    "daily_exit_hour": [4]
+  }
+}

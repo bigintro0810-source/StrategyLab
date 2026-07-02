@@ -13,6 +13,7 @@ from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
 from engine.strategy_registry import save_strategy
 from engine.optimizer_search import GeneticSearch, sample_random_combos
+from engine.strategy_config_loader import load_strategy_config
 
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -76,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="--optimizer genetic の世代数 (デフォルト: 10)",
+    )
+
+    parser.add_argument(
+        "--strategy-config",
+        default=None,
+        help="strategy_configs/*.json のパスを指定すると、--mode のグリッドの代わりにこの設定を使う",
     )
 
     return parser.parse_args()
@@ -178,12 +185,15 @@ def build_parameter_space(mode: str) -> dict[str, list]:
     }
 
 
-def build_parameter_grid(mode: str) -> list[dict]:
-    grid = build_parameter_space(mode)
-    keys = list(grid.keys())
-    combos = itertools.product(*[grid[key] for key in keys])
+def build_grid_from_space(param_space: dict[str, list]) -> list[dict]:
+    keys = list(param_space.keys())
+    combos = itertools.product(*[param_space[key] for key in keys])
 
     return [dict(zip(keys, combo)) for combo in combos]
+
+
+def build_parameter_grid(mode: str) -> list[dict]:
+    return build_grid_from_space(build_parameter_space(mode))
 
 
 def init_worker(df: pd.DataFrame) -> None:
@@ -628,10 +638,14 @@ def main() -> None:
     print(f"データ数: {len(df):,}")
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
 
-    param_space = build_parameter_space(args.mode)
+    if args.strategy_config:
+        param_space = load_strategy_config(Path(args.strategy_config))
+        print(f"ストラテジー設定ファイル: {args.strategy_config}")
+    else:
+        param_space = build_parameter_space(args.mode)
 
     if args.optimizer == "grid":
-        parameter_list = build_parameter_grid(args.mode)
+        parameter_list = build_grid_from_space(param_space)
         total_tasks = len(parameter_list)
     elif args.optimizer == "random":
         parameter_list = sample_random_combos(param_space, args.n_samples)
@@ -744,6 +758,7 @@ def main() -> None:
             best_row=best_row,
             params=best_params,
             name=args.save_as,
+            strategy_config=args.strategy_config,
         )
         print(f"戦略を保存しました: {saved_entry['id']} ({saved_entry['name']})")
 

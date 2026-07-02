@@ -1,0 +1,21 @@
+{
+  "name": "dev_baseline",
+  "description": "main.py --mode dev と同じ単一パラメータセット。",
+  "params": {
+    "ema_length": [200],
+    "min_body_pips": [20.0],
+    "max_body_pips": [0.0],
+    "max_wick_pips": [0.0],
+    "lookahead_bars": [15],
+    "breakout_bars": [30],
+    "ema_distance_pips": [50.0],
+    "rsi_min": [70.0],
+    "rr": [1.2],
+    "session_start": [8],
+    "session_end": [3],
+    "use_weekend_exit": [true],
+    "weekend_exit_hour": [4],
+    "use_daily_exit": [false],
+    "daily_exit_hour": [4]
+  }
+}
