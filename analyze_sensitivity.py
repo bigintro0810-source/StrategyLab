@@ -162,6 +162,9 @@ def main() -> None:
     summary_df = summarize_sensitivity(detail_df)
     score, rating = rate_sensitivity(summary_df)
 
+    summary_df["sensitivity_score"] = score
+    summary_df["sensitivity_rating"] = rating
+
     detail_path = output_dir / "sensitivity_detail.csv"
     summary_path = output_dir / "sensitivity_summary.csv"
 
