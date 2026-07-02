@@ -390,6 +390,13 @@ def run_backtest(
     max_dd = calc_max_dd(profits_arr)
     expected_value = net_profit / trades if trades else 0.0
 
+    if max_dd > 0:
+        recovery_factor = net_profit / max_dd
+    elif net_profit > 0:
+        recovery_factor = 999.0
+    else:
+        recovery_factor = 0.0
+
     result = {
         **p,
         "trades": trades,
@@ -402,6 +409,7 @@ def run_backtest(
         "profit_factor": round(profit_factor, 3),
         "max_dd": round(max_dd, 5),
         "expected_value": round(expected_value, 5),
+        "recovery_factor": round(recovery_factor, 3),
     }
 
     trades_df = pd.DataFrame(trade_logs)

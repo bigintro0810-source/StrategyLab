@@ -232,6 +232,10 @@ def export_rankings(result_df: pd.DataFrame) -> dict[str, Path]:
             by=["overall_stability_score", "profit_factor", "net_profit", "max_dd"],
             ascending=[False, False, False, True],
         ),
+        "recovery_factor": result_df.sort_values(
+            by=["recovery_factor", "profit_factor", "overall_stability_score", "net_profit"],
+            ascending=[False, False, False, False],
+        ),
     }
 
     paths: dict[str, Path] = {}
