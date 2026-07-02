@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from engine.backtest_engine import run_backtest
+from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 
 
@@ -20,6 +20,7 @@ OUTPUT_DIR = Path("output")
 MAX_WORKERS = 8
 
 _WORKER_DF = None
+_WORKER_IS_INTRADAY = True
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,12 +146,13 @@ def build_parameter_grid(mode: str) -> list[dict]:
 
 
 def init_worker(df: pd.DataFrame) -> None:
-    global _WORKER_DF
+    global _WORKER_DF, _WORKER_IS_INTRADAY
     _WORKER_DF = df
+    _WORKER_IS_INTRADAY = compute_is_intraday(df["datetime"])
 
 
 def run_one_backtest(task: tuple[int, dict]) -> dict:
-    global _WORKER_DF
+    global _WORKER_DF, _WORKER_IS_INTRADAY
 
     if _WORKER_DF is None:
         raise RuntimeError("Worker data is not initialized.")
@@ -161,6 +163,7 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
         df=_WORKER_DF,
         params=params,
         return_trades=True,
+        is_intraday=_WORKER_IS_INTRADAY,
     )
 
     stability = calculate_stability_metrics(trade_log)

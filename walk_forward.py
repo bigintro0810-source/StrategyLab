@@ -5,7 +5,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from engine.backtest_engine import run_backtest
+from engine.backtest_engine import run_backtest, compute_is_intraday
 from main import find_data_file, load_price_data, build_parameter_grid, format_seconds
 
 
@@ -20,6 +20,7 @@ TOP_N = 3
 MAX_WORKERS = 8
 
 _WORKER_DF = None
+_WORKER_IS_INTRADAY = True
 
 
 def build_windows() -> list[dict]:
@@ -54,12 +55,13 @@ def filter_by_year(df: pd.DataFrame, start_year: int, end_year: int) -> pd.DataF
 
 
 def init_worker(df: pd.DataFrame) -> None:
-    global _WORKER_DF
+    global _WORKER_DF, _WORKER_IS_INTRADAY
     _WORKER_DF = df
+    _WORKER_IS_INTRADAY = compute_is_intraday(df["datetime"])
 
 
 def run_one(task: tuple[int, dict]) -> dict:
-    global _WORKER_DF
+    global _WORKER_DF, _WORKER_IS_INTRADAY
 
     if _WORKER_DF is None:
         raise RuntimeError("Worker data is not initialized.")
@@ -70,6 +72,7 @@ def run_one(task: tuple[int, dict]) -> dict:
         df=_WORKER_DF,
         params=params,
         return_trades=False,
+        is_intraday=_WORKER_IS_INTRADAY,
     )
 
     result["param_id"] = param_id

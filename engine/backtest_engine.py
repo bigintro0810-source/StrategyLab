@@ -44,6 +44,15 @@ def is_in_session(hour: int, start_hour: int, end_hour: int) -> bool:
     return hour >= start_hour or hour < end_hour
 
 
+def compute_is_intraday(datetime_series: pd.Series) -> bool:
+    bar_seconds = pd.to_datetime(datetime_series).diff().dt.total_seconds().median()
+
+    if pd.isna(bar_seconds):
+        return True
+
+    return bool(bar_seconds < 86400)
+
+
 def calc_max_dd(profits: np.ndarray) -> float:
     if len(profits) == 0:
         return 0.0
@@ -107,6 +116,7 @@ def run_backtest(
     df: pd.DataFrame,
     params: dict[str, Any] | BacktestConfig,
     return_trades: bool = False,
+    is_intraday: bool | None = None,
 ) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
     if isinstance(params, BacktestConfig):
         p = asdict(params)
@@ -140,6 +150,9 @@ def run_backtest(
     datetime_series = pd.to_datetime(df["datetime"])
     hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
     weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+
+    if is_intraday is None:
+        is_intraday = compute_is_intraday(datetime_series)
 
     open_arr = df["open"].to_numpy(dtype=float)
     high_arr = df["high"].to_numpy(dtype=float)
@@ -220,11 +233,11 @@ def run_backtest(
             exit_reason = None
             exit_price = None
 
-            if use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
+            if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
                 exit_reason = "Weekend"
                 exit_price = close_price
 
-            elif use_daily_exit and hour == daily_exit_hour:
+            elif is_intraday and use_daily_exit and hour == daily_exit_hour:
                 exit_reason = "DailyExit"
                 exit_price = close_price
 
@@ -311,7 +324,7 @@ def run_backtest(
         if signal_bar is not None:
             continue
 
-        if not is_in_session(
+        if is_intraday and not is_in_session(
             hour=hour,
             start_hour=session_start,
             end_hour=session_end,
