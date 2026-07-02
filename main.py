@@ -12,6 +12,7 @@ from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
 from engine.strategy_registry import save_strategy
+from engine.optimizer_search import GeneticSearch, sample_random_combos
 
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -47,6 +48,34 @@ def parse_args() -> argparse.Namespace:
         "--save-as",
         default=None,
         help="指定した名前でこの実行のベスト戦略をsaved_strategies/に保存する",
+    )
+
+    parser.add_argument(
+        "--optimizer",
+        choices=["grid", "random", "genetic"],
+        default="grid",
+        help="grid=全探索 / random=ランダムサンプリング / genetic=遺伝的アルゴリズム (デフォルト: grid)",
+    )
+
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=50,
+        help="--optimizer random で試すパラメータ組み合わせ数 (デフォルト: 50)",
+    )
+
+    parser.add_argument(
+        "--population",
+        type=int,
+        default=20,
+        help="--optimizer genetic の世代あたり個体数 (デフォルト: 20)",
+    )
+
+    parser.add_argument(
+        "--generations",
+        type=int,
+        default=10,
+        help="--optimizer genetic の世代数 (デフォルト: 10)",
     )
 
     return parser.parse_args()
@@ -110,9 +139,9 @@ def load_price_data(path: Path) -> pd.DataFrame:
     return df
 
 
-def build_parameter_grid(mode: str) -> list[dict]:
+def build_parameter_space(mode: str) -> dict[str, list]:
     if mode == "dev":
-        grid = {
+        return {
             "ema_length": [200],
             "min_body_pips": [20.0],
             "max_body_pips": [0.0],
@@ -129,25 +158,28 @@ def build_parameter_grid(mode: str) -> list[dict]:
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
         }
-    else:
-        grid = {
-            "ema_length": [150, 200, 250],
-            "min_body_pips": [15.0, 20.0, 25.0],
-            "max_body_pips": [0.0],
-            "max_wick_pips": [0.0],
-            "lookahead_bars": [15],
-            "breakout_bars": [30],
-            "ema_distance_pips": [40.0, 50.0, 60.0],
-            "rsi_min": [65.0, 70.0, 75.0],
-            "rr": [1.0, 1.2, 1.5],
-            "session_start": [8],
-            "session_end": [3],
-            "use_weekend_exit": [True],
-            "weekend_exit_hour": [4],
-            "use_daily_exit": [False],
-            "daily_exit_hour": [4],
-        }
 
+    return {
+        "ema_length": [150, 200, 250],
+        "min_body_pips": [15.0, 20.0, 25.0],
+        "max_body_pips": [0.0],
+        "max_wick_pips": [0.0],
+        "lookahead_bars": [15],
+        "breakout_bars": [30],
+        "ema_distance_pips": [40.0, 50.0, 60.0],
+        "rsi_min": [65.0, 70.0, 75.0],
+        "rr": [1.0, 1.2, 1.5],
+        "session_start": [8],
+        "session_end": [3],
+        "use_weekend_exit": [True],
+        "weekend_exit_hour": [4],
+        "use_daily_exit": [False],
+        "daily_exit_hour": [4],
+    }
+
+
+def build_parameter_grid(mode: str) -> list[dict]:
+    grid = build_parameter_space(mode)
     keys = list(grid.keys())
     combos = itertools.product(*[grid[key] for key in keys])
 
@@ -596,17 +628,44 @@ def main() -> None:
     print(f"データ数: {len(df):,}")
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
 
-    parameter_list = build_parameter_grid(args.mode)
-    tasks = list(enumerate(parameter_list, start=1))
+    param_space = build_parameter_space(args.mode)
 
-    total_tasks = len(tasks)
+    if args.optimizer == "grid":
+        parameter_list = build_parameter_grid(args.mode)
+        total_tasks = len(parameter_list)
+    elif args.optimizer == "random":
+        parameter_list = sample_random_combos(param_space, args.n_samples)
+        total_tasks = len(parameter_list)
+    else:
+        parameter_list = None
+        total_tasks = args.population
 
     workers = min(MAX_WORKERS, os.cpu_count() or 1, total_tasks)
 
-    print(f"検証パターン数: {total_tasks}")
+    print(f"最適化方式: {args.optimizer}")
+    if args.optimizer == "genetic":
+        print(f"検証パターン数: {total_tasks} x {args.generations}世代")
+    else:
+        print(f"検証パターン数: {total_tasks}")
     print(f"並列数: {workers}")
 
     start_time = time.time()
+
+    def run_batch(executor: ProcessPoolExecutor, param_dicts: list[dict], id_offset: int) -> list[dict]:
+        tasks = list(enumerate(param_dicts, start=id_offset))
+        futures = [executor.submit(run_one_backtest, task) for task in tasks]
+
+        batch_results = []
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            batch_results.append(result)
+
+            if completed % 10 == 0 or completed == len(tasks):
+                elapsed = time.time() - start_time
+                print(f"{completed}/{len(tasks)} 完了 経過 {format_seconds(elapsed)}")
+
+        return batch_results
+
     results = []
 
     with ProcessPoolExecutor(
@@ -614,22 +673,24 @@ def main() -> None:
         initializer=init_worker,
         initargs=(df,),
     ) as executor:
-        futures = [executor.submit(run_one_backtest, task) for task in tasks]
+        if args.optimizer in ("grid", "random"):
+            results = run_batch(executor, parameter_list, id_offset=1)
+        else:
+            search = GeneticSearch(param_space, population_size=args.population)
+            population = search.initial_population()
+            next_id = 1
 
-        for completed, future in enumerate(as_completed(futures), start=1):
-            result = future.result()
-            results.append(result)
+            for generation in range(1, args.generations + 1):
+                print(f"[遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
+                generation_results = run_batch(executor, population, id_offset=next_id)
+                next_id += len(population)
+                results.extend(generation_results)
 
-            if completed % 10 == 0 or completed == total_tasks:
-                elapsed = time.time() - start_time
-                avg_per_task = elapsed / completed
-                remaining = avg_per_task * (total_tasks - completed)
-
-                print(
-                    f"{completed}/{total_tasks} 完了 "
-                    f"経過 {format_seconds(elapsed)} "
-                    f"残り予想 {format_seconds(remaining)}"
-                )
+                scored_population = [
+                    (result["profit_factor"], {key: result[key] for key in param_space})
+                    for result in generation_results
+                ]
+                population = search.next_population(scored_population)
 
     result_df = pd.DataFrame(results)
 
