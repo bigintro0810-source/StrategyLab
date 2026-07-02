@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8734"],
       "port": 8734
+    },
+    {
+      "name": "gui-app",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "gui_app.py", "--server.port", "8735", "--server.headless", "true"],
+      "port": 8735
     }
   ]
 }
