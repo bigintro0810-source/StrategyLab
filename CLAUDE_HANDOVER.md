@@ -44,7 +44,7 @@ V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe R
 **指標ライブラリ拡充、残りの状況:**
 - Tier 1(Donchian/Bollinger/MACD/Ichimoku/Stochastic/Pivot+ADR/prev_high/prev_low/round_number/weekday): 完了(上記)。
 - Tier 2(SuperTrend/ADX): 未着手。RSI/ATRの計算式が2系統あり数値が食い違っている問題(`indicators/`のWilder平滑 vs `engine/indicators.py`の単純移動平均)が未解決なため保留。TradingViewとのRSI一致確認(`compare_signals.py`)も未実施であることをユーザーが確認済み(2026-07-03)。
-- Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 未着手。業界内で定義が複数あるが、ユーザーの指示により「一般的な(ICT系)定義で実装し、後で検証」する方針で合意済み(2026-07-03)。
+- **Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 完了(2026-07-03)。`engine/smc_indicators.py`。ユーザーの指示通り「一般的な(ICT系)定義で実装、TradingView未検証」の位置づけ。ショート専用戦略に合わせ全てbearish版のみ実装。エントリートリガー5種+フィルター5種として追加。BOS/CHoCHはswing point検出のルックアヘッド回避・隣接バー重複統合という2つの実装上の落とし穴を、既知パターンの合成データで検証して回避済み。**
 
 **V4.0（2026-07-02〜03）:**
 - 複数通貨対応：`--symbol {USDJPY,EURJPY,GBPJPY}`完了。`data/raw/`にEURJPY/GBPJPYデータ追加済み(2026-07-03)。pip_sizeは全通貨0.01(円建てクロスのため)。`walk_forward.py`はsymbol未対応のまま(既知の制約、要望が出たら追加)。
