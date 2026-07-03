@@ -6,6 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday
+from engine.params import reconstruct_params_from_row
 from main import find_data_file, load_price_data, build_parameter_grid, format_seconds
 
 
@@ -105,26 +106,6 @@ def run_optimization(df: pd.DataFrame, params_list: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
-def build_params_from_row(row: pd.Series) -> dict:
-    return {
-        "ema_length": int(row["ema_length"]),
-        "min_body_pips": float(row["min_body_pips"]),
-        "max_body_pips": float(row["max_body_pips"]),
-        "max_wick_pips": float(row["max_wick_pips"]),
-        "lookahead_bars": int(row["lookahead_bars"]),
-        "breakout_bars": int(row["breakout_bars"]),
-        "ema_distance_pips": float(row["ema_distance_pips"]),
-        "rsi_min": float(row["rsi_min"]),
-        "rr": float(row["rr"]),
-        "session_start": int(row["session_start"]),
-        "session_end": int(row["session_end"]),
-        "use_weekend_exit": bool(row["use_weekend_exit"]),
-        "weekend_exit_hour": int(row["weekend_exit_hour"]),
-        "use_daily_exit": bool(row["use_daily_exit"]),
-        "daily_exit_hour": int(row["daily_exit_hour"]),
-    }
-
-
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +149,7 @@ def main() -> None:
         train_ranked = rank_results(train_results).head(TOP_N)
 
         for rank, (_, train_row) in enumerate(train_ranked.iterrows(), start=1):
-            params = build_params_from_row(train_row)
+            params = reconstruct_params_from_row(train_row)
 
             test_result = run_backtest(
                 df=test_df,

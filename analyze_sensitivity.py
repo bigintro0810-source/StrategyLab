@@ -18,7 +18,8 @@ from pathlib import Path
 import pandas as pd
 
 from engine.backtest_engine import compute_is_intraday, run_backtest
-from main import build_best_params, build_parameter_space, find_data_file, load_price_data
+from engine.params import reconstruct_params_from_row
+from main import build_parameter_space, find_data_file, load_price_data
 
 OUTPUT_DIR = Path("output")
 
@@ -141,7 +142,7 @@ def main() -> None:
     output_dir = OUTPUT_DIR if args.timeframe == "15m" else OUTPUT_DIR / args.timeframe
 
     best_row = load_best_row(output_dir)
-    base_params = build_best_params(best_row)
+    base_params = reconstruct_params_from_row(best_row)
     param_space = build_parameter_space(args.mode)
 
     data_path = find_data_file(args.timeframe)

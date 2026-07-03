@@ -14,6 +14,7 @@ from engine.html_report import export_html_report
 from engine.strategy_registry import save_strategy
 from engine.optimizer_search import GeneticSearch, sample_random_combos
 from engine.strategy_config_loader import load_strategy_config
+from engine.params import reconstruct_params_from_row
 
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
@@ -338,27 +339,6 @@ def format_seconds(seconds: float) -> str:
     secs = seconds % 60
 
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-
-def build_best_params(best_row: dict) -> dict:
-    return {
-        "ema_length": int(best_row["ema_length"]),
-        "min_body_pips": float(best_row["min_body_pips"]),
-        "max_body_pips": float(best_row["max_body_pips"]),
-        "max_wick_pips": float(best_row["max_wick_pips"]),
-        "lookahead_bars": int(best_row["lookahead_bars"]),
-        "breakout_bars": int(best_row["breakout_bars"]),
-        "ema_distance_pips": float(best_row["ema_distance_pips"]),
-        "rsi_min": float(best_row["rsi_min"]),
-        "rr": float(best_row["rr"]),
-        "session_start": int(best_row["session_start"]),
-        "session_end": int(best_row["session_end"]),
-        "use_weekend_exit": bool(best_row["use_weekend_exit"]),
-        "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
-        "use_daily_exit": bool(best_row["use_daily_exit"]),
-        "daily_exit_hour": int(best_row["daily_exit_hour"]),
-        "pip_size": float(best_row.get("pip_size", JPY_PIP_SIZE)),
-    }
 
 
 def calc_profit_factor(profits: pd.Series) -> float:
@@ -740,7 +720,7 @@ def main() -> None:
     ranking_total = pd.read_csv(ranking_paths["total"])
 
     best_row = ranking_total.iloc[0].to_dict()
-    best_params = build_best_params(best_row)
+    best_params = reconstruct_params_from_row(best_row)
 
     _, best_trade_log = run_backtest(
         df=df,
