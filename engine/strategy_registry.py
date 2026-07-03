@@ -14,6 +14,10 @@ METRIC_COLUMNS = [
     "win_rate",
     "trades",
     "recovery_factor",
+    "sharpe_ratio",
+    "sortino_ratio",
+    "cagr",
+    "calmar_ratio",
 ]
 
 SNAPSHOT_FILES = [

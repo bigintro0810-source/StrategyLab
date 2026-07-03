@@ -234,6 +234,18 @@ def build_summary_cards(
         if "recovery_factor" in best_row:
             cards.append(("Recovery Factor", f"{best_row['recovery_factor']:.3f}"))
 
+        if "sharpe_ratio" in best_row:
+            cards.append(("Sharpe Ratio", f"{best_row['sharpe_ratio']:.3f}"))
+
+        if "sortino_ratio" in best_row:
+            cards.append(("Sortino Ratio", f"{best_row['sortino_ratio']:.3f}"))
+
+        if "cagr" in best_row:
+            cards.append(("CAGR", f"{best_row['cagr']*100:.2f}%"))
+
+        if "calmar_ratio" in best_row:
+            cards.append(("Calmar Ratio", f"{best_row['calmar_ratio']:.3f}"))
+
     if stability_row is not None:
         cards.append(
             (

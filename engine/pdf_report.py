@@ -162,6 +162,18 @@ def build_pdf_report(
         if "recovery_factor" in best_row:
             pdf.body(f"Recovery Factor: {best_row['recovery_factor']:.3f}")
 
+        if "sharpe_ratio" in best_row:
+            pdf.body(
+                f"Sharpe: {best_row['sharpe_ratio']:.3f}    "
+                f"Sortino: {best_row['sortino_ratio']:.3f}"
+            )
+
+        if "cagr" in best_row:
+            pdf.body(
+                f"CAGR: {best_row['cagr']*100:.2f}%    "
+                f"Calmar: {best_row['calmar_ratio']:.3f}"
+            )
+
     if not stability_df.empty:
         stability_row = stability_df.iloc[0]
         pdf.body(

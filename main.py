@@ -7,7 +7,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
-from engine.backtest_engine import run_backtest, compute_is_intraday
+from engine.backtest_engine import run_backtest, compute_is_intraday, calc_max_dd
+from engine.advanced_metrics import sharpe_ratio, sortino_ratio, cagr, calmar_ratio
 from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
@@ -314,12 +315,17 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
     )
 
     stability = calculate_stability_metrics(trade_log)
+    advanced = calculate_advanced_metrics(trade_log)
 
     result["param_id"] = param_id
     result["yearly_stability_score"] = stability["yearly_stability_score"]
     result["monthly_stability_score"] = stability["monthly_stability_score"]
     result["overall_stability_score"] = stability["overall_stability_score"]
     result["stability_rating"] = stability["rating"]
+    result["sharpe_ratio"] = advanced["sharpe_ratio"]
+    result["sortino_ratio"] = advanced["sortino_ratio"]
+    result["cagr"] = advanced["cagr"]
+    result["calmar_ratio"] = advanced["calmar_ratio"]
 
     return result
 
@@ -575,6 +581,36 @@ def calculate_stability_metrics(trade_log: pd.DataFrame) -> dict:
     }
 
 
+def calculate_advanced_metrics(trade_log: pd.DataFrame) -> dict:
+    if trade_log.empty:
+        return {
+            "sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "cagr": 0.0,
+            "calmar_ratio": 0.0,
+        }
+
+    monthly_df = build_monthly_analysis(trade_log)
+    monthly_returns = monthly_df["net_profit"] if not monthly_df.empty else pd.Series(dtype=float)
+
+    entry_times = pd.to_datetime(trade_log["entry_time"], errors="coerce")
+    exit_times = pd.to_datetime(trade_log["exit_time"], errors="coerce")
+    span_days = (exit_times.max() - entry_times.min()).days
+    years = span_days / 365.25 if span_days > 0 else 0.0
+
+    net_profit = float(trade_log["profit"].sum())
+    max_dd = calc_max_dd(trade_log["profit"].to_numpy())
+
+    cagr_value = cagr(net_profit, years)
+
+    return {
+        "sharpe_ratio": round(sharpe_ratio(monthly_returns), 3),
+        "sortino_ratio": round(sortino_ratio(monthly_returns), 3),
+        "cagr": round(cagr_value, 5),
+        "calmar_ratio": round(calmar_ratio(cagr_value, max_dd), 3),
+    }
+
+
 def export_yearly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
     output_path = OUTPUT_DIR / "yearly_analysis.csv"
     result_df = build_yearly_analysis(trade_log)
@@ -737,6 +773,7 @@ def main() -> None:
             param_space=param_space,
             n_trials=args.n_samples,
             stability_fn=calculate_stability_metrics,
+            advanced_metrics_fn=calculate_advanced_metrics,
             progress_callback=bayesian_progress,
         )
     else:

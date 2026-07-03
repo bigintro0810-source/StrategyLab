@@ -128,6 +128,7 @@ def run_bayesian_search(
     param_space: dict[str, list],
     n_trials: int,
     stability_fn,
+    advanced_metrics_fn,
     seed: int = 42,
     progress_callback=None,
 ) -> list[dict]:
@@ -149,14 +150,17 @@ def run_bayesian_search(
     same space, just with smarter trial selection instead of exhaustive/
     random/evolutionary selection.
 
-    stability_fn(trade_log) -> dict is injected rather than imported
-    directly, since it lives in main.py::calculate_stability_metrics() and
+    stability_fn(trade_log) -> dict and advanced_metrics_fn(trade_log) -> dict
+    are injected rather than imported directly, since they live in
+    main.py (calculate_stability_metrics/calculate_advanced_metrics) and
     main.py already imports this module - importing back would be
     circular. Every other optimizer path (main.py::run_one_backtest, used
-    by grid/random/genetic) computes these same yearly/monthly/overall
-    stability fields before returning a result; skipping them here would
-    silently break export_rankings(), which sorts on
-    overall_stability_score.
+    by grid/random/genetic) computes these same fields before returning a
+    result; skipping them here would silently break export_rankings()
+    (sorts on overall_stability_score) the same way an earlier version of
+    this function did before stability_fn was added - advanced_metrics_fn
+    follows the same fix preemptively rather than waiting to hit the same
+    bug twice.
     """
     import optuna
     from engine.backtest_engine import run_backtest
@@ -176,6 +180,12 @@ def run_bayesian_search(
         result["monthly_stability_score"] = stability["monthly_stability_score"]
         result["overall_stability_score"] = stability["overall_stability_score"]
         result["stability_rating"] = stability["rating"]
+
+        advanced = advanced_metrics_fn(trade_log)
+        result["sharpe_ratio"] = advanced["sharpe_ratio"]
+        result["sortino_ratio"] = advanced["sortino_ratio"]
+        result["cagr"] = advanced["cagr"]
+        result["calmar_ratio"] = advanced["calmar_ratio"]
 
         trial.set_user_attr("result", result)
 

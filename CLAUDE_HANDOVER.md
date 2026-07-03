@@ -28,7 +28,7 @@ Strategy Lab は Python 製のFXストラテジー研究・開発ツールです
 
 V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTMLレポート）/ V2.0-4（保存済みストラテジーのタグ・メモ・お気に入り・横断比較。`strategy_manager.py`）は完了。
 
-V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe Ratio / Sortino Ratio / Calmar Ratio / CAGR / Profit-DDの5指標は未実装のまま保留（2026-07-02、ユーザー判断によりV3.0を優先）。
+**V2.0-2（評価指標拡充）は完了（2026-07-03）**。Profit-DDは既存のRecovery Factor(net_profit/max_dd)と同一計算式のため追加実装なし。Sharpe/Sortino Ratioは月次損益(pips)を既存のリターン系列としてそのまま使用(無リスク金利=0、月次で年率化)。CAGR/Calmar Ratioはこのプロジェクトが口座残高/ロットサイズの概念を持たない(pipsベースで動作する)ため、%換算に仮想初期資金100(pips基準)を導入(ユーザー確認済み)。`engine/advanced_metrics.py`。`main.py::run_one_backtest`と`engine/optimizer_search.py::run_bayesian_search`の両方に実装(前回のstability_fnと同じ理由でコールバック注入、両経路の食い違いを防ぐため)。
 
 **V3.0（2026-07-02〜03）:**
 - **最適化強化：完了（2026-07-03）**。`--optimizer {grid,random,genetic,bayesian}`（`engine/optimizer_search.py`）。Bayesian最適化は`optuna`(TPEサンプラー)を採用(混合探索空間=カテゴリカル+bool+int+floatに強いため)。ProcessPoolExecutorは使わず、1試行ずつ`run_backtest`を直接呼ぶ逐次実行(Bayesianは前の結果を見て次を決めるため、そもそもバッチ並列化と相性が悪い)。`main.py::calculate_stability_metrics`はコールバック注入で受け渡し(循環import回避)。
