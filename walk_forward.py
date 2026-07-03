@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -7,11 +8,15 @@ import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.params import reconstruct_params_from_row
-from main import find_data_file, load_price_data, build_parameter_grid, format_seconds
+from main import (
+    AVAILABLE_TIMEFRAMES,
+    find_data_file,
+    load_price_data,
+    build_parameter_grid,
+    format_seconds,
+    resolve_output_dir,
+)
 
-
-OUTPUT_DIR = Path("output")
-OUTPUT_CSV = OUTPUT_DIR / "walk_forward_results.csv"
 
 TRAIN_YEARS = 5
 TEST_YEARS = 1
@@ -106,12 +111,39 @@ def run_optimization(df: pd.DataFrame, params_list: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Strategy Lab walk forward")
+
+    parser.add_argument(
+        "--symbol",
+        choices=["USDJPY", "EURJPY", "GBPJPY"],
+        default="USDJPY",
+        help="通貨ペア (デフォルト: USDJPY)",
+    )
+
+    parser.add_argument(
+        "--timeframe",
+        choices=AVAILABLE_TIMEFRAMES,
+        default="15m",
+        help="使用する時間足 (デフォルト: 15m)",
+    )
+
+    return parser.parse_args()
+
+
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    args = parse_args()
+
+    output_dir = resolve_output_dir(args.symbol, args.timeframe)
+    output_csv = output_dir / "walk_forward_results.csv"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
 
-    data_path = find_data_file()
+    data_path = find_data_file(args.timeframe, args.symbol)
+    print(f"通貨ペア: {args.symbol}")
+    print(f"時間足: {args.timeframe}")
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
@@ -190,13 +222,13 @@ def main() -> None:
         print("")
 
     result_df = pd.DataFrame(output_rows)
-    result_df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+    result_df.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
     elapsed_total = time.time() - start_time
 
     print("========== Walk Forward 完了 ==========")
     print(f"総実行時間: {format_seconds(elapsed_total)}")
-    print(f"出力: {OUTPUT_CSV}")
+    print(f"出力: {output_csv}")
     print("")
     print(result_df.to_string(index=False))
 

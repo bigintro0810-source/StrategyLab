@@ -1,10 +1,28 @@
-from pathlib import Path
+import argparse
 
 import pandas as pd
 
+from main import AVAILABLE_TIMEFRAMES, resolve_output_dir
 
-INPUT_CSV = Path("output/walk_forward_results.csv")
-OUTPUT_CSV = Path("output/walk_forward_summary.csv")
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Walk forward結果の判定")
+
+    parser.add_argument(
+        "--symbol",
+        choices=["USDJPY", "EURJPY", "GBPJPY"],
+        default="USDJPY",
+        help="通貨ペア (walk_forward.pyで使ったものと合わせる)",
+    )
+
+    parser.add_argument(
+        "--timeframe",
+        choices=AVAILABLE_TIMEFRAMES,
+        default="15m",
+        help="時間足 (walk_forward.pyで使ったものと合わせる)",
+    )
+
+    return parser.parse_args()
 
 
 def judge_row(row: pd.Series) -> str:
@@ -38,12 +56,17 @@ def overall_rating(pass_rate: float, avg_pf: float, total_profit: float, negativ
 
 
 def main() -> None:
-    if not INPUT_CSV.exists():
+    args = parse_args()
+    output_dir = resolve_output_dir(args.symbol, args.timeframe)
+    input_csv = output_dir / "walk_forward_results.csv"
+    output_csv = output_dir / "walk_forward_summary.csv"
+
+    if not input_csv.exists():
         raise FileNotFoundError(
-            "output/walk_forward_results.csv が見つかりません。先に python walk_forward.py を実行してください。"
+            f"{input_csv} が見つかりません。先に python walk_forward.py --symbol {args.symbol} --timeframe {args.timeframe} を実行してください。"
         )
 
-    df = pd.read_csv(INPUT_CSV)
+    df = pd.read_csv(input_csv)
 
     df["judge"] = df.apply(judge_row, axis=1)
 
@@ -94,9 +117,9 @@ def main() -> None:
     }
 
     summary_df = pd.DataFrame([summary])
-    summary_df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+    summary_df.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
-    detail_output = Path("output/walk_forward_results_judged.csv")
+    detail_output = output_dir / "walk_forward_results_judged.csv"
     df.to_csv(detail_output, index=False, encoding="utf-8-sig")
 
     print()
@@ -120,7 +143,7 @@ def main() -> None:
     print()
     print(f"総合評価: {rating}")
     print()
-    print(f"保存: {OUTPUT_CSV}")
+    print(f"保存: {output_csv}")
     print(f"詳細保存: {detail_output}")
 
 
