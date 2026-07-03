@@ -18,6 +18,12 @@ import numpy as np
 import pandas as pd
 
 from engine.filters import FILTER_REGISTRY
+from engine.smc_indicators import (
+    bearish_fvg,
+    bearish_order_block,
+    bos_choch_bearish,
+    liquidity_sweep_bearish,
+)
 from engine.technical_indicators import (
     bollinger_bands,
     daily_reference_levels,
@@ -89,6 +95,17 @@ def _build_indicator_arrays(
     precomputed["round_number_distance"] = round_number_distance_pips(
         close, precomputed["pip"]
     ).to_numpy(dtype=float)
+
+    # Tier 3 (SMC) - unverified against TradingView, see engine/smc_indicators.py.
+    smc_swing_lookback = int(p.get("smc_swing_lookback", 5))
+    precomputed["smc_fvg_bearish"] = bearish_fvg(high, low)
+    precomputed["smc_order_block_bearish"] = bearish_order_block(df["open"], close)
+    precomputed["smc_liquidity_sweep_bearish"] = liquidity_sweep_bearish(
+        high, low, close, smc_swing_lookback
+    )
+    bos_arr, choch_arr = bos_choch_bearish(high, low, close, smc_swing_lookback)
+    precomputed["smc_bos_bearish"] = bos_arr
+    precomputed["smc_choch_bearish"] = choch_arr
 
     return precomputed
 

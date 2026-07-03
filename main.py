@@ -220,6 +220,13 @@ def build_trigger_filter_defaults() -> dict[str, list]:
         "weekday_thursday": [True],
         "weekday_friday": [True],
         "adr_period": [14],
+        # Tier 3 (SMC) - unverified against TradingView, see engine/smc_indicators.py.
+        "use_fvg_filter": [False],
+        "use_order_block_filter": [False],
+        "use_bos_filter": [False],
+        "use_choch_filter": [False],
+        "use_liquidity_sweep_filter": [False],
+        "smc_swing_lookback": [5],
     }
 
 

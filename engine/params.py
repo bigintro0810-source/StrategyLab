@@ -69,4 +69,10 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "weekday_thursday": bool(row.get("weekday_thursday", True)),
         "weekday_friday": bool(row.get("weekday_friday", True)),
         "adr_period": int(row.get("adr_period", 14)),
+        "use_fvg_filter": bool(row.get("use_fvg_filter", False)),
+        "use_order_block_filter": bool(row.get("use_order_block_filter", False)),
+        "use_bos_filter": bool(row.get("use_bos_filter", False)),
+        "use_choch_filter": bool(row.get("use_choch_filter", False)),
+        "use_liquidity_sweep_filter": bool(row.get("use_liquidity_sweep_filter", False)),
+        "smc_swing_lookback": int(row.get("smc_swing_lookback", 5)),
     }

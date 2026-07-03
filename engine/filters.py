@@ -146,9 +146,34 @@ def filter_weekday(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) ->
     return signal
 
 
+def filter_fvg(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_fvg_bearish"]
+
+
+def filter_order_block(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_order_block_bearish"]
+
+
+def filter_bos(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_bos_bearish"]
+
+
+def filter_choch(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_choch_bearish"]
+
+
+def filter_liquidity_sweep(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_liquidity_sweep_bearish"]
+
+
 # (use_flag key, default enabled, filter function) - order matches the
 # original inline condition chain for the first six (auditability against
-# the pre-refactor code), then new Tier-1 filters.
+# the pre-refactor code), then new Tier-1 filters, then Tier-3 SMC filters.
 FILTER_REGISTRY: list[tuple[str, bool, Any]] = [
     ("use_session_filter", True, filter_session),
     ("use_min_body_filter", True, filter_min_body),
@@ -166,4 +191,9 @@ FILTER_REGISTRY: list[tuple[str, bool, Any]] = [
     ("use_prev_low_filter", False, filter_prev_low),
     ("use_round_number_filter", False, filter_round_number),
     ("use_weekday_filter", False, filter_weekday),
+    ("use_fvg_filter", False, filter_fvg),
+    ("use_order_block_filter", False, filter_order_block),
+    ("use_bos_filter", False, filter_bos),
+    ("use_choch_filter", False, filter_choch),
+    ("use_liquidity_sweep_filter", False, filter_liquidity_sweep),
 ]

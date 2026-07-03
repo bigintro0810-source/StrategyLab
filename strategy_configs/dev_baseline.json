@@ -160,6 +160,24 @@
     ],
     "adr_period": [
       14
+    ],
+    "use_fvg_filter": [
+      false
+    ],
+    "use_order_block_filter": [
+      false
+    ],
+    "use_bos_filter": [
+      false
+    ],
+    "use_choch_filter": [
+      false
+    ],
+    "use_liquidity_sweep_filter": [
+      false
+    ],
+    "smc_swing_lookback": [
+      5
     ]
   }
 }

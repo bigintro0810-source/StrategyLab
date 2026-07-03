@@ -110,6 +110,31 @@ def trigger_stochastic_level_cross(df, p: dict[str, Any], precomputed: dict[str,
     return _crossed_above(k > level)
 
 
+def trigger_fvg_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_fvg_bearish"]
+
+
+def trigger_order_block_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_order_block_bearish"]
+
+
+def trigger_bos_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_bos_bearish"]
+
+
+def trigger_choch_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_choch_bearish"]
+
+
+def trigger_liquidity_sweep_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SMC Tier 3 - unverified against TradingView, see engine/smc_indicators.py."""
+    return precomputed["smc_liquidity_sweep_bearish"]
+
+
 TRIGGER_REGISTRY = {
     "breakout": trigger_breakout,
     "donchian_breakout": trigger_donchian_breakout,
@@ -120,4 +145,9 @@ TRIGGER_REGISTRY = {
     "ichimoku_tk_cross": trigger_ichimoku_tk_cross,
     "stochastic_kd_cross": trigger_stochastic_kd_cross,
     "stochastic_level_cross": trigger_stochastic_level_cross,
+    "fvg_bearish": trigger_fvg_bearish,
+    "order_block_bearish": trigger_order_block_bearish,
+    "bos_bearish": trigger_bos_bearish,
+    "choch_bearish": trigger_choch_bearish,
+    "liquidity_sweep_bearish": trigger_liquidity_sweep_bearish,
 }
