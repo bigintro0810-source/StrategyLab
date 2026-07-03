@@ -178,6 +178,24 @@
     ],
     "smc_swing_lookback": [
       5
+    ],
+    "use_supertrend_filter": [
+      false
+    ],
+    "supertrend_period": [
+      10
+    ],
+    "supertrend_multiplier": [
+      3.0
+    ],
+    "use_adx_filter": [
+      false
+    ],
+    "adx_period": [
+      14
+    ],
+    "adx_threshold": [
+      25.0
     ]
   }
 }

@@ -25,6 +25,7 @@ from engine.smc_indicators import (
     liquidity_sweep_bearish,
 )
 from engine.technical_indicators import (
+    adx,
     bollinger_bands,
     daily_reference_levels,
     donchian_channel,
@@ -32,6 +33,7 @@ from engine.technical_indicators import (
     macd,
     round_number_distance_pips,
     stochastic_oscillator,
+    supertrend,
 )
 from engine.triggers import TRIGGER_REGISTRY
 
@@ -106,6 +108,21 @@ def _build_indicator_arrays(
     bos_arr, choch_arr = bos_choch_bearish(high, low, close, smc_swing_lookback)
     precomputed["smc_bos_bearish"] = bos_arr
     precomputed["smc_choch_bearish"] = choch_arr
+
+    # Tier 2 - depends on Wilder ATR, unblocked 2026-07-03 (see
+    # engine/technical_indicators.py's module docstring).
+    supertrend_period = int(p.get("supertrend_period", 10))
+    supertrend_multiplier = float(p.get("supertrend_multiplier", 3.0))
+    _supertrend_line, supertrend_direction = supertrend(
+        high, low, close, supertrend_period, supertrend_multiplier
+    )
+    precomputed["supertrend_direction"] = supertrend_direction
+
+    adx_period = int(p.get("adx_period", 14))
+    plus_di, minus_di, adx_line = adx(high, low, close, adx_period)
+    precomputed["adx_plus_di"] = plus_di.to_numpy(dtype=float)
+    precomputed["adx_minus_di"] = minus_di.to_numpy(dtype=float)
+    precomputed["adx_line"] = adx_line.to_numpy(dtype=float)
 
     return precomputed
 

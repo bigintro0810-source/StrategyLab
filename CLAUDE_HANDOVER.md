@@ -44,7 +44,7 @@ V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe R
 **指標ライブラリ拡充、残りの状況:**
 - Tier 1(Donchian/Bollinger/MACD/Ichimoku/Stochastic/Pivot+ADR/prev_high/prev_low/round_number/weekday): 完了(上記)。
 - **RSI計算式の問題は解決済み（2026-07-03）**。`data/raw/TV_USDJPY_15m.csv`のTradingView公式RSI列と直接数値比較した結果、従来の単純移動平均版はTV不一致(平均絶対誤差6.6、RSI>70判定の一致率90.48%)、Wilder平滑化版はTVとほぼ完全一致(平均絶対誤差0.006、一致率100%)。`engine/backtest_engine.py::rsi()`と`engine/indicators.py::rsi()`をWilder平滑化に変更。**この変更で全バックテスト結果が変わる**ため`tests/test_regression.py`の基準値も再計算済み。ATRも同じ理由でWilder化したが、TVエクスポートにATR列が無いため直接検証はできていない(標準的な慣習からの推測)。
-- Tier 2(SuperTrend/ADX): 上記のRSI/ATR修正により着手可能になったが、まだ実装していない。
+- **Tier 2(SuperTrend/ADX): 完了（2026-07-03）**。`engine/technical_indicators.py`に追加。SuperTrendは前バーの状態に依存する再帰的な構造のため(トレンド方向とバンド値が1本前の値に依存)、他の指標と違いO(n)のPythonループで実装(既存のバックテストループと同じ計算量クラス)。1分足87万行規模でも約37秒で許容範囲。既知パターンの合成データ(強い上昇→下降トレンド、トレンド相場 vs レンジ相場)で事前検証してから本番データに適用。トリガー`supertrend_flip_bearish`/`adx_di_cross_bearish`、フィルター`use_supertrend_filter`/`use_adx_filter`として追加。
 - **Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 完了(2026-07-03)。`engine/smc_indicators.py`。ユーザーの指示通り「一般的な(ICT系)定義で実装、TradingView未検証」の位置づけ。ショート専用戦略に合わせ全てbearish版のみ実装。エントリートリガー5種+フィルター5種として追加。BOS/CHoCHはswing point検出のルックアヘッド回避・隣接バー重複統合という2つの実装上の落とし穴を、既知パターンの合成データで検証して回避済み。**
 
 **V4.0（2026-07-02〜03）:**

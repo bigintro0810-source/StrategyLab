@@ -171,9 +171,21 @@ def filter_liquidity_sweep(df, p: dict[str, Any], precomputed: dict[str, np.ndar
     return precomputed["smc_liquidity_sweep_bearish"]
 
 
+def filter_supertrend(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SuperTrend is currently in a downtrend (bearish context)."""
+    return precomputed["supertrend_direction"] == -1
+
+
+def filter_adx(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """ADX above threshold - a strong trend is present (non-directional)."""
+    adx_threshold = float(p.get("adx_threshold", 25.0))
+    return precomputed["adx_line"] > adx_threshold
+
+
 # (use_flag key, default enabled, filter function) - order matches the
 # original inline condition chain for the first six (auditability against
-# the pre-refactor code), then new Tier-1 filters, then Tier-3 SMC filters.
+# the pre-refactor code), then new Tier-1 filters, then Tier-3 SMC filters,
+# then Tier-2 filters.
 FILTER_REGISTRY: list[tuple[str, bool, Any]] = [
     ("use_session_filter", True, filter_session),
     ("use_min_body_filter", True, filter_min_body),
@@ -196,4 +208,6 @@ FILTER_REGISTRY: list[tuple[str, bool, Any]] = [
     ("use_bos_filter", False, filter_bos),
     ("use_choch_filter", False, filter_choch),
     ("use_liquidity_sweep_filter", False, filter_liquidity_sweep),
+    ("use_supertrend_filter", False, filter_supertrend),
+    ("use_adx_filter", False, filter_adx),
 ]

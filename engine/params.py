@@ -75,4 +75,10 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "use_choch_filter": bool(row.get("use_choch_filter", False)),
         "use_liquidity_sweep_filter": bool(row.get("use_liquidity_sweep_filter", False)),
         "smc_swing_lookback": int(row.get("smc_swing_lookback", 5)),
+        "use_supertrend_filter": bool(row.get("use_supertrend_filter", False)),
+        "supertrend_period": int(row.get("supertrend_period", 10)),
+        "supertrend_multiplier": float(row.get("supertrend_multiplier", 3.0)),
+        "use_adx_filter": bool(row.get("use_adx_filter", False)),
+        "adx_period": int(row.get("adx_period", 14)),
+        "adx_threshold": float(row.get("adx_threshold", 25.0)),
     }

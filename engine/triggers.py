@@ -135,6 +135,21 @@ def trigger_liquidity_sweep_bearish(df, p: dict[str, Any], precomputed: dict[str
     return precomputed["smc_liquidity_sweep_bearish"]
 
 
+def trigger_supertrend_flip_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """SuperTrend direction flips from up to down at this bar."""
+    direction = precomputed["supertrend_direction"]
+    prev_direction = np.roll(direction, 1)
+    prev_direction[0] = direction[0]
+    return (direction == -1) & (prev_direction == 1)
+
+
+def trigger_adx_di_cross_bearish(df, p: dict[str, Any], precomputed: dict[str, np.ndarray]) -> np.ndarray:
+    """-DI crosses above +DI - a fresh bearish directional signal."""
+    minus_di = precomputed["adx_minus_di"]
+    plus_di = precomputed["adx_plus_di"]
+    return _crossed_above(minus_di > plus_di)
+
+
 TRIGGER_REGISTRY = {
     "breakout": trigger_breakout,
     "donchian_breakout": trigger_donchian_breakout,
@@ -150,4 +165,6 @@ TRIGGER_REGISTRY = {
     "bos_bearish": trigger_bos_bearish,
     "choch_bearish": trigger_choch_bearish,
     "liquidity_sweep_bearish": trigger_liquidity_sweep_bearish,
+    "supertrend_flip_bearish": trigger_supertrend_flip_bearish,
+    "adx_di_cross_bearish": trigger_adx_di_cross_bearish,
 }

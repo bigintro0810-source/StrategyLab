@@ -1,21 +1,29 @@
-"""Pure technical-indicator math (V3.0 指標ライブラリ拡充, Tier 1).
+"""Pure technical-indicator math (V3.0 指標ライブラリ拡充, Tier 1 + Tier 2).
 
 No knowledge of "signal"/"filter"/"trigger" semantics here - just formulas,
 vectorized over pandas Series. engine/triggers.py and engine/filters.py
 build on top of these.
 
-Deliberately limited to indicators with a single, unambiguous industry-
-standard formula (no Wilder-vs-SMA-style dispute the way RSI/ATR have one
-elsewhere in this codebase - see CLAUDE_HANDOVER.md for that unresolved
-question, which this module does not touch).
+Tier 1 indicators (Donchian/Bollinger/MACD/Ichimoku/Stochastic/pivot+ADR)
+have a single, unambiguous industry-standard formula. Tier 2 (SuperTrend,
+ADX) both depend on Wilder-smoothed ATR - this was blocked until 2026-07-
+03, when engine/backtest_engine.py::rsi() was verified against real
+TradingView data and switched to Wilder smoothing (100% match vs. TV's
+RSI export). engine/indicators.py::atr() was updated to the same Wilder
+convention at the same time, though that specific inference (vs. RSI)
+wasn't independently checked against a TradingView ATR export - see
+CLAUDE_HANDOVER.md for the full history.
 
 Default periods (Bollinger 20/2, MACD 12/26/9, Ichimoku 9/26/52,
-Stochastic 14/3/3) are the common industry defaults, not settled facts -
-every one of them is also an adjustable/searchable parameter.
+Stochastic 14/3/3, SuperTrend 10/3, ADX 14) are the common industry
+defaults, not settled facts - every one of them is also an adjustable/
+searchable parameter.
 """
 
+import numpy as np
 import pandas as pd
 
+from engine.indicators import atr as wilder_atr
 from engine.indicators import ema
 
 
@@ -149,3 +157,108 @@ def round_number_distance_pips(close: pd.Series, pip: float) -> pd.Series:
     nearest whole yen for a JPY pair)."""
     nearest_round = close.round(0)
     return (close - nearest_round).abs() / pip
+
+
+def supertrend(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int,
+    multiplier: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Standard SuperTrend: a Wilder-ATR-based trailing band that flips
+    side when price closes through it. Returns (line, direction) where
+    direction is +1 (uptrend, line acts as support below price) or -1
+    (downtrend, line acts as resistance above price).
+
+    The band construction is inherently recursive (each bar's band value
+    depends on the previous bar's band AND trend state, not just a fixed
+    lookback window), so unlike the other Tier 1/2 indicators this can't
+    be expressed as a single vectorized pandas operation - it's computed
+    with an explicit O(n) pass, the same complexity class as the
+    line-continuation logic already used elsewhere in this codebase (e.g.
+    run_backtest's own bar-by-bar loop).
+    """
+    atr_series = wilder_atr(pd.DataFrame({"high": high, "low": low, "close": close}), period)
+
+    high_arr = high.to_numpy(dtype=float)
+    low_arr = low.to_numpy(dtype=float)
+    close_arr = close.to_numpy(dtype=float)
+    atr_arr = atr_series.to_numpy(dtype=float)
+
+    hl2 = (high_arr + low_arr) / 2
+    basic_upper = hl2 + multiplier * atr_arr
+    basic_lower = hl2 - multiplier * atr_arr
+
+    n = len(close_arr)
+    final_upper = np.zeros(n)
+    final_lower = np.zeros(n)
+    line = np.zeros(n)
+    direction = np.ones(n, dtype=int)
+
+    for i in range(n):
+        if i == 0 or np.isnan(atr_arr[i]):
+            final_upper[i] = basic_upper[i]
+            final_lower[i] = basic_lower[i]
+            line[i] = final_upper[i]
+            direction[i] = -1
+            continue
+
+        if basic_upper[i] < final_upper[i - 1] or close_arr[i - 1] > final_upper[i - 1]:
+            final_upper[i] = basic_upper[i]
+        else:
+            final_upper[i] = final_upper[i - 1]
+
+        if basic_lower[i] > final_lower[i - 1] or close_arr[i - 1] < final_lower[i - 1]:
+            final_lower[i] = basic_lower[i]
+        else:
+            final_lower[i] = final_lower[i - 1]
+
+        if direction[i - 1] == -1 and close_arr[i] > final_upper[i - 1]:
+            direction[i] = 1
+        elif direction[i - 1] == 1 and close_arr[i] < final_lower[i - 1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i - 1]
+
+        line[i] = final_lower[i] if direction[i] == 1 else final_upper[i]
+
+    return line, direction
+
+
+def adx(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Wilder's ADX (Average Directional Index) plus its two directional
+    components (+DI, -DI). All three legs (true range, +DM, -DM) use the
+    same Wilder smoothing as RSI/ATR elsewhere in this codebase."""
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=high.index
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=high.index
+    )
+
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    smoothed_tr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+    smoothed_plus_dm = plus_dm.ewm(alpha=1 / period, adjust=False).mean()
+    smoothed_minus_dm = minus_dm.ewm(alpha=1 / period, adjust=False).mean()
+
+    plus_di = 100 * smoothed_plus_dm / smoothed_tr
+    minus_di = 100 * smoothed_minus_dm / smoothed_tr
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx_line = dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    return plus_di, minus_di, adx_line

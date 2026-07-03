@@ -228,6 +228,13 @@ def build_trigger_filter_defaults() -> dict[str, list]:
         "use_choch_filter": [False],
         "use_liquidity_sweep_filter": [False],
         "smc_swing_lookback": [5],
+        # Tier 2 - Wilder ATR-based, unblocked 2026-07-03.
+        "use_supertrend_filter": [False],
+        "supertrend_period": [10],
+        "supertrend_multiplier": [3.0],
+        "use_adx_filter": [False],
+        "adx_period": [14],
+        "adx_threshold": [25.0],
     }
 
 
