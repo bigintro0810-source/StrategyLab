@@ -118,6 +118,15 @@ with tab_run:
                     file_name="ranking_total.csv",
                 )
 
+            pdf_report_path = output_dir / "report.pdf"
+            if pdf_report_path.exists():
+                st.download_button(
+                    "PDFレポートダウンロード",
+                    pdf_report_path.read_bytes(),
+                    file_name="report.pdf",
+                    mime="application/pdf",
+                )
+
 
 with tab_saved:
     st.subheader("保存済み戦略")

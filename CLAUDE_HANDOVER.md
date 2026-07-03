@@ -49,7 +49,7 @@ V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe R
 **V4.0（2026-07-02〜03）:**
 - 複数通貨対応：`--symbol {USDJPY,EURJPY,GBPJPY}`完了。`data/raw/`にEURJPY/GBPJPYデータ追加済み(2026-07-03)。pip_sizeは全通貨0.01(円建てクロスのため)。`walk_forward.py`はsymbol未対応のまま(既知の制約、要望が出たら追加)。
 - GUI化：完了。`gui_app.py`（`streamlit run gui_app.py`）。
-- PDF/Excel出力：未着手（承認済み、著手待ち）。
+- PDF出力：完了（2026-07-03）。`engine/pdf_report.py`（`fpdf2`使用、`output/report.pdf`自動出力、GUIにもダウンロードボタン追加）。HTMLをそのまま変換する方式(weasyprint等)はWindowsでシステム依存関係のインストールが不安定になるリスクがあるため避け、サマリー・Equity/Drawdownチャート・ランキング表を独自に再構成する方式。日本語は游ゴシック(Windows同梱フォント)を埋め込み。Excel出力は未着手（CSVダウンロードで代替可能なため優先度低）。
 
 Git Tag
 
@@ -353,7 +353,7 @@ GUI化（Streamlit等） → 完了（2026-07-02）。`gui_app.py`（`streamlit 
 
 ・GUIからのストラテジー条件設定 → 完了（mode/timeframe/optimizer/strategy-configの指定、実行、レポート閲覧）
 
-・PDF/Excel出力 → 未着手。ランキングCSVダウンロードのみ実装（ExcelはCSVで開けるため最低限は満たすが、xlsx/PDF専用出力ではない）。追加ライブラリ（openpyxl/reportlab等）の導入判断が必要。
+・PDF/Excel出力 → PDF完了（`engine/pdf_report.py`、`fpdf2`使用）。Excelは未着手（CSVダウンロードで代替）。
 
 ---
 

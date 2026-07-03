@@ -11,6 +11,7 @@ from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
+from engine.pdf_report import export_pdf_report
 from engine.strategy_registry import save_strategy
 from engine.optimizer_search import GeneticSearch, sample_random_combos
 from engine.strategy_config_loader import load_strategy_config
@@ -817,6 +818,17 @@ def main() -> None:
         monte_carlo_summary=monte_carlo_summary,
     )
 
+    pdf_report_path = export_pdf_report(
+        output_dir=OUTPUT_DIR,
+        mode=args.mode,
+        timeframe=args.timeframe,
+        symbol=args.symbol,
+        ranking_total=ranking_total,
+        equity_df=equity_df,
+        stability_df=stability_df,
+        monte_carlo_summary=monte_carlo_summary,
+    )
+
     if args.save_as:
         saved_entry = save_strategy(
             output_dir=OUTPUT_DIR,
@@ -846,6 +858,7 @@ def main() -> None:
     print(f"Monte Carlo出力: {OUTPUT_DIR / 'monte_carlo_results.csv'}")
     print(f"Monte Carloサマリー出力: {OUTPUT_DIR / 'monte_carlo_summary.csv'}")
     print(f"HTMLレポート出力: {report_path}")
+    print(f"PDFレポート出力: {pdf_report_path}")
     print("")
     print("総合ランキング 上位20件")
     print(ranking_total.head(20).to_string(index=False))
