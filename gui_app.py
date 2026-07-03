@@ -28,6 +28,17 @@ from main import resolve_output_dir
 st.set_page_config(page_title="Strategy Lab", layout="wide")
 st.title("Strategy Lab")
 
+with st.sidebar:
+    st.warning(
+        "**ご利用にあたって**\n\n"
+        "本ソフトウェアは過去の値動きに基づく検証(バックテスト)ツールであり、"
+        "投資助言・投資勧誘を目的としたものではありません。\n\n"
+        "過去の成績は将来の成果を保証するものではありません。"
+        "実際の取引に関する判断は、必ずご自身の責任において行ってください。\n\n"
+        "本ソフトウェアの利用により生じたいかなる損害についても、"
+        "開発者は責任を負いません。"
+    )
+
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY"]
 
