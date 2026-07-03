@@ -52,9 +52,11 @@ V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTML
 - GUI化：完了。`gui_app.py`（`streamlit run gui_app.py`）。
 - PDF出力：完了（2026-07-03）。`engine/pdf_report.py`（`fpdf2`使用、`output/report.pdf`自動出力、GUIにもダウンロードボタン追加）。HTMLをそのまま変換する方式(weasyprint等)はWindowsでシステム依存関係のインストールが不安定になるリスクがあるため避け、サマリー・Equity/Drawdownチャート・ランキング表を独自に再構成する方式。日本語は游ゴシック(Windows同梱フォント)を埋め込み。Excel出力は未着手（CSVダウンロードで代替可能なため優先度低）。
 
+**個人/小規模販売向けパッケージ化：完了（2026-07-03）**。`build_package.ps1`実行で`dist/StrategyLab/`にダブルクリック起動可能な配布物を生成(Python embeddable package同梱、`run.bat`起動)。PyInstallerではなくPython同梱方式を採用した理由: `gui_app.py`は`sys.executable`経由でmain.pyをサブプロセス起動する設計(Streamlit+ProcessPoolExecutorのWindows spawn方式対策、V4.0 GUI化時に導入)。PyInstallerで凍結するとsys.executableが凍結exe自身を指してこの呼び出しが壊れるため、埋め込み型Pythonでコード変更を回避。同梱Python環境での動作を実際に検証済み(main.py単体実行、Streamlit GUI起動、`subprocess.run([sys.executable, "main.py", ...])`パターン全て確認)。埋め込みPythonの`._pth`ファイルはデフォルトでスクリプト自身のディレクトリをsys.pathに含めない(サイト制限モード)ため、ビルドスクリプトで`..\app`を明示的に追加する対応が必要だった。ライセンス/課金の仕組みは未着手（後日検討、ユーザー確認済み）。免責事項は`gui_app.py`サイドバーと`packaging/README_usage.txt`に記載。`data/raw/`のヒストリカルデータはリポジトリに一度もコミットされておらず(`.gitignore`)、配布物にも同梱しない(ユーザー自身のデータを使う設計)。
+
 Git Tag
 
-v1.0.0（V2.0系はまだタグ未作成。v2.0.0タグを打つかはユーザー判断待ち）
+v1.0.0, v3.0.0（現時点の最新タグはv3.0.0。V4.0のGUI/PDF/パッケージ化分はまだタグ未作成）
 
 ---
 

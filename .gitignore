@@ -20,6 +20,7 @@ __pycache__/
 output/
 logs/
 saved_strategies/
+dist/
 
 # ==================================================
 # Market Data
