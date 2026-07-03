@@ -46,6 +46,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--symbol",
+        choices=["USDJPY", "EURJPY", "GBPJPY"],
+        default="USDJPY",
+        help="通貨ペア (デフォルト: USDJPY)",
+    )
+
+    parser.add_argument(
         "--save-as",
         default=None,
         help="指定した名前でこの実行のベスト戦略をsaved_strategies/に保存する",
@@ -88,24 +95,39 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_data_candidates(timeframe: str) -> list[str]:
+def build_data_candidates(timeframe: str, symbol: str = "USDJPY") -> list[str]:
     filenames = [
-        f"USDJPY_2003_2026_{timeframe}.csv",
-        f"USDJPY_2003_2026_{timeframe}_TV_NY.csv",
+        f"{symbol}_2003_2026_{timeframe}.csv",
+        f"{symbol}_2003_2026_{timeframe}_TV_NY.csv",
     ]
+
+    if timeframe == "1m":
+        filenames.append(f"{symbol}_2003_2026_1min_filled.csv")
 
     return [str(Path(d) / name) for d in DATA_DIRS for name in filenames]
 
 
-def find_data_file(timeframe: str = "15m") -> Path:
-    for file_path in build_data_candidates(timeframe):
+def find_data_file(timeframe: str = "15m", symbol: str = "USDJPY") -> Path:
+    for file_path in build_data_candidates(timeframe, symbol):
         path = Path(file_path)
         if path.exists():
             return path
 
     raise FileNotFoundError(
-        f"USDJPY_2003_2026_{timeframe}.csv が見つかりません。data/raw に置いてください。"
+        f"{symbol}_2003_2026_{timeframe}.csv が見つかりません。data/raw に置いてください。"
     )
+
+
+def resolve_output_dir(symbol: str, timeframe: str) -> Path:
+    parts = []
+
+    if symbol != "USDJPY":
+        parts.append(symbol)
+
+    if timeframe != "15m":
+        parts.append(timeframe)
+
+    return Path("output").joinpath(*parts) if parts else Path("output")
 
 
 def load_price_data(path: Path) -> pd.DataFrame:
@@ -146,7 +168,7 @@ def load_price_data(path: Path) -> pd.DataFrame:
     return df
 
 
-USDJPY_PIP_SIZE = 0.01
+JPY_PIP_SIZE = 0.01
 
 
 def build_parameter_space(mode: str) -> dict[str, list]:
@@ -167,7 +189,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
             "weekend_exit_hour": [4],
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
-            "pip_size": [USDJPY_PIP_SIZE],
+            "pip_size": [JPY_PIP_SIZE],
         }
 
     return {
@@ -186,7 +208,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
         "weekend_exit_hour": [4],
         "use_daily_exit": [False],
         "daily_exit_hour": [4],
-        "pip_size": [USDJPY_PIP_SIZE],
+        "pip_size": [JPY_PIP_SIZE],
     }
 
 
@@ -335,7 +357,7 @@ def build_best_params(best_row: dict) -> dict:
         "weekend_exit_hour": int(best_row["weekend_exit_hour"]),
         "use_daily_exit": bool(best_row["use_daily_exit"]),
         "daily_exit_hour": int(best_row["daily_exit_hour"]),
-        "pip_size": float(best_row.get("pip_size", USDJPY_PIP_SIZE)),
+        "pip_size": float(best_row.get("pip_size", JPY_PIP_SIZE)),
     }
 
 
@@ -629,13 +651,12 @@ def main() -> None:
 
     args = parse_args()
 
-    if args.timeframe != "15m":
-        OUTPUT_DIR = Path("output") / args.timeframe
-
+    OUTPUT_DIR = resolve_output_dir(args.symbol, args.timeframe)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    data_path = find_data_file(args.timeframe)
+    data_path = find_data_file(args.timeframe, args.symbol)
     print(f"モード: {args.mode}")
+    print(f"通貨ペア: {args.symbol}")
     print(f"時間足: {args.timeframe}")
     print(f"読み込み: {data_path}")
 
@@ -765,6 +786,7 @@ def main() -> None:
             params=best_params,
             name=args.save_as,
             strategy_config=args.strategy_config,
+            symbol=args.symbol,
         )
         print(f"戦略を保存しました: {saved_entry['id']} ({saved_entry['name']})")
 

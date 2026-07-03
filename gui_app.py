@@ -23,17 +23,15 @@ import streamlit as st
 
 from engine.comparison_report import export_comparison_report
 from engine.strategy_registry import get_strategy, list_strategies, update_strategy
+from main import resolve_output_dir
 
 st.set_page_config(page_title="Strategy Lab", layout="wide")
 st.title("Strategy Lab")
 
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY"]
 
 tab_run, tab_saved = st.tabs(["バックテスト実行", "保存済み戦略"])
-
-
-def resolve_output_dir(timeframe: str) -> Path:
-    return Path("output") if timeframe == "15m" else Path("output") / timeframe
 
 
 with tab_run:
@@ -43,6 +41,7 @@ with tab_run:
         with col1:
             mode = st.selectbox("モード", ["dev", "full"])
             timeframe = st.selectbox("時間足", TIMEFRAMES, index=2)
+            symbol = st.selectbox("通貨ペア", SYMBOLS)
 
         with col2:
             optimizer = st.selectbox("最適化方式", ["grid", "random", "genetic"])
@@ -67,6 +66,7 @@ with tab_run:
             sys.executable, "main.py",
             "--mode", mode,
             "--timeframe", timeframe,
+            "--symbol", symbol,
             "--optimizer", optimizer,
         ]
 
@@ -100,7 +100,7 @@ with tab_run:
             with st.expander("実行ログ"):
                 st.code(process.stdout)
 
-            output_dir = resolve_output_dir(timeframe)
+            output_dir = resolve_output_dir(symbol, timeframe)
             report_path = output_dir / "report.html"
 
             if report_path.exists():

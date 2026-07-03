@@ -56,6 +56,7 @@ def save_strategy(
     memo: str = "",
     favorite: bool = False,
     strategy_config: str | None = None,
+    symbol: str = "USDJPY",
 ) -> dict:
     strategy_id = _new_id(mode, timeframe)
     snapshot_dir = REGISTRY_DIR / strategy_id
@@ -78,6 +79,7 @@ def save_strategy(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "mode": mode,
         "timeframe": timeframe,
+        "symbol": symbol,
         "strategy_config": strategy_config,
         "tags": tags or [],
         "memo": memo,
