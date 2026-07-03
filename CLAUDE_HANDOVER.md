@@ -43,7 +43,8 @@ V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe R
 
 **指標ライブラリ拡充、残りの状況:**
 - Tier 1(Donchian/Bollinger/MACD/Ichimoku/Stochastic/Pivot+ADR/prev_high/prev_low/round_number/weekday): 完了(上記)。
-- Tier 2(SuperTrend/ADX): 未着手。RSI/ATRの計算式が2系統あり数値が食い違っている問題(`indicators/`のWilder平滑 vs `engine/indicators.py`の単純移動平均)が未解決なため保留。TradingViewとのRSI一致確認(`compare_signals.py`)も未実施であることをユーザーが確認済み(2026-07-03)。
+- **RSI計算式の問題は解決済み（2026-07-03）**。`data/raw/TV_USDJPY_15m.csv`のTradingView公式RSI列と直接数値比較した結果、従来の単純移動平均版はTV不一致(平均絶対誤差6.6、RSI>70判定の一致率90.48%)、Wilder平滑化版はTVとほぼ完全一致(平均絶対誤差0.006、一致率100%)。`engine/backtest_engine.py::rsi()`と`engine/indicators.py::rsi()`をWilder平滑化に変更。**この変更で全バックテスト結果が変わる**ため`tests/test_regression.py`の基準値も再計算済み。ATRも同じ理由でWilder化したが、TVエクスポートにATR列が無いため直接検証はできていない(標準的な慣習からの推測)。
+- Tier 2(SuperTrend/ADX): 上記のRSI/ATR修正により着手可能になったが、まだ実装していない。
 - **Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 完了(2026-07-03)。`engine/smc_indicators.py`。ユーザーの指示通り「一般的な(ICT系)定義で実装、TradingView未検証」の位置づけ。ショート専用戦略に合わせ全てbearish版のみ実装。エントリートリガー5種+フィルター5種として追加。BOS/CHoCHはswing point検出のルックアヘッド回避・隣接バー重複統合という2つの実装上の落とし穴を、既知パターンの合成データで検証して回避済み。**
 
 **V4.0（2026-07-02〜03）:**
