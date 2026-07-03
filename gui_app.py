@@ -44,8 +44,8 @@ with tab_run:
             symbol = st.selectbox("通貨ペア", SYMBOLS)
 
         with col2:
-            optimizer = st.selectbox("最適化方式", ["grid", "random", "genetic"])
-            n_samples = st.number_input("random: n_samples", value=50, min_value=1, step=1)
+            optimizer = st.selectbox("最適化方式", ["grid", "random", "genetic", "bayesian"])
+            n_samples = st.number_input("random/bayesian: n_samples", value=50, min_value=1, step=1)
 
         with col3:
             population = st.number_input("genetic: population", value=20, min_value=2, step=1)
@@ -70,7 +70,7 @@ with tab_run:
             "--optimizer", optimizer,
         ]
 
-        if optimizer == "random":
+        if optimizer in ("random", "bayesian"):
             cmd += ["--n-samples", str(int(n_samples))]
 
         if optimizer == "genetic":

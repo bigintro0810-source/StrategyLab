@@ -4,9 +4,19 @@ engine/optimizer.py and engine/fast_optimizer.py (pre-existing, unconnected
 "future asset" modules) turned out to be broken (ImportError on a
 Result/BacktestResult name mismatch) and, more importantly, are just
 alternative execution engines for exhaustive grid search - they don't
-implement random search or a genetic algorithm. So this module is a fresh,
-dependency-free implementation (no optuna/deap installed, no
-requirements.txt in the repo) rather than a reuse of that code.
+implement random search, a genetic algorithm, or Bayesian optimization.
+So this module is a fresh implementation rather than a reuse of that code.
+
+sample_random_combos()/GeneticSearch are dependency-free by design.
+run_bayesian_search() is the exception - it uses optuna (added 2026-07-03,
+this repo's second real third-party dependency after streamlit), since
+hand-rolling a Gaussian process well enough to be worth trusting isn't a
+reasonable use of time versus a well-maintained library built for exactly
+this. optuna was chosen over scikit-optimize/hyperopt because this
+project's parameter space is a large mix of categorical (entry_trigger),
+boolean, integer, and float keys - optuna's define-by-run suggest_*() API
+handles that natively, where skopt is oriented around continuous/
+numeric-heavy spaces.
 """
 
 import random
@@ -110,3 +120,78 @@ class GeneticSearch:
             next_gen.append(child)
 
         return next_gen
+
+
+def run_bayesian_search(
+    df,
+    is_intraday: bool,
+    param_space: dict[str, list],
+    n_trials: int,
+    stability_fn,
+    seed: int = 42,
+    progress_callback=None,
+) -> list[dict]:
+    """Sequential Bayesian search (optuna's TPE sampler) over param_space.
+
+    Unlike grid/random (one big batch submitted to a ProcessPoolExecutor)
+    or genetic (per-generation batches), this runs run_backtest() directly
+    in the calling process, one trial at a time - each trial's parameter
+    suggestion depends on every prior trial's result, so there's no
+    natural batch to parallelize across worker processes without
+    weakening the "Bayesian" part (evaluating many trials before
+    incorporating feedback is closer to random search). A single backtest
+    call is a few seconds at most on non-1m timeframes, so n_trials in the
+    tens-to-low-hundreds runs in a reasonable time sequentially.
+
+    Every param_space key is treated as categorical (trial.suggest_
+    categorical over its existing discrete value list), matching what
+    grid/random/genetic already sample from - Bayesian mode explores the
+    same space, just with smarter trial selection instead of exhaustive/
+    random/evolutionary selection.
+
+    stability_fn(trade_log) -> dict is injected rather than imported
+    directly, since it lives in main.py::calculate_stability_metrics() and
+    main.py already imports this module - importing back would be
+    circular. Every other optimizer path (main.py::run_one_backtest, used
+    by grid/random/genetic) computes these same yearly/monthly/overall
+    stability fields before returning a result; skipping them here would
+    silently break export_rankings(), which sorts on
+    overall_stability_score.
+    """
+    import optuna
+    from engine.backtest_engine import run_backtest
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def objective(trial: "optuna.Trial") -> float:
+        params = {
+            key: trial.suggest_categorical(key, values) for key, values in param_space.items()
+        }
+
+        result, trade_log = run_backtest(
+            df=df, params=params, return_trades=True, is_intraday=is_intraday
+        )
+        stability = stability_fn(trade_log)
+        result["yearly_stability_score"] = stability["yearly_stability_score"]
+        result["monthly_stability_score"] = stability["monthly_stability_score"]
+        result["overall_stability_score"] = stability["overall_stability_score"]
+        result["stability_rating"] = stability["rating"]
+
+        trial.set_user_attr("result", result)
+
+        if progress_callback is not None:
+            progress_callback(trial.number + 1, n_trials)
+
+        return result["profit_factor"]
+
+    sampler = optuna.samplers.TPESampler(seed=seed)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study.optimize(objective, n_trials=n_trials)
+
+    results = []
+    for param_id, trial in enumerate(study.trials, start=1):
+        result = dict(trial.user_attrs["result"])
+        result["param_id"] = param_id
+        results.append(result)
+
+    return results

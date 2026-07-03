@@ -31,7 +31,7 @@ V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTML
 V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe Ratio / Sortino Ratio / Calmar Ratio / CAGR / Profit-DDの5指標は未実装のまま保留（2026-07-02、ユーザー判断によりV3.0を優先）。
 
 **V3.0（2026-07-02〜03）:**
-- 最適化強化：`--optimizer {grid,random,genetic}`（`engine/optimizer_search.py`）。Bayesian最適化は依存ライブラリ導入判断待ちで未着手。
+- **最適化強化：完了（2026-07-03）**。`--optimizer {grid,random,genetic,bayesian}`（`engine/optimizer_search.py`）。Bayesian最適化は`optuna`(TPEサンプラー)を採用(混合探索空間=カテゴリカル+bool+int+floatに強いため)。ProcessPoolExecutorは使わず、1試行ずつ`run_backtest`を直接呼ぶ逐次実行(Bayesianは前の結果を見て次を決めるため、そもそもバッチ並列化と相性が悪い)。`main.py::calculate_stability_metrics`はコールバック注入で受け渡し(循環import回避)。
 - 信頼性評価拡充：パラメータ感度分析（`analyze_sensitivity.py`）、既存のstability/Monte Carlo/walk-forwardレーティングを束ねたConfidence Score（`engine/robustness.py` / `analyze_confidence.py`）。
 - **条件ベースのストラテジー定義：完了。当初はJSON設定ファイルでの値の外出しのみだったが、ユーザーとの追加すり合わせで最終的にエンジン自体をプラガブル化した。**
   - `engine/backtest_engine.py::run_backtest()`は、ループ前に1回だけ`candidate_signal`配列を計算する方式に変更（ステートフルなポジション管理ループ自体は無変更）。

@@ -13,7 +13,7 @@ from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
 from engine.html_report import export_html_report
 from engine.pdf_report import export_pdf_report
 from engine.strategy_registry import save_strategy
-from engine.optimizer_search import GeneticSearch, sample_random_combos
+from engine.optimizer_search import GeneticSearch, run_bayesian_search, sample_random_combos
 from engine.strategy_config_loader import load_strategy_config
 from engine.params import reconstruct_params_from_row
 
@@ -62,16 +62,16 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--optimizer",
-        choices=["grid", "random", "genetic"],
+        choices=["grid", "random", "genetic", "bayesian"],
         default="grid",
-        help="grid=全探索 / random=ランダムサンプリング / genetic=遺伝的アルゴリズム (デフォルト: grid)",
+        help="grid=全探索 / random=ランダムサンプリング / genetic=遺伝的アルゴリズム / bayesian=ベイズ最適化(optuna) (デフォルト: grid)",
     )
 
     parser.add_argument(
         "--n-samples",
         type=int,
         default=50,
-        help="--optimizer random で試すパラメータ組み合わせ数 (デフォルト: 50)",
+        help="--optimizer random/bayesian で試すパラメータ組み合わせ数 (デフォルト: 50)",
     )
 
     parser.add_argument(
@@ -719,67 +719,86 @@ def main() -> None:
     else:
         param_space = build_parameter_space(args.mode)
 
-    if args.optimizer == "grid":
-        parameter_list = build_grid_from_space(param_space)
-        total_tasks = len(parameter_list)
-    elif args.optimizer == "random":
-        parameter_list = sample_random_combos(param_space, args.n_samples)
-        total_tasks = len(parameter_list)
-    else:
-        parameter_list = None
-        total_tasks = args.population
-
-    workers = min(MAX_WORKERS, os.cpu_count() or 1, total_tasks)
-
-    print(f"最適化方式: {args.optimizer}")
-    if args.optimizer == "genetic":
-        print(f"検証パターン数: {total_tasks} x {args.generations}世代")
-    else:
-        print(f"検証パターン数: {total_tasks}")
-    print(f"並列数: {workers}")
-
     start_time = time.time()
 
-    def run_batch(executor: ProcessPoolExecutor, param_dicts: list[dict], id_offset: int) -> list[dict]:
-        tasks = list(enumerate(param_dicts, start=id_offset))
-        futures = [executor.submit(run_one_backtest, task) for task in tasks]
+    if args.optimizer == "bayesian":
+        print(f"最適化方式: {args.optimizer} (optuna TPE)")
+        print(f"試行回数: {args.n_samples}")
 
-        batch_results = []
-        for completed, future in enumerate(as_completed(futures), start=1):
-            result = future.result()
-            batch_results.append(result)
-
-            if completed % 10 == 0 or completed == len(tasks):
+        def bayesian_progress(completed: int, total: int) -> None:
+            if completed % 10 == 0 or completed == total:
                 elapsed = time.time() - start_time
-                print(f"{completed}/{len(tasks)} 完了 経過 {format_seconds(elapsed)}")
+                print(f"{completed}/{total} 完了 経過 {format_seconds(elapsed)}")
 
-        return batch_results
-
-    results = []
-
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=init_worker,
-        initargs=(df,),
-    ) as executor:
-        if args.optimizer in ("grid", "random"):
-            results = run_batch(executor, parameter_list, id_offset=1)
+        is_intraday_flag = compute_is_intraday(df["datetime"])
+        results = run_bayesian_search(
+            df=df,
+            is_intraday=is_intraday_flag,
+            param_space=param_space,
+            n_trials=args.n_samples,
+            stability_fn=calculate_stability_metrics,
+            progress_callback=bayesian_progress,
+        )
+    else:
+        if args.optimizer == "grid":
+            parameter_list = build_grid_from_space(param_space)
+            total_tasks = len(parameter_list)
+        elif args.optimizer == "random":
+            parameter_list = sample_random_combos(param_space, args.n_samples)
+            total_tasks = len(parameter_list)
         else:
-            search = GeneticSearch(param_space, population_size=args.population)
-            population = search.initial_population()
-            next_id = 1
+            parameter_list = None
+            total_tasks = args.population
 
-            for generation in range(1, args.generations + 1):
-                print(f"[遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
-                generation_results = run_batch(executor, population, id_offset=next_id)
-                next_id += len(population)
-                results.extend(generation_results)
+        workers = min(MAX_WORKERS, os.cpu_count() or 1, total_tasks)
 
-                scored_population = [
-                    (result["profit_factor"], {key: result[key] for key in param_space})
-                    for result in generation_results
-                ]
-                population = search.next_population(scored_population)
+        print(f"最適化方式: {args.optimizer}")
+        if args.optimizer == "genetic":
+            print(f"検証パターン数: {total_tasks} x {args.generations}世代")
+        else:
+            print(f"検証パターン数: {total_tasks}")
+        print(f"並列数: {workers}")
+
+        def run_batch(executor: ProcessPoolExecutor, param_dicts: list[dict], id_offset: int) -> list[dict]:
+            tasks = list(enumerate(param_dicts, start=id_offset))
+            futures = [executor.submit(run_one_backtest, task) for task in tasks]
+
+            batch_results = []
+            for completed, future in enumerate(as_completed(futures), start=1):
+                result = future.result()
+                batch_results.append(result)
+
+                if completed % 10 == 0 or completed == len(tasks):
+                    elapsed = time.time() - start_time
+                    print(f"{completed}/{len(tasks)} 完了 経過 {format_seconds(elapsed)}")
+
+            return batch_results
+
+        results = []
+
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=init_worker,
+            initargs=(df,),
+        ) as executor:
+            if args.optimizer in ("grid", "random"):
+                results = run_batch(executor, parameter_list, id_offset=1)
+            else:
+                search = GeneticSearch(param_space, population_size=args.population)
+                population = search.initial_population()
+                next_id = 1
+
+                for generation in range(1, args.generations + 1):
+                    print(f"[遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
+                    generation_results = run_batch(executor, population, id_offset=next_id)
+                    next_id += len(population)
+                    results.extend(generation_results)
+
+                    scored_population = [
+                        (result["profit_factor"], {key: result[key] for key in param_space})
+                        for result in generation_results
+                    ]
+                    population = search.next_population(scored_population)
 
     result_df = pd.DataFrame(results)
 
