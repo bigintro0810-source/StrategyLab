@@ -172,6 +172,57 @@ def load_price_data(path: Path) -> pd.DataFrame:
 JPY_PIP_SIZE = 0.01
 
 
+def build_trigger_filter_defaults() -> dict[str, list]:
+    """Single-value defaults for the V3.0 trigger/filter param schema.
+
+    Identical in both dev and full grids (kept as a single-element list so
+    default behavior is exactly the pre-V3.0 breakout strategy in both
+    modes). --optimizer random/genetic or a custom --strategy-config JSON
+    is the intended way to explore wider values for these - deliberately
+    NOT widened here, so `--mode full`'s existing grid size/runtime doesn't
+    change.
+    """
+    return {
+        "entry_trigger": ["breakout"],
+        "use_session_filter": [True],
+        "use_min_body_filter": [True],
+        "use_max_body_filter": [True],
+        "use_max_wick_filter": [True],
+        "use_ema_distance_filter": [True],
+        "use_rsi_filter": [True],
+        "use_donchian_filter": [False],
+        "donchian_period": [20],
+        "use_bollinger_filter": [False],
+        "bollinger_period": [20],
+        "bollinger_std": [2.0],
+        "use_macd_filter": [False],
+        "macd_fast": [12],
+        "macd_slow": [26],
+        "macd_signal": [9],
+        "use_ichimoku_filter": [False],
+        "ichimoku_tenkan": [9],
+        "ichimoku_kijun": [26],
+        "ichimoku_senkou_b": [52],
+        "use_stochastic_filter": [False],
+        "stochastic_k_period": [14],
+        "stochastic_d_period": [3],
+        "stochastic_smooth": [3],
+        "stochastic_level": [80.0],
+        "use_pivot_filter": [False],
+        "use_prev_high_filter": [False],
+        "use_prev_low_filter": [False],
+        "use_round_number_filter": [False],
+        "round_number_pips": [10.0],
+        "use_weekday_filter": [False],
+        "weekday_monday": [True],
+        "weekday_tuesday": [True],
+        "weekday_wednesday": [True],
+        "weekday_thursday": [True],
+        "weekday_friday": [True],
+        "adr_period": [14],
+    }
+
+
 def build_parameter_space(mode: str) -> dict[str, list]:
     if mode == "dev":
         return {
@@ -191,6 +242,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
             "pip_size": [JPY_PIP_SIZE],
+            **build_trigger_filter_defaults(),
         }
 
     return {
@@ -210,6 +262,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
         "use_daily_exit": [False],
         "daily_exit_hour": [4],
         "pip_size": [JPY_PIP_SIZE],
+        **build_trigger_filter_defaults(),
     }
 
 

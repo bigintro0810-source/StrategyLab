@@ -6,6 +6,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from engine.signal_builder import build_candidate_signal
+
 
 @dataclass
 class BacktestConfig:
@@ -128,16 +130,7 @@ def run_backtest(
     ema_length = int(p["ema_length"])
     lookahead_bars = int(p["lookahead_bars"])
     breakout_bars = int(p["breakout_bars"])
-
-    min_body_price = float(p["min_body_pips"]) * pip
-    max_body_pips = float(p["max_body_pips"])
-    max_wick_pips = float(p["max_wick_pips"])
-    ema_distance_price = float(p["ema_distance_pips"]) * pip
-    rsi_min = float(p["rsi_min"])
     rr = float(p["rr"])
-
-    session_start = int(p["session_start"])
-    session_end = int(p["session_end"])
 
     use_weekend_exit = bool(p["use_weekend_exit"])
     weekend_exit_hour = int(p["weekend_exit_hour"])
@@ -163,6 +156,24 @@ def run_backtest(
     rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
 
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
+
+    candidate_signal = build_candidate_signal(
+        df,
+        p,
+        {
+            "open": open_arr,
+            "high": high_arr,
+            "low": low_arr,
+            "close": close_arr,
+            "ema": ema_arr,
+            "rsi": rsi_arr,
+            "previous_high": previous_high_arr,
+            "hour": hour_arr,
+            "weekday": weekday_arr,
+            "is_intraday": is_intraday,
+            "pip": pip,
+        },
+    )
 
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
@@ -201,8 +212,6 @@ def run_backtest(
         high_price = float(high_arr[i])
         low_price = float(low_arr[i])
         close_price = float(close_arr[i])
-        ema_value = float(ema_arr[i])
-        rsi_value = float(rsi_arr[i])
 
         if pending_entry and not in_position:
             entry_price = open_price
@@ -324,44 +333,7 @@ def run_backtest(
         if signal_bar is not None:
             continue
 
-        if is_intraday and not is_in_session(
-            hour=hour,
-            start_hour=session_start,
-            end_hour=session_end,
-        ):
-            continue
-
-        if close_price <= open_price:
-            continue
-
-        body_size = close_price - open_price
-        if body_size < min_body_price:
-            continue
-
-        body_pips = abs(close_price - open_price) / pip
-        wick_pips = (high_price - low_price) / pip
-
-        if max_body_pips > 0 and body_pips > max_body_pips:
-            continue
-
-        if max_wick_pips > 0 and wick_pips > max_wick_pips:
-            continue
-
-        if close_price <= ema_value:
-            continue
-
-        ema_distance = close_price - ema_value
-        if ema_distance < ema_distance_price:
-            continue
-
-        if rsi_value <= rsi_min:
-            continue
-
-        recent_high = float(previous_high_arr[i])
-        if np.isnan(recent_high):
-            continue
-
-        if close_price <= recent_high:
+        if not candidate_signal[i]:
             continue
 
         signal_low = low_price

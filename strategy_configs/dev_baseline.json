@@ -2,21 +2,164 @@
   "name": "dev_baseline",
   "description": "main.py --mode dev と同じ単一パラメータセット。",
   "params": {
-    "ema_length": [200],
-    "min_body_pips": [20.0],
-    "max_body_pips": [0.0],
-    "max_wick_pips": [0.0],
-    "lookahead_bars": [15],
-    "breakout_bars": [30],
-    "ema_distance_pips": [50.0],
-    "rsi_min": [70.0],
-    "rr": [1.2],
-    "session_start": [8],
-    "session_end": [3],
-    "use_weekend_exit": [true],
-    "weekend_exit_hour": [4],
-    "use_daily_exit": [false],
-    "daily_exit_hour": [4],
-    "pip_size": [0.01]
+    "ema_length": [
+      200
+    ],
+    "min_body_pips": [
+      20.0
+    ],
+    "max_body_pips": [
+      0.0
+    ],
+    "max_wick_pips": [
+      0.0
+    ],
+    "lookahead_bars": [
+      15
+    ],
+    "breakout_bars": [
+      30
+    ],
+    "ema_distance_pips": [
+      50.0
+    ],
+    "rsi_min": [
+      70.0
+    ],
+    "rr": [
+      1.2
+    ],
+    "session_start": [
+      8
+    ],
+    "session_end": [
+      3
+    ],
+    "use_weekend_exit": [
+      true
+    ],
+    "weekend_exit_hour": [
+      4
+    ],
+    "use_daily_exit": [
+      false
+    ],
+    "daily_exit_hour": [
+      4
+    ],
+    "pip_size": [
+      0.01
+    ],
+    "entry_trigger": [
+      "breakout"
+    ],
+    "use_session_filter": [
+      true
+    ],
+    "use_min_body_filter": [
+      true
+    ],
+    "use_max_body_filter": [
+      true
+    ],
+    "use_max_wick_filter": [
+      true
+    ],
+    "use_ema_distance_filter": [
+      true
+    ],
+    "use_rsi_filter": [
+      true
+    ],
+    "use_donchian_filter": [
+      false
+    ],
+    "donchian_period": [
+      20
+    ],
+    "use_bollinger_filter": [
+      false
+    ],
+    "bollinger_period": [
+      20
+    ],
+    "bollinger_std": [
+      2.0
+    ],
+    "use_macd_filter": [
+      false
+    ],
+    "macd_fast": [
+      12
+    ],
+    "macd_slow": [
+      26
+    ],
+    "macd_signal": [
+      9
+    ],
+    "use_ichimoku_filter": [
+      false
+    ],
+    "ichimoku_tenkan": [
+      9
+    ],
+    "ichimoku_kijun": [
+      26
+    ],
+    "ichimoku_senkou_b": [
+      52
+    ],
+    "use_stochastic_filter": [
+      false
+    ],
+    "stochastic_k_period": [
+      14
+    ],
+    "stochastic_d_period": [
+      3
+    ],
+    "stochastic_smooth": [
+      3
+    ],
+    "stochastic_level": [
+      80.0
+    ],
+    "use_pivot_filter": [
+      false
+    ],
+    "use_prev_high_filter": [
+      false
+    ],
+    "use_prev_low_filter": [
+      false
+    ],
+    "use_round_number_filter": [
+      false
+    ],
+    "round_number_pips": [
+      10.0
+    ],
+    "use_weekday_filter": [
+      false
+    ],
+    "weekday_monday": [
+      true
+    ],
+    "weekday_tuesday": [
+      true
+    ],
+    "weekday_wednesday": [
+      true
+    ],
+    "weekday_thursday": [
+      true
+    ],
+    "weekday_friday": [
+      true
+    ],
+    "adr_period": [
+      14
+    ]
   }
 }
