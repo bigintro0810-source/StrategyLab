@@ -24,18 +24,32 @@ Strategy Lab は Python 製のFXストラテジー研究・開発ツールです
 
 現在
 
-**Version 2.0 / 3.0 とも進行中（未タグ付け）**
+**Version 2.0 / 3.0 / 4.0 とも進行中（未タグ付け）**
 
 V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTMLレポート）/ V2.0-4（保存済みストラテジーのタグ・メモ・お気に入り・横断比較。`strategy_manager.py`）は完了。
 
 V2.0-2（評価指標拡充）はRecovery Factorのみ実装済みで、Sharpe Ratio / Sortino Ratio / Calmar Ratio / CAGR / Profit-DDの5指標は未実装のまま保留（2026-07-02、ユーザー判断によりV3.0を優先）。
 
-V3.0のうち、指標ライブラリ拡充を除く3項目が完了（2026-07-02）：
+**V3.0（2026-07-02〜03）:**
 - 最適化強化：`--optimizer {grid,random,genetic}`（`engine/optimizer_search.py`）。Bayesian最適化は依存ライブラリ導入判断待ちで未着手。
 - 信頼性評価拡充：パラメータ感度分析（`analyze_sensitivity.py`）、既存のstability/Monte Carlo/walk-forwardレーティングを束ねたConfidence Score（`engine/robustness.py` / `analyze_confidence.py`）。
-- 条件ベースのストラテジー定義：JSON設定ファイルでパラメータグリッドを外出し（`--strategy-config`, `strategy_configs/*.json`）。戦略ロジック自体のDSL化ではなく、値の選択を設定ファイル化するスコープに限定。
+- **条件ベースのストラテジー定義：完了。当初はJSON設定ファイルでの値の外出しのみだったが、ユーザーとの追加すり合わせで最終的にエンジン自体をプラガブル化した。**
+  - `engine/backtest_engine.py::run_backtest()`は、ループ前に1回だけ`candidate_signal`配列を計算する方式に変更（ステートフルなポジション管理ループ自体は無変更）。
+  - `engine/triggers.py`: エントリートリガーを`entry_trigger`パラメータで選択式に（`breakout`(旧来のデフォルト) / `donchian_breakout` / `ema_cross` / `macd_cross` / `bollinger_touch` / `ichimoku_cloud_breakout` / `ichimoku_tk_cross` / `stochastic_kd_cross` / `stochastic_level_cross`）。定義が割れているもの(Ichimoku・Stochastic)は片方に決め打ちせず両方を別トリガーとして用意。
+  - `engine/filters.py`: 既存6条件(セッション・実体/ヒゲpips・EMA距離・RSI)を含む全16フィルターが`use_X`フラグでON/OFF可能に(既存分はデフォルトTrue=現状維持、新規10種はデフォルトFalse)。
+  - `engine/technical_indicators.py`: Donchian/Bollinger/MACD/Ichimoku/Stochastic/日次ピボット+ADR/ラウンドナンバーの計算式(V3.0指標ライブラリ拡充のTier1完了)。
+  - `engine/signal_builder.py`: トリガー+フィルター合成の司令塔。`engine/params.py::reconstruct_params_from_row()`: `main.py`/`walk_forward.py`にあった重複ホワイトリスト関数を統合。
+  - 新パラメータは`main.py --mode full`の既存243通りグリッドには追加していない(組み合わせ爆発を避けるため、`--optimizer random/genetic`または`--strategy-config`で探索する設計)。
 
-指標ライブラリ拡充（FVG/OrderBlock/BOS/CHoCH/LiquiditySweep/Bollinger/Donchian/SuperTrend）は保留。理由：リポジトリ内で既にRSI/ATRの計算式が2系統あり数値が食い違っており（`indicators/`のWilder平滑 vs `engine/indicators.py`の単純移動平均）、「正」を決めないまま指標を追加すると同じ問題を再生産するため。着手前にユーザーが計算式の基準を決める必要がある。
+**指標ライブラリ拡充、残りの状況:**
+- Tier 1(Donchian/Bollinger/MACD/Ichimoku/Stochastic/Pivot+ADR/prev_high/prev_low/round_number/weekday): 完了(上記)。
+- Tier 2(SuperTrend/ADX): 未着手。RSI/ATRの計算式が2系統あり数値が食い違っている問題(`indicators/`のWilder平滑 vs `engine/indicators.py`の単純移動平均)が未解決なため保留。TradingViewとのRSI一致確認(`compare_signals.py`)も未実施であることをユーザーが確認済み(2026-07-03)。
+- Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 未着手。業界内で定義が複数あるが、ユーザーの指示により「一般的な(ICT系)定義で実装し、後で検証」する方針で合意済み(2026-07-03)。
+
+**V4.0（2026-07-02〜03）:**
+- 複数通貨対応：`--symbol {USDJPY,EURJPY,GBPJPY}`完了。`data/raw/`にEURJPY/GBPJPYデータ追加済み(2026-07-03)。pip_sizeは全通貨0.01(円建てクロスのため)。`walk_forward.py`はsymbol未対応のまま(既知の制約、要望が出たら追加)。
+- GUI化：完了。`gui_app.py`（`streamlit run gui_app.py`）。
+- PDF/Excel出力：未着手（承認済み、著手待ち）。
 
 Git Tag
 
