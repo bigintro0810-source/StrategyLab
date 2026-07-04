@@ -10,6 +10,7 @@ from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.params import reconstruct_params_from_row
 from main import (
     AVAILABLE_TIMEFRAMES,
+    SUPPORTED_SYMBOLS,
     find_data_file,
     load_price_data,
     build_parameter_grid,
@@ -116,7 +117,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=["USDJPY", "EURJPY", "GBPJPY"],
+        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
         help="通貨ペア (デフォルト: USDJPY)",
     )
@@ -147,7 +148,7 @@ def main() -> None:
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
-    params_list = build_parameter_grid("full")
+    params_list = build_parameter_grid("full", args.symbol)
     windows = build_windows()
 
     print(f"データ数: {len(df):,}")

@@ -4,7 +4,7 @@ import pandas as pd
 from engine.backtest_engine import run_backtest
 
 
-TV_CSV = Path("data/raw/TV_USDJPY_15m.csv")
+TV_CSV = Path("data/raw/USDJPY_Data/TV_USDJPY_15m.csv")
 OUTPUT_DIR = Path("output")
 
 

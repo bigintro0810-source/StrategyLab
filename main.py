@@ -21,6 +21,16 @@ from engine.params import reconstruct_params_from_row
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
+SUPPORTED_SYMBOLS = [
+    "USDJPY",
+    "EURJPY",
+    "GBPJPY",
+    "AUDJPY",
+    "AUDUSD",
+    "EURUSD",
+    "GBPUSD",
+]
+
 DATA_DIRS = ["data/raw", "data", "input", "."]
 
 OUTPUT_DIR = Path("output")
@@ -50,7 +60,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=["USDJPY", "EURJPY", "GBPJPY"],
+        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
         help="通貨ペア (デフォルト: USDJPY)",
     )
@@ -107,7 +117,12 @@ def build_data_candidates(timeframe: str, symbol: str = "USDJPY") -> list[str]:
     if timeframe == "1m":
         filenames.append(f"{symbol}_2003_2026_1min_filled.csv")
 
-    return [str(Path(d) / name) for d in DATA_DIRS for name in filenames]
+    candidates = [
+        str(Path(d) / f"{symbol}_Data" / name) for d in DATA_DIRS for name in filenames
+    ]
+    candidates += [str(Path(d) / name) for d in DATA_DIRS for name in filenames]
+
+    return candidates
 
 
 def find_data_file(timeframe: str = "15m", symbol: str = "USDJPY") -> Path:
@@ -172,6 +187,11 @@ def load_price_data(path: Path) -> pd.DataFrame:
 
 
 JPY_PIP_SIZE = 0.01
+NON_JPY_PIP_SIZE = 0.0001
+
+
+def pip_size_for_symbol(symbol: str) -> float:
+    return JPY_PIP_SIZE if symbol.endswith("JPY") else NON_JPY_PIP_SIZE
 
 
 def build_trigger_filter_defaults() -> dict[str, list]:
@@ -239,7 +259,9 @@ def build_trigger_filter_defaults() -> dict[str, list]:
     }
 
 
-def build_parameter_space(mode: str) -> dict[str, list]:
+def build_parameter_space(mode: str, symbol: str = "USDJPY") -> dict[str, list]:
+    pip_size = pip_size_for_symbol(symbol)
+
     if mode == "dev":
         return {
             "ema_length": [200],
@@ -257,7 +279,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
             "weekend_exit_hour": [4],
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
-            "pip_size": [JPY_PIP_SIZE],
+            "pip_size": [pip_size],
             **build_trigger_filter_defaults(),
         }
 
@@ -277,7 +299,7 @@ def build_parameter_space(mode: str) -> dict[str, list]:
         "weekend_exit_hour": [4],
         "use_daily_exit": [False],
         "daily_exit_hour": [4],
-        "pip_size": [JPY_PIP_SIZE],
+        "pip_size": [pip_size],
         **build_trigger_filter_defaults(),
     }
 
@@ -289,8 +311,8 @@ def build_grid_from_space(param_space: dict[str, list]) -> list[dict]:
     return [dict(zip(keys, combo)) for combo in combos]
 
 
-def build_parameter_grid(mode: str) -> list[dict]:
-    return build_grid_from_space(build_parameter_space(mode))
+def build_parameter_grid(mode: str, symbol: str = "USDJPY") -> list[dict]:
+    return build_grid_from_space(build_parameter_space(mode, symbol))
 
 
 def init_worker(df: pd.DataFrame) -> None:
@@ -753,7 +775,7 @@ def main() -> None:
         param_space = load_strategy_config(Path(args.strategy_config))
         print(f"ストラテジー設定ファイル: {args.strategy_config}")
     else:
-        param_space = build_parameter_space(args.mode)
+        param_space = build_parameter_space(args.mode, args.symbol)
 
     start_time = time.time()
 

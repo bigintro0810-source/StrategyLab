@@ -47,8 +47,9 @@ V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTML
 - **Tier 2(SuperTrend/ADX): 完了（2026-07-03）**。`engine/technical_indicators.py`に追加。SuperTrendは前バーの状態に依存する再帰的な構造のため(トレンド方向とバンド値が1本前の値に依存)、他の指標と違いO(n)のPythonループで実装(既存のバックテストループと同じ計算量クラス)。1分足87万行規模でも約37秒で許容範囲。既知パターンの合成データ(強い上昇→下降トレンド、トレンド相場 vs レンジ相場)で事前検証してから本番データに適用。トリガー`supertrend_flip_bearish`/`adx_di_cross_bearish`、フィルター`use_supertrend_filter`/`use_adx_filter`として追加。
 - **Tier 3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep): 完了(2026-07-03)。`engine/smc_indicators.py`。ユーザーの指示通り「一般的な(ICT系)定義で実装、TradingView未検証」の位置づけ。ショート専用戦略に合わせ全てbearish版のみ実装。エントリートリガー5種+フィルター5種として追加。BOS/CHoCHはswing point検出のルックアヘッド回避・隣接バー重複統合という2つの実装上の落とし穴を、既知パターンの合成データで検証して回避済み。**
 
-**V4.0（2026-07-02〜03）:**
-- 複数通貨対応：`--symbol {USDJPY,EURJPY,GBPJPY}`完了。`data/raw/`にEURJPY/GBPJPYデータ追加済み(2026-07-03)。pip_sizeは全通貨0.01(円建てクロスのため)。`walk_forward.py`/`analyze_walk_forward.py`にも`--symbol`/`--timeframe`を追加済み(2026-07-03、`main.py::resolve_output_dir()`を再利用して出力先も分離)。
+**V4.0（2026-07-02〜04）:**
+- 複数通貨対応：`--symbol`が全7通貨(USDJPY/EURJPY/GBPJPY/AUDJPY/AUDUSD/EURUSD/GBPUSD)対応完了(2026-07-04)。`main.py::pip_size_for_symbol()`が通貨名の末尾"JPY"判定でpip_sizeを自動選択(JPYクロス=0.01、それ以外=0.0001)。`walk_forward.py`/`analyze_walk_forward.py`/`gui_app.py`の`--symbol`/`SYMBOLS`も同時に拡張。
+- **データ取り込みパイプライン刷新（2026-07-04）:** ブローカー提供のEET(東欧時間、EU方式サマータイム)タイムスタンプ付きCSVを`C:\Users\bigin\保存用ファルダ\FX_Data\{通貨}_Data\`に置く運用に変更。`import_broker_csv.py`でJST変換(`Europe/Helsinki`→`Asia/Tokyo`、DST切替の瞬間はFX市場休場のため衝突なしを確認済み)とOHLC整合性エラー自動補正(`high=max(O,H,L,C)`/`low=min(O,H,L,C)`)を同時実施。`data/raw/{通貨}_Data/{通貨}_2003_2026_<足>.csv`という通貨別サブフォルダ構成に統一(`main.py::build_data_candidates()`が新構成を優先、旧フラット配置にもフォールバック)。**日足データの重要な決定:** 旧`_TV_NY.csv`(ユーザーが1分足から自作リサンプルしたもの)は日足本数が想定営業日数より1,094本も多いという原因不明の不整合があったため、ブローカー由来の日足(想定営業日数とほぼ一致)に置き換えて`_TV_NY.csv`/`_1min_filled.csv`は削除。**この変更で全バックテスト結果が変わるため`tests/test_regression.py`・`tests/test_regression_indicators.py`の基準値も実データで再計算して置き換え済み(両方PASS確認済み)。**
 - GUI化：完了。`gui_app.py`（`streamlit run gui_app.py`）。
 - PDF出力：完了（2026-07-03）。`engine/pdf_report.py`（`fpdf2`使用、`output/report.pdf`自動出力、GUIにもダウンロードボタン追加）。HTMLをそのまま変換する方式(weasyprint等)はWindowsでシステム依存関係のインストールが不安定になるリスクがあるため避け、サマリー・Equity/Drawdownチャート・ランキング表を独自に再構成する方式。日本語は游ゴシック(Windows同梱フォント)を埋め込み。Excel出力は未着手（CSVダウンロードで代替可能なため優先度低）。
 
@@ -100,25 +101,17 @@ SSD
 
 現在
 
-USDJPY
+USDJPY / EURJPY / GBPJPY / AUDJPY / AUDUSD / EURUSD / GBPUSD の7通貨
 
-15分足
+1分〜日足(1m/5m/15m/1h/4h/1d)
 
 約23年分
 
 2003〜2026
 
-CSV形式
+CSV形式（ブローカーEET提供データをJST変換・OHLC補正して`data/raw/{通貨}_Data/`に格納。詳細はV4.0の項を参照）
 
 将来的には
-
-EURUSD
-
-GBPJPY
-
-EURJPY
-
-AUDJPY
 
 Gold
 

@@ -1,10 +1,10 @@
-# Strategy Lab Version 1.0
+# Strategy Lab
 
 Strategy Labは、FXストラテジーを高速に検証・比較・評価するためのバックテスト研究ツールです。
 
 ## 主な機能
 
-- USDJPY 15分足データの読み込み
+- 複数通貨・複数時間足データの読み込み（USDJPY/EURJPY/GBPJPY/AUDJPY/AUDUSD/EURUSD/GBPUSD、1分〜日足）
 - 高速バックテスト
 - パラメータ最適化
 - ランキング出力

@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 
 
-TV_CSV = Path("data/raw/TV_USDJPY_15m.csv")
+TV_CSV = Path("data/raw/USDJPY_Data/TV_USDJPY_15m.csv")
 OUTPUT = Path("output/tv_signal_conditions.csv")
 
 

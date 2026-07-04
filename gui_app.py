@@ -40,7 +40,7 @@ with st.sidebar:
     )
 
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
-SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY"]
+SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "AUDUSD", "EURUSD", "GBPUSD"]
 
 tab_run, tab_saved = st.tabs(["バックテスト実行", "保存済み戦略"])
 

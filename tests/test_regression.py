@@ -4,11 +4,16 @@ Not pytest-based (pytest isn't a project dependency and there's no
 requirements.txt) - run directly: `python tests/test_regression.py`.
 Exits non-zero on mismatch so it can still be wired into CI later.
 
-Baselines were regenerated 2026-07-03 after switching RSI from a simple
-rolling-mean to Wilder smoothing (see engine/backtest_engine.py::rsi()) -
-that change was verified against TradingView's actual RSI export and
-genuinely shifts every backtest result, so the old baseline values were
-deliberately replaced rather than treated as a regression.
+Baselines were regenerated 2026-07-04 after replacing data/raw's USDJPY
+source with the broker EET-timestamped export (converted to JST + OHLC-
+consistency-fixed via import_broker_csv.py). The 15m data itself shifted
+slightly (~2.3% of bars differ from the old source - mostly sub-pip
+noise between feeds, see project memory for the investigation), and the
+1d data switched from a self-built 1m->1d resample (which turned out to
+have ~1094 unexplained extra daily bars) to the broker's native daily
+candles. Both changes genuinely shift every backtest result, so the old
+baseline values were deliberately replaced rather than treated as a
+regression - same precedent as the 2026-07-03 RSI Wilder-smoothing change.
 """
 
 import sys
@@ -24,23 +29,23 @@ CASES = [
     {
         "timeframe": "15m",
         "expected": {
-            "net_profit": 13.0438,
-            "profit_factor": 1.412,
-            "max_dd": 3.836,
-            "win_rate": 46.75,
-            "trades": 169,
-            "recovery_factor": 3.4,
+            "net_profit": 16.2862,
+            "profit_factor": 1.506,
+            "max_dd": 4.5562,
+            "win_rate": 48.04,
+            "trades": 179,
+            "recovery_factor": 3.575,
         },
     },
     {
         "timeframe": "1d",
         "expected": {
-            "net_profit": -15.2058,
-            "profit_factor": 0.611,
-            "max_dd": 20.4838,
-            "win_rate": 36.11,
-            "trades": 36,
-            "recovery_factor": -0.742,
+            "net_profit": 8.622,
+            "profit_factor": 1.405,
+            "max_dd": 7.4756,
+            "win_rate": 51.61,
+            "trades": 31,
+            "recovery_factor": 1.153,
         },
     },
 ]

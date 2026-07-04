@@ -12,11 +12,13 @@ Not pytest-based (matches tests/test_regression.py's convention - no
 pytest dependency, no requirements.txt entry for it) - run directly:
 `python tests/test_regression_indicators.py`.
 
-Baselines generated 2026-07-03 against real USDJPY 15m data, current at
-that commit. A 0-trades baseline (several filters, e.g. use_fvg_filter,
-use_bos_filter) is a legitimate, deterministic result given how
-restrictive ANDing a rare SMC condition onto the already-selective
-default breakout trigger is - not a placeholder to "fix" later.
+Baselines regenerated 2026-07-04 after replacing data/raw's USDJPY source
+with the broker EET-timestamped export (converted to JST + OHLC-fixed via
+import_broker_csv.py, see tests/test_regression.py's docstring for why).
+A 0-trades baseline (several filters, e.g. use_fvg_filter, use_bos_filter)
+is a legitimate, deterministic result given how restrictive ANDing a rare
+SMC condition onto the already-selective default breakout trigger is -
+not a placeholder to "fix" later.
 """
 
 import sys
@@ -53,21 +55,21 @@ BASE_PARAMS = {
 # drives the result. "breakout" itself is already covered by
 # tests/test_regression.py.
 TRIGGER_CASES = {
-    "donchian_breakout": {"trades": 5135, "net_profit": 11.0348, "profit_factor": 1.024},
-    "ema_cross": {"trades": 2773, "net_profit": -33.6124, "profit_factor": 0.865},
-    "macd_cross": {"trades": 8439, "net_profit": 24.8058, "profit_factor": 1.041},
-    "bollinger_touch": {"trades": 4885, "net_profit": 16.7122, "profit_factor": 1.038},
-    "ichimoku_cloud_breakout": {"trades": 4223, "net_profit": 3.2212, "profit_factor": 1.01},
-    "ichimoku_tk_cross": {"trades": 6796, "net_profit": 8.828, "profit_factor": 1.018},
-    "stochastic_kd_cross": {"trades": 15376, "net_profit": -0.2412, "profit_factor": 1.0},
-    "stochastic_level_cross": {"trades": 8238, "net_profit": 6.4016, "profit_factor": 1.011},
-    "fvg_bearish": {"trades": 12883, "net_profit": -22.7446, "profit_factor": 0.978},
-    "order_block_bearish": {"trades": 24335, "net_profit": -8.1518, "profit_factor": 0.995},
-    "bos_bearish": {"trades": 2991, "net_profit": -23.2212, "profit_factor": 0.933},
-    "choch_bearish": {"trades": 4477, "net_profit": -7.0788, "profit_factor": 0.985},
-    "liquidity_sweep_bearish": {"trades": 7261, "net_profit": 42.5722, "profit_factor": 1.073},
-    "supertrend_flip_bearish": {"trades": 4231, "net_profit": -3.4812, "profit_factor": 0.992},
-    "adx_di_cross_bearish": {"trades": 8453, "net_profit": 10.4376, "profit_factor": 1.014},
+    "donchian_breakout": {"trades": 5187, "net_profit": 8.1668, "profit_factor": 1.017},
+    "ema_cross": {"trades": 2853, "net_profit": -26.5118, "profit_factor": 0.894},
+    "macd_cross": {"trades": 8579, "net_profit": 30.0358, "profit_factor": 1.049},
+    "bollinger_touch": {"trades": 4841, "net_profit": 21.9124, "profit_factor": 1.05},
+    "ichimoku_cloud_breakout": {"trades": 4271, "net_profit": 0.043, "profit_factor": 1.0},
+    "ichimoku_tk_cross": {"trades": 6946, "net_profit": 18.3194, "profit_factor": 1.038},
+    "stochastic_kd_cross": {"trades": 15674, "net_profit": 0.81, "profit_factor": 1.001},
+    "stochastic_level_cross": {"trades": 8403, "net_profit": 9.242, "profit_factor": 1.016},
+    "fvg_bearish": {"trades": 13230, "net_profit": -39.5318, "profit_factor": 0.964},
+    "order_block_bearish": {"trades": 25116, "net_profit": 6.2762, "profit_factor": 1.004},
+    "bos_bearish": {"trades": 3068, "net_profit": -24.2388, "profit_factor": 0.933},
+    "choch_bearish": {"trades": 4369, "net_profit": -4.9994, "profit_factor": 0.989},
+    "liquidity_sweep_bearish": {"trades": 7466, "net_profit": 52.4506, "profit_factor": 1.089},
+    "supertrend_flip_bearish": {"trades": 4092, "net_profit": -11.6084, "profit_factor": 0.975},
+    "adx_di_cross_bearish": {"trades": 8749, "net_profit": 13.6166, "profit_factor": 1.018},
 }
 
 TRIGGER_TEST_OVERRIDES = {
@@ -81,23 +83,23 @@ TRIGGER_TEST_OVERRIDES = {
 # (session/min_body/max_body/max_wick/ema_distance/rsi) are already
 # covered by tests/test_regression.py's default-path baseline.
 FILTER_CASES = {
-    "use_donchian_filter": {"trades": 169, "net_profit": 13.0438, "profit_factor": 1.412},
-    "use_bollinger_filter": {"trades": 169, "net_profit": 13.0438, "profit_factor": 1.412},
-    "use_macd_filter": {"trades": 163, "net_profit": 12.3242, "profit_factor": 1.398},
-    "use_ichimoku_filter": {"trades": 169, "net_profit": 13.0438, "profit_factor": 1.412},
-    "use_stochastic_filter": {"trades": 146, "net_profit": 8.4584, "profit_factor": 1.301},
-    "use_pivot_filter": {"trades": 132, "net_profit": 16.0074, "profit_factor": 1.717},
-    "use_prev_high_filter": {"trades": 151, "net_profit": 15.9572, "profit_factor": 1.601},
-    "use_prev_low_filter": {"trades": 169, "net_profit": 13.0438, "profit_factor": 1.412},
-    "use_round_number_filter": {"trades": 27, "net_profit": -1.8644, "profit_factor": 0.715},
-    "use_weekday_filter": {"trades": 166, "net_profit": 13.5518, "profit_factor": 1.435},
+    "use_donchian_filter": {"trades": 179, "net_profit": 16.2862, "profit_factor": 1.506},
+    "use_bollinger_filter": {"trades": 179, "net_profit": 16.2862, "profit_factor": 1.506},
+    "use_macd_filter": {"trades": 172, "net_profit": 14.344, "profit_factor": 1.45},
+    "use_ichimoku_filter": {"trades": 179, "net_profit": 16.2862, "profit_factor": 1.506},
+    "use_stochastic_filter": {"trades": 155, "net_profit": 10.2062, "profit_factor": 1.351},
+    "use_pivot_filter": {"trades": 141, "net_profit": 18.3288, "profit_factor": 1.795},
+    "use_prev_high_filter": {"trades": 158, "net_profit": 18.9662, "profit_factor": 1.716},
+    "use_prev_low_filter": {"trades": 179, "net_profit": 16.2862, "profit_factor": 1.506},
+    "use_round_number_filter": {"trades": 27, "net_profit": -1.5766, "profit_factor": 0.76},
+    "use_weekday_filter": {"trades": 176, "net_profit": 16.7942, "profit_factor": 1.53},
     "use_fvg_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
-    "use_order_block_filter": {"trades": 10, "net_profit": 1.7218, "profit_factor": 1.82},
+    "use_order_block_filter": {"trades": 12, "net_profit": 3.1504, "profit_factor": 2.499},
     "use_bos_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_choch_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_liquidity_sweep_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_supertrend_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
-    "use_adx_filter": {"trades": 131, "net_profit": 10.4108, "profit_factor": 1.441},
+    "use_adx_filter": {"trades": 135, "net_profit": 10.9328, "profit_factor": 1.457},
 }
 
 
