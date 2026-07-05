@@ -1,0 +1,257 @@
+"""FastAPI backend for Strategy Lab's web frontend (frontend/).
+
+Thin wrapper over the existing, already-tested CLI pipeline (main.py) - reuses
+the exact subprocess invocation pattern gui_app.py already established (see
+that file's module docstring for why: main.py's optimizer loop uses
+ProcessPoolExecutor, which on Windows uses the "spawn" start method, so a
+backtest must run in a separate process - never imported and called
+in-process here). No backtest logic is reimplemented in this file; it only
+spawns main.py, parses its output CSVs into JSON, and serves already-existing
+engine/main.py data (price data, saved strategies, indicator registry) over
+HTTP.
+
+Run with: uvicorn api_server:app --reload
+"""
+
+import asyncio
+import json
+import sys
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from engine.conditions import INDICATOR_REGISTRY
+from engine.strategy_registry import get_strategy, list_strategies
+from main import find_data_file, load_price_data, resolve_output_dir
+
+app = FastAPI(title="Strategy Lab API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory job store - single-user local app, no Redis/Celery needed.
+JOBS: dict[str, dict[str, Any]] = {}
+
+
+class BacktestRequest(BaseModel):
+    mode: str = "dev"
+    timeframe: str = "15m"
+    symbol: str = "USDJPY"
+    optimizer: str = "grid"
+    direction: str = "short"
+    condition_tree: Optional[dict] = None
+    save_as: Optional[str] = None
+    # Optional parameter sweep: {"ema_length": [180, 190, 200, ...]} - any key
+    # here overrides the single-value default below with a value list, so
+    # main.py's grid optimizer (itertools.product across param_space) produces
+    # one ranking_total.csv row per combination instead of just one row.
+    param_ranges: Optional[dict[str, list[float]]] = None
+
+
+def _build_strategy_config(direction: str, condition_tree: dict, param_ranges: Optional[dict[str, list[float]]]) -> Path:
+    """Mirrors gui_app.py's condition-builder tab: wrap the condition tree
+    plus the base BacktestConfig-shaped params into a strategy_configs/*.json
+    file, consumed by main.py via the existing --strategy-config mechanism."""
+    params = {
+        "ema_length": [200],
+        "min_body_pips": [20.0],
+        "max_body_pips": [0.0],
+        "max_wick_pips": [0.0],
+        "lookahead_bars": [15],
+        "breakout_bars": [30],
+        "ema_distance_pips": [50.0],
+        "rsi_min": [70.0],
+        "rr": [1.2],
+        "session_start": [8],
+        "session_end": [3],
+        "use_weekend_exit": [True],
+        "weekend_exit_hour": [4],
+        "use_daily_exit": [False],
+        "daily_exit_hour": [4],
+        "direction": [direction],
+        "condition_tree": [condition_tree],
+    }
+    for key, values in (param_ranges or {}).items():
+        if key in params:
+            params[key] = values
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = f"api_{timestamp}_{uuid.uuid4().hex[:6]}"
+    config_path = Path("strategy_configs") / f"{name}.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps({"name": name, "params": params}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+async def _run_job(job_id: str, cmd: list[str]) -> None:
+    JOBS[job_id]["status"] = "running"
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+
+    JOBS[job_id]["stdout"] = stdout.decode("utf-8", errors="replace")
+    JOBS[job_id]["stderr"] = stderr.decode("utf-8", errors="replace")
+    JOBS[job_id]["status"] = "done" if process.returncode == 0 else "error"
+
+
+@app.post("/api/backtests")
+async def create_backtest(req: BacktestRequest) -> dict:
+    job_id = uuid.uuid4().hex
+
+    cmd = [
+        sys.executable, "main.py",
+        "--mode", req.mode,
+        "--timeframe", req.timeframe,
+        "--symbol", req.symbol,
+        "--optimizer", req.optimizer,
+    ]
+
+    if req.condition_tree is not None:
+        config_path = _build_strategy_config(req.direction, req.condition_tree, req.param_ranges)
+        cmd += ["--strategy-config", str(config_path)]
+
+    if req.save_as:
+        cmd += ["--save-as", req.save_as]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/backtests/{job_id}")
+async def get_backtest_status(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    return {
+        "status": job["status"],
+        "stdout_tail": job["stdout"][-2000:],
+        "error": job["stderr"][-2000:] if job["status"] == "error" else None,
+    }
+
+
+def _read_csv_records(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    df = pd.read_csv(path)
+    return json.loads(df.to_json(orient="records", date_format="iso"))
+
+
+@app.get("/api/backtests/{job_id}/results")
+async def get_backtest_results(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+
+    return {
+        "ranking_total": _read_csv_records(output_dir / "ranking_total.csv"),
+        "equity_curve": _read_csv_records(output_dir / "equity_curve.csv"),
+        "trade_log": _read_csv_records(output_dir / "trade_log.csv"),
+        "monte_carlo_summary": _read_csv_records(output_dir / "monte_carlo_summary.csv"),
+        "yearly_analysis": _read_csv_records(output_dir / "yearly_analysis.csv"),
+        "monthly_analysis": _read_csv_records(output_dir / "monthly_analysis.csv"),
+        "stability_analysis": _read_csv_records(output_dir / "stability_analysis.csv"),
+    }
+
+
+@app.get("/api/price-data")
+async def get_price_data(
+    symbol: str = "USDJPY",
+    timeframe: str = "15m",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    limit: int = 1000,
+) -> list[dict]:
+    df = load_price_data(find_data_file(timeframe, symbol))
+
+    if start:
+        df = df[df["datetime"] >= start]
+    if end:
+        df = df[df["datetime"] <= end]
+
+    df = df.tail(limit)
+
+    return json.loads(df.to_json(orient="records", date_format="iso"))
+
+
+# Indicator display metadata for the condition-builder UI - mirrors
+# gui_app.py's BUILDER_INDICATORS dict, served as data instead of duplicated
+# in every client.
+INDICATOR_LABELS: dict[str, str] = {
+    "close": "終値",
+    "open": "始値",
+    "high": "高値",
+    "low": "安値",
+    "candle_body": "実体(終値-始値、符号あり)",
+    "ema": "EMA",
+    "rsi": "RSI",
+    "highest_high": "直近高値(N本)",
+    "lowest_low": "直近安値(N本)",
+    "donchian_mid": "ドンチアン中央値",
+    "bollinger_upper": "ボリンジャー上限",
+    "bollinger_middle": "ボリンジャー中央",
+    "bollinger_lower": "ボリンジャー下限",
+    "macd_line": "MACDライン",
+    "macd_signal": "MACDシグナル",
+    "stochastic_k": "ストキャスティクス%K",
+    "stochastic_d": "ストキャスティクス%D",
+    "hour": "時刻(JST)",
+    "weekday": "曜日(0=月〜6=日)",
+}
+
+INDICATORS_NEEDING_PERIOD = {"ema", "rsi", "highest_high", "lowest_low", "donchian_mid"}
+
+
+@app.get("/api/indicators")
+async def get_indicators() -> list[dict]:
+    return [
+        {
+            "id": name,
+            "label": INDICATOR_LABELS.get(name, name),
+            "needs_period": name in INDICATORS_NEEDING_PERIOD,
+        }
+        for name in INDICATOR_REGISTRY
+    ]
+
+
+@app.get("/api/strategies")
+async def get_strategies() -> list[dict]:
+    return list_strategies()
+
+
+@app.get("/api/strategies/{strategy_id}")
+async def get_strategy_detail(strategy_id: str) -> dict:
+    try:
+        return get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")

@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background-color: #05060b;
+  color: #e2e4ee;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  min-height: 100svh;
+}
+
+#root {
+  position: relative;
+  min-height: 100svh;
+  isolation: isolate;
+}
+
+/* Soft ambient color blobs behind the glass panels - the "light through frosted
+   glass" look. Fixed + blurred + low opacity so it reads as atmosphere, not noise. */
+#root::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(600px circle at 10% 0%, rgba(96, 165, 250, 0.16), transparent 60%),
+    radial-gradient(700px circle at 90% 15%, rgba(167, 139, 250, 0.14), transparent 60%),
+    radial-gradient(800px circle at 50% 100%, rgba(56, 189, 248, 0.10), transparent 60%),
+    linear-gradient(180deg, #05060b 0%, #090a14 100%);
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1rem;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.glass-panel-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(
+    to right,
+    rgba(96, 165, 250, 0.08),
+    rgba(167, 139, 250, 0.06) 60%,
+    transparent
+  );
+}
+
+.glass-nav {
+  background: rgba(10, 11, 20, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glass-input:focus {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.6);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+}
+
+.glow-button {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  box-shadow: 0 0 24px rgba(139, 92, 246, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.glow-button:hover:not(:disabled) {
+  box-shadow: 0 0 32px rgba(139, 92, 246, 0.55);
+}
+
+.glow-button:disabled {
+  box-shadow: none;
+}
+
+.brand-text {
+  background: linear-gradient(135deg, #60a5fa, #c084fc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}

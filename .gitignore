@@ -21,6 +21,7 @@ output/
 logs/
 saved_strategies/
 dist/
+strategy_configs/api_*.json
 
 # ==================================================
 # Market Data

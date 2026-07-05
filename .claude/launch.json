@@ -12,6 +12,18 @@
       "runtimeExecutable": "streamlit",
       "runtimeArgs": ["run", "gui_app.py", "--server.port", "8735", "--server.headless", "true"],
       "port": 8735
+    },
+    {
+      "name": "api-server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "api_server:app", "--port", "8736"],
+      "port": 8736
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd frontend && C:\\PROGRA~1\\nodejs\\node.exe node_modules\\vite\\bin\\vite.js --port 5173"],
+      "port": 5173
     }
   ]
 }
