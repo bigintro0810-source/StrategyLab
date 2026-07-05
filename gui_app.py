@@ -56,11 +56,17 @@ with tab_run:
 
         with col2:
             optimizer = st.selectbox("最適化方式", ["grid", "random", "genetic", "bayesian"])
-            n_samples = st.number_input("random/bayesian: n_samples", value=50, min_value=1, step=1)
+            n_samples = st.number_input(
+                "試行回数 (--optimizer random/bayesian時)", value=50, min_value=1, step=1
+            )
 
         with col3:
-            population = st.number_input("genetic: population", value=20, min_value=2, step=1)
-            generations = st.number_input("genetic: generations", value=10, min_value=1, step=1)
+            population = st.number_input(
+                "世代あたり個体数 (--optimizer genetic時)", value=20, min_value=2, step=1
+            )
+            generations = st.number_input(
+                "世代数 (--optimizer genetic時)", value=10, min_value=1, step=1
+            )
 
         strategy_config_files = sorted(Path("strategy_configs").glob("*.json"))
         strategy_config_choice = st.selectbox(
