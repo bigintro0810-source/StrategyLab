@@ -147,6 +147,16 @@ def run_backtest(
     else:
         p = dict(params)
 
+    # Simultaneous Long+Short entry trees (per the dashboard mockup) is a
+    # separate, fully additive code path - engaged only when either of these
+    # is supplied. Everything below this point is completely unchanged
+    # single-direction behavior otherwise, so existing callers/tests are
+    # unaffected. See _run_dual_direction_backtest's docstring for the
+    # same-bar-collision policy (skip that bar; confirmed with the user
+    # rather than assumed, since it changes what a backtest result means).
+    if p.get("long_condition_tree") is not None or p.get("short_condition_tree") is not None:
+        return _run_dual_direction_backtest(df, p, return_trades=return_trades, is_intraday=is_intraday)
+
     pip = float(p.get("pip_size", 0.01))
 
     # Round-trip execution cost, expressed in the same price-difference units
@@ -404,6 +414,336 @@ def run_backtest(
         signal_high = high_price
         signal_bar = i
         signal_time = dt
+
+    profits_arr = np.array(profits, dtype=float)
+
+    trades = int(len(profits_arr))
+    wins = int((profits_arr > 0).sum())
+    losses = int((profits_arr < 0).sum())
+
+    gross_profit = float(profits_arr[profits_arr > 0].sum()) if trades else 0.0
+    gross_loss = float(profits_arr[profits_arr < 0].sum()) if trades else 0.0
+    net_profit = float(profits_arr.sum()) if trades else 0.0
+
+    if gross_loss < 0:
+        profit_factor = gross_profit / abs(gross_loss)
+    elif gross_profit > 0:
+        profit_factor = 999.0
+    else:
+        profit_factor = 0.0
+
+    win_rate = wins / trades * 100.0 if trades else 0.0
+    max_dd = calc_max_dd(profits_arr)
+    expected_value = net_profit / trades if trades else 0.0
+
+    if max_dd > 0:
+        recovery_factor = net_profit / max_dd
+    elif net_profit > 0:
+        recovery_factor = 999.0
+    else:
+        recovery_factor = 0.0
+
+    result = {
+        **p,
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 2),
+        "net_profit": round(net_profit, 5),
+        "gross_profit": round(gross_profit, 5),
+        "gross_loss": round(gross_loss, 5),
+        "profit_factor": round(profit_factor, 3),
+        "max_dd": round(max_dd, 5),
+        "expected_value": round(expected_value, 5),
+        "recovery_factor": round(recovery_factor, 3),
+    }
+
+    trades_df = pd.DataFrame(trade_logs)
+
+    if return_trades:
+        return result, trades_df
+
+    return result
+
+
+def _run_dual_direction_backtest(
+    df: pd.DataFrame,
+    p: dict[str, Any],
+    return_trades: bool = False,
+    is_intraday: bool | None = None,
+) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
+    """Long and Short entry trees evaluated in the same backtest, sharing one
+    position slot (no hedging - that's an explicit, separate scope decision
+    still pending). Confirmed with the user 2026-07-06: if both a Long and a
+    Short entry would fire in the same bar, take neither and wait ("skip that
+    bar") rather than picking one arbitrarily.
+
+    Mirrors run_backtest()'s single-direction state machine (signal candidate
+    -> confirmation within lookahead_bars -> pending -> next-bar-open entry
+    -> SL/TP/time exit) but runs two independent copies of the signal/
+    confirmation tracking (one per direction) against one shared in-position
+    gate, since only one of them can ever hold the position at a time.
+    """
+    pip = float(p.get("pip_size", 0.01))
+
+    cost_per_trade = (
+        float(p.get("spread_pips", 0.0)) * pip
+        + float(p.get("slippage_pips", 0.0)) * pip
+        + float(p.get("commission_per_trade", 0.0))
+    )
+
+    lookahead_bars = int(p["lookahead_bars"])
+    rr = float(p["rr"])
+
+    use_weekend_exit = bool(p["use_weekend_exit"])
+    weekend_exit_hour = int(p["weekend_exit_hour"])
+
+    use_daily_exit = bool(p["use_daily_exit"])
+    daily_exit_hour = int(p["daily_exit_hour"])
+
+    datetime_arr = df["datetime"].to_numpy()
+
+    datetime_series = pd.to_datetime(df["datetime"])
+    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
+    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+
+    if is_intraday is None:
+        is_intraday = compute_is_intraday(datetime_series)
+
+    open_arr = df["open"].to_numpy(dtype=float)
+    high_arr = df["high"].to_numpy(dtype=float)
+    low_arr = df["low"].to_numpy(dtype=float)
+    close_arr = df["close"].to_numpy(dtype=float)
+
+    long_tree = p.get("long_condition_tree")
+    short_tree = p.get("short_condition_tree")
+    long_candidate = evaluate_condition_tree(long_tree, df) if long_tree is not None else np.zeros(len(df), dtype=bool)
+    short_candidate = (
+        evaluate_condition_tree(short_tree, df) if short_tree is not None else np.zeros(len(df), dtype=bool)
+    )
+
+    profits: list[float] = []
+    trade_logs: list[dict[str, Any]] = []
+
+    in_position = False
+    position_direction = None
+
+    entry_price = 0.0
+    entry_time = None
+    entry_bar_index = None
+
+    sl = 0.0
+    tp = 0.0
+
+    position_signal_low = np.nan
+    position_signal_high = np.nan
+    position_signal_bar = None
+    position_signal_time = None
+
+    # Per-direction signal/confirmation/pending tracking - each side is an
+    # independent copy of run_backtest()'s single-direction state.
+    side_state = {
+        "long": {
+            "signal_low": np.nan,
+            "signal_high": np.nan,
+            "signal_bar": None,
+            "signal_time": None,
+            "pending_entry": False,
+            "pending_signal_low": np.nan,
+            "pending_signal_high": np.nan,
+            "pending_signal_bar": None,
+            "pending_signal_time": None,
+        },
+        "short": {
+            "signal_low": np.nan,
+            "signal_high": np.nan,
+            "signal_bar": None,
+            "signal_time": None,
+            "pending_entry": False,
+            "pending_signal_low": np.nan,
+            "pending_signal_high": np.nan,
+            "pending_signal_bar": None,
+            "pending_signal_time": None,
+        },
+    }
+
+    def clear_pending(side: str) -> None:
+        state = side_state[side]
+        state["pending_entry"] = False
+        state["pending_signal_low"] = np.nan
+        state["pending_signal_high"] = np.nan
+        state["pending_signal_bar"] = None
+        state["pending_signal_time"] = None
+
+    def clear_signal(side: str) -> None:
+        state = side_state[side]
+        state["signal_low"] = np.nan
+        state["signal_high"] = np.nan
+        state["signal_bar"] = None
+        state["signal_time"] = None
+
+    for i in range(250, len(df)):
+        dt = datetime_arr[i]
+        hour = int(hour_arr[i])
+        weekday = int(weekday_arr[i])
+
+        open_price = float(open_arr[i])
+        high_price = float(high_arr[i])
+        low_price = float(low_arr[i])
+        close_price = float(close_arr[i])
+
+        if not in_position:
+            long_ready = side_state["long"]["pending_entry"]
+            short_ready = side_state["short"]["pending_entry"]
+
+            if long_ready and short_ready:
+                # Both sides confirmed on the same bar - take neither.
+                clear_pending("long")
+                clear_pending("short")
+            elif long_ready or short_ready:
+                side = "long" if long_ready else "short"
+                state = side_state[side]
+
+                entry_price = open_price
+                entry_time = dt
+                entry_bar_index = i
+                position_direction = side
+
+                position_signal_low = state["pending_signal_low"]
+                position_signal_high = state["pending_signal_high"]
+                position_signal_bar = state["pending_signal_bar"]
+                position_signal_time = state["pending_signal_time"]
+
+                if side == "short":
+                    stop_price = float(position_signal_high)
+                    risk_distance = stop_price - entry_price
+                else:
+                    stop_price = float(position_signal_low)
+                    risk_distance = entry_price - stop_price
+
+                if risk_distance > 0:
+                    sl = stop_price
+                    tp = (
+                        entry_price - risk_distance * rr
+                        if side == "short"
+                        else entry_price + risk_distance * rr
+                    )
+                    in_position = True
+
+                clear_pending(side)
+
+        if in_position:
+            exit_reason = None
+            exit_price = None
+
+            if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
+                exit_reason = "Weekend"
+                exit_price = close_price
+
+            elif is_intraday and use_daily_exit and hour == daily_exit_hour:
+                exit_reason = "DailyExit"
+                exit_price = close_price
+
+            else:
+                if position_direction == "short":
+                    hit_sl = high_price >= sl
+                    hit_tp = low_price <= tp
+                else:
+                    hit_sl = low_price <= sl
+                    hit_tp = high_price >= tp
+
+                if hit_sl and hit_tp:
+                    exit_reason = "SL_and_TP_SL_first"
+                    exit_price = sl
+                elif hit_sl:
+                    exit_reason = "SL"
+                    exit_price = sl
+                elif hit_tp:
+                    exit_reason = "TP"
+                    exit_price = tp
+
+            if exit_reason is not None:
+                profit = (
+                    entry_price - float(exit_price)
+                    if position_direction == "short"
+                    else float(exit_price) - entry_price
+                )
+                profit -= cost_per_trade
+                profits.append(profit)
+
+                if return_trades:
+                    trade_logs.append(
+                        {
+                            "entry_time": entry_time,
+                            "entry_bar_index": entry_bar_index,
+                            "entry_price": round(entry_price, 5),
+                            "direction": position_direction,
+                            "exit_time": dt,
+                            "exit_bar_index": i,
+                            "exit_price": round(float(exit_price), 5),
+                            "sl": round(sl, 5),
+                            "tp": round(tp, 5),
+                            "profit": round(profit, 5),
+                            "exit_reason": exit_reason,
+                            "signal_time": position_signal_time,
+                            "signal_bar_index": position_signal_bar,
+                            "signal_low": round(float(position_signal_low), 5),
+                            "signal_high": round(float(position_signal_high), 5),
+                        }
+                    )
+
+                in_position = False
+                position_direction = None
+
+                entry_price = 0.0
+                entry_time = None
+                entry_bar_index = None
+
+                sl = 0.0
+                tp = 0.0
+
+                position_signal_low = np.nan
+                position_signal_high = np.nan
+                position_signal_bar = None
+                position_signal_time = None
+
+            continue
+
+        for side, candidate_signal in (("long", long_candidate), ("short", short_candidate)):
+            state = side_state[side]
+
+            if state["signal_bar"] is not None:
+                bars_from_signal = i - state["signal_bar"]
+                within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
+
+                confirmation = (
+                    close_price < float(state["signal_low"])
+                    if side == "short"
+                    else close_price > float(state["signal_high"])
+                )
+                if within_bars and confirmation:
+                    state["pending_entry"] = True
+                    state["pending_signal_low"] = state["signal_low"]
+                    state["pending_signal_high"] = state["signal_high"]
+                    state["pending_signal_bar"] = state["signal_bar"]
+                    state["pending_signal_time"] = state["signal_time"]
+                    clear_signal(side)
+                    continue
+
+                expired = bars_from_signal > lookahead_bars
+                if expired:
+                    clear_signal(side)
+
+            if state["signal_bar"] is not None:
+                continue
+
+            if not candidate_signal[i]:
+                continue
+
+            state["signal_low"] = low_price
+            state["signal_high"] = high_price
+            state["signal_bar"] = i
+            state["signal_time"] = dt
 
     profits_arr = np.array(profits, dtype=float)
 

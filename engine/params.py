@@ -12,11 +12,12 @@ from typing import Any
 DEFAULT_PIP_SIZE = 0.01
 
 
-def _reconstruct_condition_tree(row: dict[str, Any]) -> dict | None:
-    """condition_tree survives a CSV round-trip as a Python-repr string
-    (pandas str()-ifies dict cells), not JSON - e.g. "{'op': 'AND', ...}"
-    with single quotes, so it needs ast.literal_eval rather than json.loads."""
-    raw = row.get("condition_tree")
+def _reconstruct_tree(row: dict[str, Any], key: str) -> dict | None:
+    """condition_tree (and long_condition_tree/short_condition_tree) survive a
+    CSV round-trip as a Python-repr string (pandas str()-ifies dict cells),
+    not JSON - e.g. "{'op': 'AND', ...}" with single quotes, so it needs
+    ast.literal_eval rather than json.loads."""
+    raw = row.get(key)
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
@@ -26,7 +27,9 @@ def _reconstruct_condition_tree(row: dict[str, Any]) -> dict | None:
 
 def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
     return {
-        "condition_tree": _reconstruct_condition_tree(row),
+        "condition_tree": _reconstruct_tree(row, "condition_tree"),
+        "long_condition_tree": _reconstruct_tree(row, "long_condition_tree"),
+        "short_condition_tree": _reconstruct_tree(row, "short_condition_tree"),
         "ema_length": int(row["ema_length"]),
         "min_body_pips": float(row["min_body_pips"]),
         "max_body_pips": float(row["max_body_pips"]),

@@ -4,7 +4,7 @@ interface Props {
   rows: TradeRow[]
 }
 
-const COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => string }[] = [
+const BASE_COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => string }[] = [
   { key: 'entry_time', label: 'エントリー時刻' },
   { key: 'entry_price', label: 'エントリー価格', format: (v) => Number(v).toFixed(3) },
   { key: 'exit_time', label: '決済時刻' },
@@ -13,12 +13,25 @@ const COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => st
   { key: 'exit_reason', label: '決済理由' },
 ]
 
+const DIRECTION_COLUMN: { key: keyof TradeRow; label: string; format?: (v: unknown) => string } = {
+  key: 'direction',
+  label: '方向',
+  format: (v) => (v === 'long' ? 'Long' : v === 'short' ? 'Short' : ''),
+}
+
 const MAX_ROWS = 200
 
 export default function TradeHistoryTable({ rows }: Props) {
   if (rows.length === 0) {
     return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
   }
+
+  // Only a dual-direction (Long+Short simultaneous) backtest's trades carry a
+  // per-trade direction - a single-direction run has no need for the column.
+  const hasDirection = rows.some((r) => r.direction != null)
+  const COLUMNS = hasDirection
+    ? [BASE_COLUMNS[0], DIRECTION_COLUMN, ...BASE_COLUMNS.slice(1)]
+    : BASE_COLUMNS
 
   return (
     <div className="overflow-auto">

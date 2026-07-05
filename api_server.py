@@ -50,6 +50,11 @@ class BacktestRequest(BaseModel):
     optimizer: str = "grid"
     direction: str = "short"
     condition_tree: Optional[dict] = None
+    # When both are set, the engine evaluates them simultaneously (one shared
+    # position slot, no hedging) instead of the single condition_tree+direction
+    # above - see engine/backtest_engine.py::_run_dual_direction_backtest.
+    long_condition_tree: Optional[dict] = None
+    short_condition_tree: Optional[dict] = None
     save_as: Optional[str] = None
     # Optional parameter sweep: {"ema_length": [180, 190, 200, ...]} - any key
     # here overrides the single-value default below with a value list, so
@@ -91,6 +96,8 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "commission_per_trade": [req.commission_per_trade],
         "direction": [req.direction],
         "condition_tree": [req.condition_tree],
+        "long_condition_tree": [req.long_condition_tree],
+        "short_condition_tree": [req.short_condition_tree],
     }
     for key, values in (req.param_ranges or {}).items():
         if key in params:
@@ -134,7 +141,7 @@ async def create_backtest(req: BacktestRequest) -> dict:
         "--optimizer", req.optimizer,
     ]
 
-    if req.condition_tree is not None:
+    if req.condition_tree is not None or req.long_condition_tree is not None or req.short_condition_tree is not None:
         config_path = _build_strategy_config(req)
         cmd += ["--strategy-config", str(config_path)]
 

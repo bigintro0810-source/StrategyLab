@@ -40,6 +40,10 @@ export interface BacktestRequest {
   optimizer: string
   direction: Direction
   condition_tree?: TreeNode
+  // When both are set, the engine evaluates Long and Short simultaneously
+  // (one shared position - no hedging) instead of condition_tree+direction.
+  long_condition_tree?: GroupNode
+  short_condition_tree?: GroupNode
   save_as?: string
   param_ranges?: Record<string, number[]>
   rr?: number
@@ -103,6 +107,10 @@ export interface TradeRow {
   exit_price: number
   profit: number
   exit_reason: string
+  // Only present for trades from a simultaneous Long+Short dual-direction
+  // backtest, where direction varies per trade rather than being fixed for
+  // the whole run.
+  direction?: 'long' | 'short'
   [key: string]: unknown
 }
 
@@ -166,7 +174,12 @@ export interface StrategyListEntry {
 export interface StrategyDetail extends StrategyListEntry {
   memo: string
   strategy_config: string | null
-  params: Record<string, unknown> & { condition_tree?: TreeNode | null; direction?: Direction }
+  params: Record<string, unknown> & {
+    condition_tree?: TreeNode | null
+    long_condition_tree?: GroupNode | null
+    short_condition_tree?: GroupNode | null
+    direction?: Direction
+  }
   snapshot_dir: string
 }
 

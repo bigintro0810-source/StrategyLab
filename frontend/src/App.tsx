@@ -201,6 +201,14 @@ function ParamRangeRow({
 export default function App() {
   const [direction, setDirection] = useState<Direction>('short')
   const [tree, setTree] = useState<GroupNode>(defaultTree())
+
+  // Simultaneous Long+Short mode: evaluates two independent entry trees
+  // against one shared position (no hedging). Off by default - preserves
+  // the existing single-tree+direction flow exactly.
+  const [dualDirectionMode, setDualDirectionMode] = useState(false)
+  const [longTree, setLongTree] = useState<GroupNode>(defaultTree())
+  const [shortTree, setShortTree] = useState<GroupNode>(defaultTree())
+
   const [symbol, setSymbol] = useState('USDJPY')
   const [timeframe, setTimeframe] = useState('15m')
   const [mode, setMode] = useState('dev')
@@ -258,7 +266,14 @@ export default function App() {
       setTimeframe(detail.timeframe)
       setMode(detail.mode)
       if (detail.params.direction) setDirection(detail.params.direction)
-      if (detail.params.condition_tree) setTree(detail.params.condition_tree as GroupNode)
+      if (detail.params.long_condition_tree || detail.params.short_condition_tree) {
+        setDualDirectionMode(true)
+        if (detail.params.long_condition_tree) setLongTree(detail.params.long_condition_tree)
+        if (detail.params.short_condition_tree) setShortTree(detail.params.short_condition_tree)
+      } else {
+        setDualDirectionMode(false)
+        if (detail.params.condition_tree) setTree(detail.params.condition_tree as GroupNode)
+      }
       if (typeof detail.params.rr === 'number') setRr(detail.params.rr)
       if (typeof detail.params.use_weekend_exit === 'boolean') setUseWeekendExit(detail.params.use_weekend_exit)
       if (typeof detail.params.weekend_exit_hour === 'number') setWeekendExitHour(detail.params.weekend_exit_hour)
@@ -283,7 +298,9 @@ export default function App() {
         symbol,
         optimizer: 'grid',
         direction,
-        condition_tree: tree,
+        condition_tree: dualDirectionMode ? undefined : tree,
+        long_condition_tree: dualDirectionMode ? longTree : undefined,
+        short_condition_tree: dualDirectionMode ? shortTree : undefined,
         param_ranges,
         rr,
         use_weekend_exit: useWeekendExit,
@@ -355,29 +372,53 @@ export default function App() {
           >
             <Panel key="builder" title="① ストラテジービルダー">
               <div className="space-y-3">
-                <div className="flex gap-4 text-sm">
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="radio"
-                      className="accent-blue-500"
-                      checked={direction === 'short'}
-                      onChange={() => setDirection('short')}
-                    />
-                    Short(売り)
-                  </label>
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="radio"
-                      className="accent-purple-500"
-                      checked={direction === 'long'}
-                      onChange={() => setDirection('long')}
-                    />
-                    Long(買い)
-                  </label>
-                </div>
+                <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={dualDirectionMode}
+                    onChange={(e) => setDualDirectionMode(e.target.checked)}
+                  />
+                  Long+Shortを同時に評価(同じ足で両方成立したらスキップ)
+                </label>
 
-                {indicatorsQuery.data && (
+                {!dualDirectionMode && (
+                  <div className="flex gap-4 text-sm">
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        className="accent-blue-500"
+                        checked={direction === 'short'}
+                        onChange={() => setDirection('short')}
+                      />
+                      Short(売り)
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        className="accent-purple-500"
+                        checked={direction === 'long'}
+                        onChange={() => setDirection('long')}
+                      />
+                      Long(買い)
+                    </label>
+                  </div>
+                )}
+
+                {indicatorsQuery.data && !dualDirectionMode && (
                   <ConditionTreeEditor node={tree} indicators={indicatorsQuery.data} onChange={setTree} />
+                )}
+
+                {indicatorsQuery.data && dualDirectionMode && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="mb-1 text-xs font-semibold text-blue-300">Long条件</div>
+                      <ConditionTreeEditor node={longTree} indicators={indicatorsQuery.data} onChange={setLongTree} />
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs font-semibold text-purple-300">Short条件</div>
+                      <ConditionTreeEditor node={shortTree} indicators={indicatorsQuery.data} onChange={setShortTree} />
+                    </div>
+                  </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-2 text-sm">
@@ -595,6 +636,7 @@ export default function App() {
                 timeframe={timeframe}
                 mode={mode}
                 direction={direction}
+                dualDirectionMode={dualDirectionMode}
                 testCount={results?.ranking_total?.length ?? 0}
                 row={bestRow}
               />
