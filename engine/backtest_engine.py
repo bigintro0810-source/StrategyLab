@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from engine.conditions import evaluate_condition_tree
 from engine.signal_builder import build_candidate_signal
 
 
@@ -26,6 +27,7 @@ class BacktestConfig:
     weekend_exit_hour: int = 4
     use_daily_exit: bool = False
     daily_exit_hour: int = 4
+    direction: str = "short"
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -123,6 +125,11 @@ def build_previous_high_array(high_arr: np.ndarray, lookback: int) -> np.ndarray
     return high_series.rolling(window=lookback).max().shift(1).to_numpy(dtype=float)
 
 
+def build_previous_low_array(low_arr: np.ndarray, lookback: int) -> np.ndarray:
+    low_series = pd.Series(low_arr)
+    return low_series.rolling(window=lookback).min().shift(1).to_numpy(dtype=float)
+
+
 def run_backtest(
     df: pd.DataFrame,
     params: dict[str, Any] | BacktestConfig,
@@ -135,6 +142,10 @@ def run_backtest(
         p = dict(params)
 
     pip = float(p.get("pip_size", 0.01))
+
+    direction = str(p.get("direction", "short")).lower()
+    if direction not in ("short", "long"):
+        raise ValueError(f"未対応のdirectionです(short/longのみ対応): {direction}")
 
     ema_length = int(p["ema_length"])
     lookahead_bars = int(p["lookahead_bars"])
@@ -166,23 +177,30 @@ def run_backtest(
 
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
-    candidate_signal = build_candidate_signal(
-        df,
-        p,
-        {
-            "open": open_arr,
-            "high": high_arr,
-            "low": low_arr,
-            "close": close_arr,
-            "ema": ema_arr,
-            "rsi": rsi_arr,
-            "previous_high": previous_high_arr,
-            "hour": hour_arr,
-            "weekday": weekday_arr,
-            "is_intraday": is_intraday,
-            "pip": pip,
-        },
-    )
+    condition_tree = p.get("condition_tree")
+    if condition_tree is not None:
+        # V-next generic condition engine (engine/conditions.py) - additive path,
+        # selected only when a strategy explicitly supplies a condition_tree. The
+        # existing entry_trigger/use_X_filter path below is untouched otherwise.
+        candidate_signal = evaluate_condition_tree(condition_tree, df)
+    else:
+        candidate_signal = build_candidate_signal(
+            df,
+            p,
+            {
+                "open": open_arr,
+                "high": high_arr,
+                "low": low_arr,
+                "close": close_arr,
+                "ema": ema_arr,
+                "rsi": rsi_arr,
+                "previous_high": previous_high_arr,
+                "hour": hour_arr,
+                "weekday": weekday_arr,
+                "is_intraday": is_intraday,
+                "pip": pip,
+            },
+        )
 
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
@@ -232,13 +250,20 @@ def run_backtest(
             position_signal_bar = pending_signal_bar
             position_signal_time = pending_signal_time
 
-            stop_reference_high = float(position_signal_high)
-            stop_price = entry_price + ((stop_reference_high - entry_price) * 1.0)
-            risk_distance = stop_price - entry_price
+            if direction == "short":
+                stop_price = float(position_signal_high)
+                risk_distance = stop_price - entry_price
+            else:
+                stop_price = float(position_signal_low)
+                risk_distance = entry_price - stop_price
 
             if risk_distance > 0:
                 sl = stop_price
-                tp = entry_price - risk_distance * rr
+                tp = (
+                    entry_price - risk_distance * rr
+                    if direction == "short"
+                    else entry_price + risk_distance * rr
+                )
                 in_position = True
 
             pending_entry = False
@@ -260,8 +285,12 @@ def run_backtest(
                 exit_price = close_price
 
             else:
-                hit_sl = high_price >= sl
-                hit_tp = low_price <= tp
+                if direction == "short":
+                    hit_sl = high_price >= sl
+                    hit_tp = low_price <= tp
+                else:
+                    hit_sl = low_price <= sl
+                    hit_tp = high_price >= tp
 
                 if hit_sl and hit_tp:
                     exit_reason = "SL_and_TP_SL_first"
@@ -274,7 +303,11 @@ def run_backtest(
                     exit_price = tp
 
             if exit_reason is not None:
-                profit = entry_price - float(exit_price)
+                profit = (
+                    entry_price - float(exit_price)
+                    if direction == "short"
+                    else float(exit_price) - entry_price
+                )
                 profits.append(profit)
 
                 if return_trades:
@@ -317,7 +350,12 @@ def run_backtest(
             bars_from_signal = i - signal_bar
             within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
 
-            if within_bars and close_price < float(signal_low):
+            confirmation = (
+                close_price < float(signal_low)
+                if direction == "short"
+                else close_price > float(signal_high)
+            )
+            if within_bars and confirmation:
                 pending_entry = True
 
                 pending_signal_low = signal_low

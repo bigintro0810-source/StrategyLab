@@ -205,6 +205,7 @@ def build_trigger_filter_defaults() -> dict[str, list]:
     change.
     """
     return {
+        "direction": ["short"],
         "entry_trigger": ["breakout"],
         "use_session_filter": [True],
         "use_min_body_filter": [True],

@@ -29,6 +29,7 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "use_daily_exit": bool(row["use_daily_exit"]),
         "daily_exit_hour": int(row["daily_exit_hour"]),
         "pip_size": float(row.get("pip_size", DEFAULT_PIP_SIZE)),
+        "direction": str(row.get("direction", "short")),
         # V3.0 trigger/filter schema - .get() with defaults so rows from
         # before this schema existed (older saved runs/ranking CSVs) still
         # reconstruct cleanly, reproducing the pre-V3.0 breakout strategy.

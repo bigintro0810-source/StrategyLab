@@ -14,14 +14,17 @@ tested CLI pipeline rather than a second implementation of it.
 Run with: streamlit run gui_app.py
 """
 
+import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 from engine.comparison_report import export_comparison_report
+from engine.conditions import Condition, ConditionGroup
 from engine.strategy_registry import get_strategy, list_strategies, update_strategy
 from main import resolve_output_dir
 
@@ -42,7 +45,41 @@ with st.sidebar:
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "AUDUSD", "EURUSD", "GBPUSD"]
 
-tab_run, tab_saved = st.tabs(["バックテスト実行", "保存済み戦略"])
+tab_run, tab_builder, tab_saved = st.tabs(["バックテスト実行", "条件ビルダー", "保存済み戦略"])
+
+# 指標名 -> (表示名, 期間パラメータが必要か)。engine/conditions.py の
+# INDICATOR_REGISTRY と対応させてあり、新しい指標を足す場合は両方に追加する。
+BUILDER_INDICATORS = {
+    "close": ("終値", False),
+    "open": ("始値", False),
+    "high": ("高値", False),
+    "low": ("安値", False),
+    "candle_body": ("実体(終値-始値、符号あり)", False),
+    "ema": ("EMA", True),
+    "rsi": ("RSI", True),
+    "highest_high": ("直近高値(N本)", True),
+    "lowest_low": ("直近安値(N本)", True),
+    "donchian_mid": ("ドンチアン中央値", True),
+    "bollinger_upper": ("ボリンジャー上限", False),
+    "bollinger_middle": ("ボリンジャー中央", False),
+    "bollinger_lower": ("ボリンジャー下限", False),
+    "macd_line": ("MACDライン", False),
+    "macd_signal": ("MACDシグナル", False),
+    "stochastic_k": ("ストキャスティクス%K", False),
+    "stochastic_d": ("ストキャスティクス%D", False),
+    "hour": ("時刻(JST)", False),
+    "weekday": ("曜日(0=月〜6=日)", False),
+}
+
+BUILDER_OPERATORS = {
+    ">": "より上 (>)",
+    "<": "より下 (<)",
+    ">=": "以上 (>=)",
+    "<=": "以下 (<=)",
+    "==": "一致 (==)",
+    "crosses_above": "上抜け (crosses_above)",
+    "crosses_below": "下抜け (crosses_below)",
+}
 
 
 with tab_run:
@@ -143,6 +180,187 @@ with tab_run:
                     file_name="report.pdf",
                     mime="application/pdf",
                 )
+
+
+with tab_builder:
+    st.subheader("条件ビルダー")
+    st.caption(
+        "エントリー条件をチェックボックスで組み立てて実行します。有効にした条件は全てAND(かつ)で結合されます。"
+    )
+
+    direction_label = st.radio("方向", ["Short(売り)", "Long(買い)"], horizontal=True)
+    direction = "short" if direction_label.startswith("Short") else "long"
+
+    condition_rows = []
+    n_slots = 5
+
+    for slot in range(n_slots):
+        with st.container(border=True):
+            cols = st.columns([0.6, 2, 1.2, 1.6, 1.4, 1.4])
+
+            enabled = cols[0].checkbox("有効", key=f"cb_enabled_{slot}", value=(slot == 0))
+            indicator = cols[1].selectbox(
+                "指標",
+                list(BUILDER_INDICATORS.keys()),
+                format_func=lambda k: BUILDER_INDICATORS[k][0],
+                key=f"cb_indicator_{slot}",
+            )
+
+            needs_period = BUILDER_INDICATORS[indicator][1]
+            period = (
+                cols[2].number_input("期間", value=14, min_value=1, step=1, key=f"cb_period_{slot}")
+                if needs_period
+                else None
+            )
+
+            operator = cols[3].selectbox(
+                "演算子",
+                list(BUILDER_OPERATORS.keys()),
+                format_func=lambda k: BUILDER_OPERATORS[k],
+                key=f"cb_operator_{slot}",
+            )
+
+            compare_mode = cols[4].radio(
+                "比較先", ["固定値", "指標"], key=f"cb_comparemode_{slot}", horizontal=True
+            )
+
+            if compare_mode == "固定値":
+                threshold = cols[5].number_input(
+                    "しきい値", value=0.0, step=1.0, key=f"cb_threshold_{slot}"
+                )
+                value = threshold
+                value_params = {}
+            else:
+                compare_indicator = cols[5].selectbox(
+                    "比較先指標",
+                    list(BUILDER_INDICATORS.keys()),
+                    format_func=lambda k: BUILDER_INDICATORS[k][0],
+                    key=f"cb_compareindicator_{slot}",
+                )
+                value = compare_indicator
+                if BUILDER_INDICATORS[compare_indicator][1]:
+                    compare_period = st.number_input(
+                        "比較先の期間", value=14, min_value=1, step=1, key=f"cb_compareperiod_{slot}"
+                    )
+                    value_params = {"length": compare_period}
+                else:
+                    value_params = {}
+
+            if enabled:
+                params = {"length": period} if needs_period else {}
+                condition_rows.append(
+                    Condition(
+                        indicator=indicator,
+                        operator=operator,
+                        value=value,
+                        params=params,
+                        value_params=value_params,
+                    )
+                )
+
+    st.divider()
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        builder_mode = st.selectbox("モード", ["dev", "full"], key="builder_mode")
+        builder_timeframe = st.selectbox("時間足", TIMEFRAMES, index=2, key="builder_timeframe")
+        builder_symbol = st.selectbox("通貨ペア", SYMBOLS, key="builder_symbol")
+
+    with col_b:
+        builder_rr = st.number_input("Risk:Reward", value=1.2, step=0.1, key="builder_rr")
+        builder_lookahead = st.number_input(
+            "シグナル後の確認待ち(本数)", value=15, min_value=1, step=1, key="builder_lookahead"
+        )
+        builder_breakout_bars = st.number_input(
+            "直近高値/安値の参照期間(本数)", value=30, min_value=1, step=1, key="builder_breakout_bars"
+        )
+
+    with col_c:
+        builder_session_start = st.number_input(
+            "セッション開始時刻(JST)", value=8, min_value=0, max_value=23, step=1, key="builder_session_start"
+        )
+        builder_session_end = st.number_input(
+            "セッション終了時刻(JST)", value=3, min_value=0, max_value=23, step=1, key="builder_session_end"
+        )
+        builder_weekend_exit = st.checkbox("週末エグジット", value=True, key="builder_weekend_exit")
+
+    builder_save_name = st.text_input(
+        "この条件セットの保存名", value="", key="builder_save_name",
+        help="strategy_configs/に保存され、実行時に--strategy-configとして使われます",
+    )
+
+    if st.button("条件ビルダーで実行", key="builder_run"):
+        if not condition_rows:
+            st.error("少なくとも1つは条件を有効にしてください")
+        else:
+            tree = (
+                condition_rows[0].to_dict()
+                if len(condition_rows) == 1
+                else ConditionGroup(op="AND", children=condition_rows).to_dict()
+            )
+
+            strategy_params = {
+                "ema_length": [200],
+                "min_body_pips": [20.0],
+                "max_body_pips": [0.0],
+                "max_wick_pips": [0.0],
+                "lookahead_bars": [int(builder_lookahead)],
+                "breakout_bars": [int(builder_breakout_bars)],
+                "ema_distance_pips": [50.0],
+                "rsi_min": [70.0],
+                "rr": [float(builder_rr)],
+                "session_start": [int(builder_session_start)],
+                "session_end": [int(builder_session_end)],
+                "use_weekend_exit": [bool(builder_weekend_exit)],
+                "weekend_exit_hour": [4],
+                "use_daily_exit": [False],
+                "daily_exit_hour": [4],
+                "direction": [direction],
+                "condition_tree": [tree],
+            }
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            config_name = builder_save_name.strip() or f"builder_{timestamp}"
+            config_path = Path("strategy_configs") / f"{config_name}.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps({"name": config_name, "params": strategy_params}, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            cmd = [
+                sys.executable, "main.py",
+                "--mode", builder_mode,
+                "--timeframe", builder_timeframe,
+                "--symbol", builder_symbol,
+                "--strategy-config", str(config_path),
+            ]
+
+            with st.spinner(f"実行中: {' '.join(cmd)}"):
+                process = subprocess.run(
+                    cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+                )
+
+            if process.returncode != 0:
+                st.error("実行に失敗しました")
+                st.code(process.stderr or process.stdout)
+            else:
+                st.success(f"完了しました(保存した条件: {config_path})")
+
+                with st.expander("実行ログ"):
+                    st.code(process.stdout)
+
+                output_dir = resolve_output_dir(builder_symbol, builder_timeframe)
+                ranking_path = output_dir / "ranking_total.csv"
+
+                if ranking_path.exists():
+                    st.subheader("ランキング")
+                    st.dataframe(pd.read_csv(ranking_path).head(20))
+
+                report_path = output_dir / "report.html"
+                if report_path.exists():
+                    st.subheader("レポート")
+                    st.iframe(report_path.read_text(encoding="utf-8"), height=2600)
 
 
 with tab_saved:
