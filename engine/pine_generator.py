@@ -367,6 +367,20 @@ def generate_pine_script(
 ) -> str:
     p = dict(params)
 
+    # This generator only translates the entry_trigger/use_X_filter system
+    # below - it has no knowledge of engine/conditions.py's AND/OR/NOT
+    # condition-tree engine (the only entry method the web dashboard's
+    # builder UI exposes). Silently falling through would generate a Pine
+    # Script for the *default* entry_trigger ("breakout") instead of the
+    # strategy the user actually built and saved - wrong output with no
+    # error, which is worse than refusing outright.
+    if p.get("condition_tree") or p.get("long_condition_tree") or p.get("short_condition_tree"):
+        raise ValueError(
+            "このPine Script生成機能はcondition_tree(AND/OR/NOT条件エンジン)に対応していません。"
+            "対応しているのはentry_trigger/フィルター方式(V3.0以前)の戦略のみです。"
+            "condition_treeで組んだ戦略のPine Script化は未実装です。"
+        )
+
     title = strategy_title or f"StrategyLab {symbol} {timeframe} ({p.get('entry_trigger', 'breakout')})"
 
     trigger_expr, filter_exprs = _build_signal_expressions(p)
