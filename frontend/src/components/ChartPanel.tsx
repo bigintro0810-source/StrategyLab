@@ -13,6 +13,17 @@ interface Props {
   bars: PriceBar[]
   trades: TradeRow[]
   emaLength?: number
+  symbol?: string
+}
+
+// JPY pairs are quoted to 3 decimals (e.g. 154.321), everything else to 5
+// (e.g. 1.14347) - lightweight-charts defaults to 2, which would truncate
+// exactly the pip-level detail a strategy's conditions actually operate on.
+function priceFormatFor(symbol: string | undefined) {
+  const isJpyPair = (symbol ?? '').toUpperCase().includes('JPY')
+  return isJpyPair
+    ? { type: 'price' as const, precision: 3, minMove: 0.001 }
+    : { type: 'price' as const, precision: 5, minMove: 0.00001 }
 }
 
 function computeEMA(closes: number[], length: number): (number | null)[] {
@@ -77,7 +88,7 @@ function computeATR(highs: number[], lows: number[], closes: number[], period: n
   return result
 }
 
-export default function ChartPanel({ bars, trades, emaLength = 20 }: Props) {
+export default function ChartPanel({ bars, trades, emaLength = 20, symbol }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
 
@@ -99,6 +110,7 @@ export default function ChartPanel({ bars, trades, emaLength = 20 }: Props) {
       borderVisible: false,
       wickUpColor: '#22c55e',
       wickDownColor: '#ef4444',
+      priceFormat: priceFormatFor(symbol),
     })
 
     const times = bars.map((b) => Math.floor(new Date(b.datetime).getTime() / 1000) as UTCTimestamp)
@@ -207,7 +219,7 @@ export default function ChartPanel({ bars, trades, emaLength = 20 }: Props) {
       resizeObserver.disconnect()
       chart.remove()
     }
-  }, [bars, trades, emaLength])
+  }, [bars, trades, emaLength, symbol])
 
   return <div ref={containerRef} className="h-full min-h-[300px] w-full" />
 }

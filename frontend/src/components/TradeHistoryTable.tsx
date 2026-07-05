@@ -13,6 +13,8 @@ const COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => st
   { key: 'exit_reason', label: '決済理由' },
 ]
 
+const MAX_ROWS = 200
+
 export default function TradeHistoryTable({ rows }: Props) {
   if (rows.length === 0) {
     return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
@@ -20,6 +22,11 @@ export default function TradeHistoryTable({ rows }: Props) {
 
   return (
     <div className="overflow-auto">
+      {rows.length > MAX_ROWS && (
+        <div className="px-2 py-1 text-xs text-gray-500">
+          全{rows.length}件中、直近{MAX_ROWS}件を表示
+        </div>
+      )}
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b border-white/10 text-gray-400">
@@ -34,6 +41,7 @@ export default function TradeHistoryTable({ rows }: Props) {
           {rows
             .slice()
             .reverse()
+            .slice(0, MAX_ROWS)
             .map((row, i) => (
               <tr key={i} className="border-b border-white/5 hover:bg-white/[0.04]">
                 {COLUMNS.map((col) => {

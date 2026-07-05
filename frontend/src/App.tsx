@@ -523,7 +523,7 @@ export default function App() {
                 </label>
               </div>
               {priceQuery.data && (
-                <ChartPanel bars={priceQuery.data} trades={results?.trade_log ?? []} emaLength={emaLength} />
+                <ChartPanel bars={priceQuery.data} trades={results?.trade_log ?? []} emaLength={emaLength} symbol={symbol} />
               )}
             </Panel>
 
