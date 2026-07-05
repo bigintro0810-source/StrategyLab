@@ -76,15 +76,21 @@ export default function ConditionTreeEditor({ node, indicators, onChange, onRemo
         )}
       </div>
 
-      {node.children.map((child, i) =>
-        isGroup(child) ? (
+      {node.children.map((child, i) => {
+        // A group (this one) can never be left with zero children - the
+        // engine rejects an empty AND/OR/NOT with a raw Python traceback
+        // (engine/conditions.py's ConditionGroup.__post_init__), so hide the
+        // remove button on the last remaining child instead of letting the
+        // user reach that state from the UI at all.
+        const canRemove = node.children.length > 1
+        return isGroup(child) ? (
           <ConditionTreeEditor
             key={i}
             node={child}
             indicators={indicators}
             depth={depth + 1}
             onChange={(next) => updateChild(i, next)}
-            onRemove={() => removeChild(i)}
+            onRemove={canRemove ? () => removeChild(i) : undefined}
           />
         ) : (
           <ConditionRow
@@ -92,10 +98,10 @@ export default function ConditionTreeEditor({ node, indicators, onChange, onRemo
             node={child}
             indicators={indicators}
             onChange={(next) => updateChild(i, next)}
-            onRemove={() => removeChild(i)}
+            onRemove={canRemove ? () => removeChild(i) : undefined}
           />
-        ),
-      )}
+        )
+      })}
 
       {(!isNot || node.children.length === 0) && (
         <div className="flex gap-2">

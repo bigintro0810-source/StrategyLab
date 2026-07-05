@@ -14,7 +14,7 @@ interface Props {
   node: ConditionNode
   indicators: IndicatorInfo[]
   onChange: (next: ConditionNode) => void
-  onRemove: () => void
+  onRemove?: () => void
 }
 
 function indicatorInfo(indicators: IndicatorInfo[], id: string): IndicatorInfo | undefined {
@@ -126,13 +126,15 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
         </>
       )}
 
-      <button
-        type="button"
-        onClick={onRemove}
-        className="ml-auto rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-red-300 hover:bg-red-500/20"
-      >
-        削除
-      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="ml-auto rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-red-300 hover:bg-red-500/20"
+        >
+          削除
+        </button>
+      )}
     </div>
   )
 }
