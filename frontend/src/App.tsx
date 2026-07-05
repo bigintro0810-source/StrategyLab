@@ -22,20 +22,20 @@ import YearlyPerformanceChart from './components/YearlyPerformanceChart'
 import StatsPanel from './components/StatsPanel'
 import StrategySummaryPanel from './components/StrategySummaryPanel'
 
-const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v3'
+const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
 
 const DEFAULT_LAYOUT: Layout = [
-  { i: 'builder', x: 0, y: 0, w: 3, h: 44, minW: 2, minH: 8 },
-  { i: 'chart', x: 3, y: 0, w: 6, h: 12, minW: 3, minH: 6 },
-  { i: 'ranking', x: 9, y: 0, w: 3, h: 12, minW: 2, minH: 4 },
-  { i: 'equity', x: 3, y: 12, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'drawdown', x: 6, y: 12, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'summary', x: 9, y: 12, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'heatmap', x: 3, y: 21, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'yearly', x: 6, y: 21, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'stats', x: 9, y: 21, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'surface', x: 3, y: 30, w: 6, h: 14, minW: 4, minH: 6 },
-  { i: 'trades', x: 9, y: 30, w: 3, h: 14, minW: 2, minH: 6 },
+  { i: 'builder', x: 0, y: 0, w: 3, h: 48, minW: 2, minH: 8 },
+  { i: 'chart', x: 3, y: 0, w: 6, h: 16, minW: 3, minH: 8 },
+  { i: 'ranking', x: 9, y: 0, w: 3, h: 16, minW: 2, minH: 4 },
+  { i: 'equity', x: 3, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'drawdown', x: 6, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'summary', x: 9, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'heatmap', x: 3, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'yearly', x: 6, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'stats', x: 9, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
+  { i: 'surface', x: 3, y: 34, w: 6, h: 14, minW: 4, minH: 6 },
+  { i: 'trades', x: 9, y: 34, w: 3, h: 14, minW: 2, minH: 6 },
 ]
 
 const OPTIMIZABLE_PARAMS: OptimizableParam[] = [

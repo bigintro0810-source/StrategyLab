@@ -32,6 +32,51 @@ function computeEMA(closes: number[], length: number): (number | null)[] {
   return result
 }
 
+// Wilder smoothing, matching engine/backtest_engine.py's RSI/ATR so the chart
+// overlay agrees with the values the strategy conditions actually evaluate.
+function computeRSI(closes: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = new Array(closes.length).fill(null)
+  if (closes.length <= period) return result
+
+  let avgGain = 0
+  let avgLoss = 0
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1]
+    avgGain += Math.max(diff, 0)
+    avgLoss += Math.max(-diff, 0)
+  }
+  avgGain /= period
+  avgLoss /= period
+  result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1]
+    avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period
+    avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period
+    result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+  }
+  return result
+}
+
+function computeATR(highs: number[], lows: number[], closes: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = new Array(closes.length).fill(null)
+  if (closes.length <= period) return result
+
+  const trueRange = (i: number) =>
+    Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]))
+
+  let atr = 0
+  for (let i = 1; i <= period; i++) atr += trueRange(i)
+  atr /= period
+  result[period] = atr
+
+  for (let i = period + 1; i < closes.length; i++) {
+    atr = (atr * (period - 1) + trueRange(i)) / period
+    result[i] = atr
+  }
+  return result
+}
+
 export default function ChartPanel({ bars, trades, emaLength = 20 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -83,6 +128,46 @@ export default function ChartPanel({ bars, trades, emaLength = 20 }: Props) {
       })
       emaSeries.setData(emaData)
     }
+
+    const rsiValues = computeRSI(
+      bars.map((b) => b.close),
+      14,
+    )
+    const rsiData = rsiValues
+      .map((v, i) => (v === null ? null : { time: times[i], value: v }))
+      .filter((v): v is { time: UTCTimestamp; value: number } => v !== null)
+    if (rsiData.length > 0) {
+      const rsiSeries = chart.addSeries(
+        LineSeries,
+        { color: '#a78bfa', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: 'RSI(14)' },
+        1,
+      )
+      rsiSeries.setData(rsiData)
+      rsiSeries.createPriceLine({ price: 70, color: 'rgba(239,68,68,0.4)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '70' })
+      rsiSeries.createPriceLine({ price: 30, color: 'rgba(34,197,94,0.4)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '30' })
+    }
+
+    const atrValues = computeATR(
+      bars.map((b) => b.high),
+      bars.map((b) => b.low),
+      bars.map((b) => b.close),
+      14,
+    )
+    const atrData = atrValues
+      .map((v, i) => (v === null ? null : { time: times[i], value: v }))
+      .filter((v): v is { time: UTCTimestamp; value: number } => v !== null)
+    if (atrData.length > 0) {
+      const atrSeries = chart.addSeries(
+        LineSeries,
+        { color: '#38bdf8', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: 'ATR(14)' },
+        2,
+      )
+      atrSeries.setData(atrData)
+    }
+
+    chart.panes().forEach((pane, i) => {
+      if (i > 0) pane.setHeight(80)
+    })
 
     if (trades.length > 0) {
       const markers = trades
