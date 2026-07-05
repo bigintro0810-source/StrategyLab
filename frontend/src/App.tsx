@@ -453,6 +453,9 @@ export default function App() {
                     <option value="full">full(本番)</option>
                   </select>
                 </div>
+                <div className="text-xs text-gray-500">
+                  ※この条件ビルダーではdev/fullの違いはレポート上の表記のみです(パラメータの範囲は下の「パラメータ最適化」で指定してください)
+                </div>
 
                 <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
                   <div className="text-xs font-semibold text-gray-400">決済ルール</div>
