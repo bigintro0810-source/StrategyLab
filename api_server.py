@@ -61,6 +61,9 @@ class BacktestRequest(BaseModel):
     weekend_exit_hour: int = 4
     use_daily_exit: bool = False
     daily_exit_hour: int = 4
+    spread_pips: float = 0.0
+    slippage_pips: float = 0.0
+    commission_per_trade: float = 0.0
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -83,6 +86,9 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "weekend_exit_hour": [req.weekend_exit_hour],
         "use_daily_exit": [req.use_daily_exit],
         "daily_exit_hour": [req.daily_exit_hour],
+        "spread_pips": [req.spread_pips],
+        "slippage_pips": [req.slippage_pips],
+        "commission_per_trade": [req.commission_per_trade],
         "direction": [req.direction],
         "condition_tree": [req.condition_tree],
     }

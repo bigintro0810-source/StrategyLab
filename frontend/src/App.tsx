@@ -222,6 +222,13 @@ export default function App() {
   const [dailyExitHour, setDailyExitHour] = useState(4)
   const [saveAsName, setSaveAsName] = useState('')
 
+  // Execution cost simulation - all default to 0 (frictionless fills,
+  // matching the engine's default) so leaving these untouched reproduces
+  // today's existing behavior exactly.
+  const [spreadPips, setSpreadPips] = useState(0)
+  const [slippagePips, setSlippagePips] = useState(0)
+  const [commissionPerTrade, setCommissionPerTrade] = useState(0)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -257,6 +264,9 @@ export default function App() {
       if (typeof detail.params.weekend_exit_hour === 'number') setWeekendExitHour(detail.params.weekend_exit_hour)
       if (typeof detail.params.use_daily_exit === 'boolean') setUseDailyExit(detail.params.use_daily_exit)
       if (typeof detail.params.daily_exit_hour === 'number') setDailyExitHour(detail.params.daily_exit_hour)
+      if (typeof detail.params.spread_pips === 'number') setSpreadPips(detail.params.spread_pips)
+      if (typeof detail.params.slippage_pips === 'number') setSlippagePips(detail.params.slippage_pips)
+      if (typeof detail.params.commission_per_trade === 'number') setCommissionPerTrade(detail.params.commission_per_trade)
     },
   })
 
@@ -280,6 +290,9 @@ export default function App() {
         weekend_exit_hour: weekendExitHour,
         use_daily_exit: useDailyExit,
         daily_exit_hour: dailyExitHour,
+        spread_pips: spreadPips,
+        slippage_pips: slippagePips,
+        commission_per_trade: commissionPerTrade,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -448,6 +461,43 @@ export default function App() {
                       onChange={(e) => setDailyExitHour(Number(e.target.value))}
                     />
                     時
+                  </label>
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                  <div className="text-xs font-semibold text-gray-400">設定(約定コスト・任意)</div>
+                  <label className="flex items-center justify-between text-xs text-gray-300">
+                    スプレッド(pips)
+                    <input
+                      type="number"
+                      step={0.1}
+                      min={0}
+                      className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs"
+                      value={spreadPips}
+                      onChange={(e) => setSpreadPips(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between text-xs text-gray-300">
+                    スリッページ(pips)
+                    <input
+                      type="number"
+                      step={0.1}
+                      min={0}
+                      className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs"
+                      value={slippagePips}
+                      onChange={(e) => setSlippagePips(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between text-xs text-gray-300">
+                    手数料(1取引あたり)
+                    <input
+                      type="number"
+                      step={0.01}
+                      min={0}
+                      className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs"
+                      value={commissionPerTrade}
+                      onChange={(e) => setCommissionPerTrade(Number(e.target.value))}
+                    />
                   </label>
                 </div>
 

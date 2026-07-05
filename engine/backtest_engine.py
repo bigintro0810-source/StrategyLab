@@ -28,6 +28,12 @@ class BacktestConfig:
     use_daily_exit: bool = False
     daily_exit_hour: int = 4
     direction: str = "short"
+    # Execution cost simulation - all default to 0.0 (frictionless fills,
+    # exactly today's behavior) so existing callers/tests are unaffected
+    # unless they opt in.
+    spread_pips: float = 0.0
+    slippage_pips: float = 0.0
+    commission_per_trade: float = 0.0
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -142,6 +148,16 @@ def run_backtest(
         p = dict(params)
 
     pip = float(p.get("pip_size", 0.01))
+
+    # Round-trip execution cost, expressed in the same price-difference units
+    # as "profit" below (this codebase already calls that unit "pips" without
+    # actually dividing by pip_size - matching that existing convention here
+    # rather than introducing a second, inconsistent one).
+    cost_per_trade = (
+        float(p.get("spread_pips", 0.0)) * pip
+        + float(p.get("slippage_pips", 0.0)) * pip
+        + float(p.get("commission_per_trade", 0.0))
+    )
 
     direction = str(p.get("direction", "short")).lower()
     if direction not in ("short", "long"):
@@ -308,6 +324,7 @@ def run_backtest(
                     if direction == "short"
                     else float(exit_price) - entry_price
                 )
+                profit -= cost_per_trade
                 profits.append(profit)
 
                 if return_trades:

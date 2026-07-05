@@ -47,6 +47,9 @@ export interface BacktestRequest {
   weekend_exit_hour?: number
   use_daily_exit?: boolean
   daily_exit_hour?: number
+  spread_pips?: number
+  slippage_pips?: number
+  commission_per_trade?: number
 }
 
 export interface ParamRangeConfig {
