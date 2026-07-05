@@ -6,13 +6,27 @@ whitelist, and had already drifted (walk_forward.py's copy was missing
 pip_size). Both now call this instead.
 """
 
+import ast
 from typing import Any
 
 DEFAULT_PIP_SIZE = 0.01
 
 
+def _reconstruct_condition_tree(row: dict[str, Any]) -> dict | None:
+    """condition_tree survives a CSV round-trip as a Python-repr string
+    (pandas str()-ifies dict cells), not JSON - e.g. "{'op': 'AND', ...}"
+    with single quotes, so it needs ast.literal_eval rather than json.loads."""
+    raw = row.get("condition_tree")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return ast.literal_eval(raw)
+    return None
+
+
 def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
     return {
+        "condition_tree": _reconstruct_condition_tree(row),
         "ema_length": int(row["ema_length"]),
         "min_body_pips": float(row["min_body_pips"]),
         "max_body_pips": float(row["max_body_pips"]),
