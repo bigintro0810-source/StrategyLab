@@ -8,12 +8,14 @@ import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday
 from engine.params import reconstruct_params_from_row
+from engine.strategy_config_loader import load_strategy_config
 from main import (
     AVAILABLE_TIMEFRAMES,
     SUPPORTED_SYMBOLS,
     find_data_file,
     load_price_data,
     build_parameter_grid,
+    build_grid_from_space,
     format_seconds,
     resolve_output_dir,
 )
@@ -129,6 +131,13 @@ def parse_args() -> argparse.Namespace:
         help="使用する時間足 (デフォルト: 15m)",
     )
 
+    parser.add_argument(
+        "--strategy-config",
+        default=None,
+        help="strategy_configs/*.json のパスを指定すると、内蔵のfullグリッドの代わりにこの設定を使う"
+        "(main.pyの--strategy-configと同じ仕組み。condition_treeで組んだ戦略もこれで検証可能)",
+    )
+
     return parser.parse_args()
 
 
@@ -148,7 +157,11 @@ def main() -> None:
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
-    params_list = build_parameter_grid("full", args.symbol)
+    if args.strategy_config:
+        params_list = build_grid_from_space(load_strategy_config(Path(args.strategy_config)))
+        print(f"ストラテジー設定ファイル: {args.strategy_config}")
+    else:
+        params_list = build_parameter_grid("full", args.symbol)
     windows = build_windows()
 
     print(f"データ数: {len(df):,}")
