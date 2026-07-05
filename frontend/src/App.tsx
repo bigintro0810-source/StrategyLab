@@ -452,7 +452,7 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-xs font-semibold text-gray-400">⑤ パラメータ最適化(任意・3Dグラフ用)</div>
+                  <div className="text-xs font-semibold text-gray-400">パラメータ最適化(任意・3Dグラフ用)</div>
                   <ParamRangeRow label="パラメータ1" value={paramRangeX} onChange={setParamRangeX} />
                   <ParamRangeRow label="パラメータ2" value={paramRangeY} onChange={setParamRangeY} />
                   <select
