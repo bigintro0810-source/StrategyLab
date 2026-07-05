@@ -33,13 +33,18 @@ Strategy Lab - 使い方
 お使いのFX会社やTradingView等からエクスポートしたヒストリカルデータ
 (CSV形式)をご自身でご用意ください。
 
-配置場所: data\raw フォルダの中
+対応通貨ペア: USDJPY, EURJPY, GBPJPY, AUDJPY, AUDUSD, EURUSD, GBPUSD
+
+配置場所: data\raw\{通貨ペア}_Data フォルダの中(推奨)
 
 ファイル名の形式: {通貨ペア}_2003_2026_{時間足}.csv
-  例: USDJPY_2003_2026_15m.csv
+  例: data\raw\USDJPY_Data\USDJPY_2003_2026_15m.csv
 
 必要な列(ヘッダー行に以下の名前を含めてください、大文字小文字は問いません):
   datetime (または time / date), open, high, low, close
+
+ブローカーのタイムスタンプがJST(日本時間)でない場合(EET/東欧時間等)は、
+同梱の import_broker_csv.py で変換できます。
 
 詳しくは data\raw フォルダ内のREADME.txtもご参照ください。
 
@@ -55,6 +60,26 @@ Strategy Lab - 使い方
 4. 気に入った戦略は「保存名」を入力して実行すると、
    「保存済み戦略」タブで後から見返したり、複数の戦略を
    比較したりできます。
+
+============================================================
+TradingView用Pine Scriptの生成
+============================================================
+
+バックテストした戦略をTradingViewで使えるPine Script(v5)に
+変換できます。コマンドプロンプトから以下のように実行してください
+(run.batを閉じずに、別のコマンドプロンプトで app フォルダに移動して
+実行するか、run.batのウィンドウを終了してから実行してください)。
+
+  ranking_total.csv の1位の戦略から生成する場合:
+    python generate_pinescript.py --ranking-csv output\ranking_total.csv --rank 1
+
+  「保存済み戦略」タブで保存した戦略から生成する場合:
+    python generate_pinescript.py --strategy-id 保存した戦略のID
+
+生成された.pineファイルの中身をTradingViewのPineエディタに貼り付けて
+ご利用ください。一部、Python版と完全には一致しない箇所(日足の
+セッション境界の違いなど)がスクリプト冒頭のコメントに記載されて
+いますので、実際の値動きと必ず照らし合わせてご確認ください。
 
 ============================================================
 お問い合わせ
