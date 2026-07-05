@@ -6,6 +6,8 @@ import type {
   BacktestStatus,
   IndicatorInfo,
   PriceBar,
+  StrategyDetail,
+  StrategyListEntry,
 } from './types'
 
 const client = axios.create({ baseURL: '/api' })
@@ -32,5 +34,15 @@ export async function fetchBacktestStatus(jobId: string): Promise<BacktestStatus
 
 export async function fetchBacktestResults(jobId: string): Promise<BacktestResults> {
   const res = await client.get<BacktestResults>(`/backtests/${jobId}/results`)
+  return res.data
+}
+
+export async function fetchStrategies(): Promise<StrategyListEntry[]> {
+  const res = await client.get<StrategyListEntry[]>('/strategies')
+  return res.data
+}
+
+export async function fetchStrategyDetail(strategyId: string): Promise<StrategyDetail> {
+  const res = await client.get<StrategyDetail>(`/strategies/${strategyId}`)
   return res.data
 }

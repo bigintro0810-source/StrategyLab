@@ -148,6 +148,25 @@ export interface BacktestResults {
   stability_analysis: Record<string, unknown>[]
 }
 
+export interface StrategyListEntry {
+  id: string
+  name: string
+  created_at: string
+  mode: string
+  timeframe: string
+  symbol: string
+  tags: string[]
+  favorite: boolean
+  metrics: Record<string, number>
+}
+
+export interface StrategyDetail extends StrategyListEntry {
+  memo: string
+  strategy_config: string | null
+  params: Record<string, unknown> & { condition_tree?: TreeNode | null; direction?: Direction }
+  snapshot_dir: string
+}
+
 export interface PriceBar {
   datetime: string
   open: number

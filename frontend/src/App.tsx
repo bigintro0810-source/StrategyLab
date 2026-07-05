@@ -1,5 +1,5 @@
-import { forwardRef, useState, type HTMLAttributes, type ReactNode } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { forwardRef, useEffect, useState, type HTMLAttributes, type ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { GridLayout, useContainerWidth, type Layout } from 'react-grid-layout'
 import 'react-resizable/css/styles.css'
 import {
@@ -8,6 +8,8 @@ import {
   fetchBacktestStatus,
   fetchIndicators,
   fetchPriceData,
+  fetchStrategies,
+  fetchStrategyDetail,
 } from './api'
 import type { BacktestResults, Direction, GroupNode, OptimizableParam, ParamRangeConfig } from './types'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
@@ -21,6 +23,7 @@ import TradeHistoryTable from './components/TradeHistoryTable'
 import YearlyPerformanceChart from './components/YearlyPerformanceChart'
 import StatsPanel from './components/StatsPanel'
 import StrategySummaryPanel from './components/StrategySummaryPanel'
+import SavedStrategiesPanel from './components/SavedStrategiesPanel'
 
 const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
 
@@ -36,6 +39,7 @@ const DEFAULT_LAYOUT: Layout = [
   { i: 'stats', x: 9, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
   { i: 'surface', x: 3, y: 34, w: 6, h: 14, minW: 4, minH: 6 },
   { i: 'trades', x: 9, y: 34, w: 3, h: 14, minW: 2, minH: 6 },
+  { i: 'saved', x: 0, y: 48, w: 12, h: 10, minW: 4, minH: 4 },
 ]
 
 const OPTIMIZABLE_PARAMS: OptimizableParam[] = [
@@ -216,6 +220,7 @@ export default function App() {
   const [weekendExitHour, setWeekendExitHour] = useState(4)
   const [useDailyExit, setUseDailyExit] = useState(false)
   const [dailyExitHour, setDailyExitHour] = useState(4)
+  const [saveAsName, setSaveAsName] = useState('')
 
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
@@ -230,10 +235,29 @@ export default function App() {
     setLayout(DEFAULT_LAYOUT)
   }
 
+  const queryClient = useQueryClient()
+
   const indicatorsQuery = useQuery({ queryKey: ['indicators'], queryFn: fetchIndicators })
   const priceQuery = useQuery({
     queryKey: ['price-data', symbol, chartTimeframe],
     queryFn: () => fetchPriceData(symbol, chartTimeframe, 300),
+  })
+  const strategiesQuery = useQuery({ queryKey: ['strategies'], queryFn: fetchStrategies })
+
+  const loadStrategyMutation = useMutation({
+    mutationFn: fetchStrategyDetail,
+    onSuccess: (detail) => {
+      setSymbol(detail.symbol)
+      setTimeframe(detail.timeframe)
+      setMode(detail.mode)
+      if (detail.params.direction) setDirection(detail.params.direction)
+      if (detail.params.condition_tree) setTree(detail.params.condition_tree as GroupNode)
+      if (typeof detail.params.rr === 'number') setRr(detail.params.rr)
+      if (typeof detail.params.use_weekend_exit === 'boolean') setUseWeekendExit(detail.params.use_weekend_exit)
+      if (typeof detail.params.weekend_exit_hour === 'number') setWeekendExitHour(detail.params.weekend_exit_hour)
+      if (typeof detail.params.use_daily_exit === 'boolean') setUseDailyExit(detail.params.use_daily_exit)
+      if (typeof detail.params.daily_exit_hour === 'number') setDailyExitHour(detail.params.daily_exit_hour)
+    },
   })
 
   const runMutation = useMutation({
@@ -256,6 +280,7 @@ export default function App() {
         weekend_exit_hour: weekendExitHour,
         use_daily_exit: useDailyExit,
         daily_exit_hour: dailyExitHour,
+        save_as: saveAsName.trim() || undefined,
       })
     },
     onSuccess: (data) => setJobId(data.job_id),
@@ -277,6 +302,12 @@ export default function App() {
     queryFn: () => fetchBacktestResults(jobId as string),
     enabled: jobId !== null && statusQuery.data?.status === 'done',
   })
+
+  useEffect(() => {
+    if (statusQuery.data?.status === 'done' && saveAsName.trim() !== '') {
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
+    }
+  }, [statusQuery.data?.status, saveAsName, queryClient])
 
   const results = resultsQuery.data
   const bestRow = results?.ranking_total?.[0]
@@ -437,6 +468,14 @@ export default function App() {
                   </select>
                 </div>
 
+                <input
+                  type="text"
+                  placeholder="名前を付けて保存(任意)"
+                  className="glass-input w-full rounded-lg px-2 py-1.5 text-xs"
+                  value={saveAsName}
+                  onChange={(e) => setSaveAsName(e.target.value)}
+                />
+
                 <button
                   type="button"
                   onClick={() => runMutation.mutate()}
@@ -535,6 +574,14 @@ export default function App() {
 
             <Panel key="trades" title="⑤ 取引履歴">
               <TradeHistoryTable rows={results?.trade_log ?? []} />
+            </Panel>
+
+            <Panel key="saved" title="保存済み戦略">
+              <SavedStrategiesPanel
+                strategies={strategiesQuery.data ?? []}
+                onLoad={(id) => loadStrategyMutation.mutate(id)}
+                isLoading={loadStrategyMutation.isPending}
+              />
             </Panel>
           </GridLayout>
         )}
