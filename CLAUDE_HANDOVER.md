@@ -353,67 +353,48 @@ GUI化（Streamlit等） → 完了（2026-07-02）。`gui_app.py`（`streamlit 
 
 ---
 
-# Version5.0予定
+# Version5.0（2026-07-05、ユーザー指示によりスコープ確定・実装完了）
 
-Pine Script自動生成
+**Pine Script自動生成のみ。完了。** Strategy Labのバックテスト結果(トリガー/フィルター設定)をTradingView用のPine Script v5に変換する。`engine/pine_generator.py`(生成ロジック)+`generate_pinescript.py`(CLI、`--strategy-id`または`--ranking-csv --rank`で入力元を指定)。
 
-Strategy自動生成
+全16トリガー・全22フィルターに対応。EMA/RSI(Wilder)/Donchian/Bollinger/MACD/Ichimoku/Stochastic/SuperTrend/ADXは`ta.ema`/`ta.rma`/`ta.highest`/`ta.lowest`/`ta.sma`/`ta.stdev`など最も基本的なPine関数のみで手動実装(`ta.macd()`/`ta.stoch()`/`ta.supertrend()`/`ta.dmi()`のような高レベル組み込み関数は、符号規約(例:SuperTrendのdirectionの向き)をPine実行環境なしに検証できないため意図的に不使用)。エントリー/エグジットの多足ステートマシン(シグナル足のhigh/lowを記録→lookahead_bars以内にclose<signal_lowでエントリー→SL=signal_high固定/TP=RRベース)も`engine/backtest_engine.py::run_backtest()`を忠実に翻訳。全パラメータを`input.*()`で公開し、TradingView上で調整可能(生成時点のバックテスト値がデフォルト)。
 
-Indicator自動生成
+**既知の非互換点(意図的、`engine/pine_generator.py`のdocstringに詳細記載):**
+1. 日足レベル(pivot/prevDayHigh/Low)はTradingViewの標準日足セッション境界を使用(Pythonエンジンのデータパイプラインが使うJST深夜0時境界とは異なる)
+2. BollingerのstdevはPine側が母集団(N)、pandas側が標本(N-1)で若干の数値差
+3. SMC Tier3(FVG/OrderBlock/BOS/CHoCH/LiquiditySweep)はPython側でも「未検証・実験的」と明記されている通り、Pine変換もベストエフォート。特にOrder Blockは未来足を見るPython実装をそのまま再現できないため1足遅れて発火する
+4. 週末/日次エグジットとSL/TPの同一足内の優先順位は近似(週末/日次エグジットを先にチェックしてクローズ、なければSL/TP)
 
-アラートコード生成
+TradingView一致検証の自動化は明示的にスコープ外(前述の通り)のため、生成したスクリプトの実TradingView上での動作確認はユーザー側で行う想定。
 
-TradingView一致検証の自動化
-
----
-
-# Version6.0予定
-
-自然言語からのストラテジー作成
-
-改善提案
-
-過剰最適化検出
-
-フィルター提案
-
-自動レポート生成
-
----
-
-# Version7.0以降予定
-
-GPU最適化・並列化強化
-
-通貨相性分析・共通パターン発見
-
-夜間自動バックテスト・定期レポート
-
-MT5 / cTrader / API連携
-
-Discord / LINE通知
-
-Web版・クラウド実行
+以下は完成形から明示的に除外（2026-07-05のユーザー指示）。今後もやらない：
+- TradingView一致検証の自動化
+- 自然言語からのストラテジー作成をソフト自体に組み込むこと（LLM API連携）
+- 改善提案・過剰最適化検出・フィルター提案・自動レポート生成の自動化（既存のConfidence Score/感度分析/HTMLレポートで代替済みとの判断）
+- GPU最適化・並列化強化
+- 通貨相性分析・共通パターン発見
+- 夜間自動バックテスト・定期レポート
+- MT5 / cTrader / API連携
+- Discord / LINE通知
+- Web版・クラウド実行
 
 ---
 
-# 最終目標（完成形）
+# 最終目標（完成形、2026-07-05にスコープ確定）
 
 「世界最高レベルの個人向けストラテジー研究プラットフォーム」を作ること。
 
 理想のワークフロー：
 
-アイデアを自然言語やGUIで入力
+GUIでストラテジー条件を入力
 
 数十年・複数通貨・複数時間足で高速検証
 
 Walk Forward・Monte Carlo・安定度などで信頼性を自動評価
 
-AIが改善案を提案
-
 採用した戦略をTradingView用のPine Scriptとして自動生成
 
-必要に応じて実運用や監視へつなげる
+（自然言語でのストラテジー作成やAIによる改善提案は、ソフト自体に組み込むのではなくClaude Codeとの対話で行う。実運用連携・監視は完成形から除外）
 
 ---
 
