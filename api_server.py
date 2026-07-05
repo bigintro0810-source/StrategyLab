@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from engine.conditions import INDICATOR_REGISTRY
 from engine.strategy_registry import get_strategy, list_strategies
-from main import find_data_file, load_price_data, resolve_output_dir
+from main import find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
 
 app = FastAPI(title="Strategy Lab API")
 
@@ -94,6 +94,13 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "spread_pips": [req.spread_pips],
         "slippage_pips": [req.slippage_pips],
         "commission_per_trade": [req.commission_per_trade],
+        # Without this, run_backtest()/engine/filters.py silently fall back to
+        # pip_size=0.01 (main.py's own default grid always sets this
+        # per-symbol, but --strategy-config JSON files don't unless told to) -
+        # correct for JPY pairs, but 100x too large for EURUSD/GBPUSD/AUDUSD,
+        # silently corrupting every _pips-suffixed filter threshold and the
+        # spread/slippage cost above for 3 of the 7 supported symbols.
+        "pip_size": [pip_size_for_symbol(req.symbol)],
         "direction": [req.direction],
         "condition_tree": [req.condition_tree],
         "long_condition_tree": [req.long_condition_tree],
