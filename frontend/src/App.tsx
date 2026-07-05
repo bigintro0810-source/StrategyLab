@@ -211,6 +211,12 @@ export default function App() {
   const [paramRangeY, setParamRangeY] = useState<ParamRangeConfig>(() => defaultParamRange('rr'))
   const [optimizationMetric, setOptimizationMetric] = useState('net_profit')
 
+  const [rr, setRr] = useState(1.2)
+  const [useWeekendExit, setUseWeekendExit] = useState(true)
+  const [weekendExitHour, setWeekendExitHour] = useState(4)
+  const [useDailyExit, setUseDailyExit] = useState(false)
+  const [dailyExitHour, setDailyExitHour] = useState(4)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -245,6 +251,11 @@ export default function App() {
         direction,
         condition_tree: tree,
         param_ranges,
+        rr,
+        use_weekend_exit: useWeekendExit,
+        weekend_exit_hour: weekendExitHour,
+        use_daily_exit: useDailyExit,
+        daily_exit_hour: dailyExitHour,
       })
     },
     onSuccess: (data) => setJobId(data.job_id),
@@ -356,6 +367,57 @@ export default function App() {
                     <option value="dev">dev(軽量)</option>
                     <option value="full">full(本番)</option>
                   </select>
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                  <div className="text-xs font-semibold text-gray-400">決済ルール</div>
+                  <label className="flex items-center justify-between text-xs text-gray-300">
+                    リスクリワード比(RR)
+                    <input
+                      type="number"
+                      step={0.1}
+                      min={0.1}
+                      className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs"
+                      value={rr}
+                      onChange={(e) => setRr(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useWeekendExit}
+                      onChange={(e) => setUseWeekendExit(e.target.checked)}
+                    />
+                    週末決済を使う
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      disabled={!useWeekendExit}
+                      className="glass-input ml-auto w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                      value={weekendExitHour}
+                      onChange={(e) => setWeekendExitHour(Number(e.target.value))}
+                    />
+                    時
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useDailyExit}
+                      onChange={(e) => setUseDailyExit(e.target.checked)}
+                    />
+                    日次決済を使う
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      disabled={!useDailyExit}
+                      className="glass-input ml-auto w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                      value={dailyExitHour}
+                      onChange={(e) => setDailyExitHour(Number(e.target.value))}
+                    />
+                    時
+                  </label>
                 </div>
 
                 <div className="space-y-2">

@@ -56,9 +56,14 @@ class BacktestRequest(BaseModel):
     # main.py's grid optimizer (itertools.product across param_space) produces
     # one ranking_total.csv row per combination instead of just one row.
     param_ranges: Optional[dict[str, list[float]]] = None
+    rr: float = 1.2
+    use_weekend_exit: bool = True
+    weekend_exit_hour: int = 4
+    use_daily_exit: bool = False
+    daily_exit_hour: int = 4
 
 
-def _build_strategy_config(direction: str, condition_tree: dict, param_ranges: Optional[dict[str, list[float]]]) -> Path:
+def _build_strategy_config(req: "BacktestRequest") -> Path:
     """Mirrors gui_app.py's condition-builder tab: wrap the condition tree
     plus the base BacktestConfig-shaped params into a strategy_configs/*.json
     file, consumed by main.py via the existing --strategy-config mechanism."""
@@ -71,17 +76,17 @@ def _build_strategy_config(direction: str, condition_tree: dict, param_ranges: O
         "breakout_bars": [30],
         "ema_distance_pips": [50.0],
         "rsi_min": [70.0],
-        "rr": [1.2],
+        "rr": [req.rr],
         "session_start": [8],
         "session_end": [3],
-        "use_weekend_exit": [True],
-        "weekend_exit_hour": [4],
-        "use_daily_exit": [False],
-        "daily_exit_hour": [4],
-        "direction": [direction],
-        "condition_tree": [condition_tree],
+        "use_weekend_exit": [req.use_weekend_exit],
+        "weekend_exit_hour": [req.weekend_exit_hour],
+        "use_daily_exit": [req.use_daily_exit],
+        "daily_exit_hour": [req.daily_exit_hour],
+        "direction": [req.direction],
+        "condition_tree": [req.condition_tree],
     }
-    for key, values in (param_ranges or {}).items():
+    for key, values in (req.param_ranges or {}).items():
         if key in params:
             params[key] = values
 
@@ -124,7 +129,7 @@ async def create_backtest(req: BacktestRequest) -> dict:
     ]
 
     if req.condition_tree is not None:
-        config_path = _build_strategy_config(req.direction, req.condition_tree, req.param_ranges)
+        config_path = _build_strategy_config(req)
         cmd += ["--strategy-config", str(config_path)]
 
     if req.save_as:

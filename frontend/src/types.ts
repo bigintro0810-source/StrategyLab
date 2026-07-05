@@ -42,6 +42,11 @@ export interface BacktestRequest {
   condition_tree?: TreeNode
   save_as?: string
   param_ranges?: Record<string, number[]>
+  rr?: number
+  use_weekend_exit?: boolean
+  weekend_exit_hour?: number
+  use_daily_exit?: boolean
+  daily_exit_hour?: number
 }
 
 export interface ParamRangeConfig {
