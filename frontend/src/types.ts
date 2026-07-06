@@ -54,6 +54,9 @@ export interface BacktestRequest {
   spread_pips?: number
   slippage_pips?: number
   commission_per_trade?: number
+  use_atr_trailing_stop?: boolean
+  atr_trailing_length?: number
+  atr_trailing_multiplier?: number
 }
 
 export interface ParamRangeConfig {

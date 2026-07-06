@@ -237,6 +237,12 @@ export default function App() {
   const [slippagePips, setSlippagePips] = useState(0)
   const [commissionPerTrade, setCommissionPerTrade] = useState(0)
 
+  // ATR trailing stop - off by default (fixed RR-based SL/TP, today's
+  // existing behavior unchanged unless opted in).
+  const [useAtrTrailingStop, setUseAtrTrailingStop] = useState(false)
+  const [atrTrailingLength, setAtrTrailingLength] = useState(14)
+  const [atrTrailingMultiplier, setAtrTrailingMultiplier] = useState(2.0)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -282,6 +288,9 @@ export default function App() {
       if (typeof detail.params.spread_pips === 'number') setSpreadPips(detail.params.spread_pips)
       if (typeof detail.params.slippage_pips === 'number') setSlippagePips(detail.params.slippage_pips)
       if (typeof detail.params.commission_per_trade === 'number') setCommissionPerTrade(detail.params.commission_per_trade)
+      if (typeof detail.params.use_atr_trailing_stop === 'boolean') setUseAtrTrailingStop(detail.params.use_atr_trailing_stop)
+      if (typeof detail.params.atr_trailing_length === 'number') setAtrTrailingLength(detail.params.atr_trailing_length)
+      if (typeof detail.params.atr_trailing_multiplier === 'number') setAtrTrailingMultiplier(detail.params.atr_trailing_multiplier)
     },
   })
 
@@ -310,6 +319,9 @@ export default function App() {
         spread_pips: spreadPips,
         slippage_pips: slippagePips,
         commission_per_trade: commissionPerTrade,
+        use_atr_trailing_stop: useAtrTrailingStop,
+        atr_trailing_length: atrTrailingLength,
+        atr_trailing_multiplier: atrTrailingMultiplier,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -506,6 +518,39 @@ export default function App() {
                     />
                     時
                   </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useAtrTrailingStop}
+                      onChange={(e) => setUseAtrTrailingStop(e.target.checked)}
+                    />
+                    ATRトレーリングストップを使う
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
+                    <label className="flex items-center justify-between gap-1">
+                      期間
+                      <input
+                        type="number"
+                        min={1}
+                        disabled={!useAtrTrailingStop}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={atrTrailingLength}
+                        onChange={(e) => setAtrTrailingLength(Number(e.target.value))}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1">
+                      倍率
+                      <input
+                        type="number"
+                        step={0.1}
+                        min={0.1}
+                        disabled={!useAtrTrailingStop}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={atrTrailingMultiplier}
+                        onChange={(e) => setAtrTrailingMultiplier(Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">

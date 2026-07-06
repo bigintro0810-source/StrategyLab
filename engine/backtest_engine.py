@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from engine.conditions import evaluate_condition_tree
+from engine.indicators import atr as _wilder_atr
 from engine.signal_builder import build_candidate_signal
 
 
@@ -34,6 +35,14 @@ class BacktestConfig:
     spread_pips: float = 0.0
     slippage_pips: float = 0.0
     commission_per_trade: float = 0.0
+    # ATR trailing stop - default off (fixed RR-based SL/TP, today's exact
+    # behavior). When on, SL trails behind price at atr_trailing_multiplier
+    # x ATR, only ever moving in the trade's favor (tighter), never
+    # loosening - the existing RR-based TP stays active alongside it, so a
+    # trade still exits at whichever of (trailing SL, fixed TP) is hit first.
+    use_atr_trailing_stop: bool = False
+    atr_trailing_length: int = 14
+    atr_trailing_multiplier: float = 2.0
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -201,6 +210,14 @@ def run_backtest(
     ema_arr = resolve_ema_series(df, ema_length).to_numpy(dtype=float)
     rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
 
+    use_atr_trailing_stop = bool(p.get("use_atr_trailing_stop", False))
+    atr_trailing_multiplier = float(p.get("atr_trailing_multiplier", 2.0))
+    atr_trail_arr = (
+        _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
+        if use_atr_trailing_stop
+        else None
+    )
+
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
     condition_tree = p.get("condition_tree")
@@ -299,6 +316,24 @@ def run_backtest(
             pending_signal_time = None
 
         if in_position:
+            # Tighten (never loosen) the stop based on the ATR as of the
+            # last CLOSED bar, before checking whether this bar's range
+            # hits it - mirrors the entry mechanism's own "confirm on
+            # close, act on the next bar" causality, avoiding a look-ahead
+            # bias that would come from trailing off this same bar's own
+            # close and then immediately checking that bar's high/low
+            # against it.
+            if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
+                trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+                if direction == "short":
+                    candidate_sl = close_arr[i - 1] + trail_distance
+                    if candidate_sl < sl:
+                        sl = candidate_sl
+                else:
+                    candidate_sl = close_arr[i - 1] - trail_distance
+                    if candidate_sl > sl:
+                        sl = candidate_sl
+
             exit_reason = None
             exit_price = None
 
@@ -515,6 +550,14 @@ def _run_dual_direction_backtest(
     low_arr = df["low"].to_numpy(dtype=float)
     close_arr = df["close"].to_numpy(dtype=float)
 
+    use_atr_trailing_stop = bool(p.get("use_atr_trailing_stop", False))
+    atr_trailing_multiplier = float(p.get("atr_trailing_multiplier", 2.0))
+    atr_trail_arr = (
+        _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
+        if use_atr_trailing_stop
+        else None
+    )
+
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
     long_candidate = evaluate_condition_tree(long_tree, df) if long_tree is not None else np.zeros(len(df), dtype=bool)
@@ -633,6 +676,17 @@ def _run_dual_direction_backtest(
                 clear_pending(side)
 
         if in_position:
+            if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
+                trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+                if position_direction == "short":
+                    candidate_sl = close_arr[i - 1] + trail_distance
+                    if candidate_sl < sl:
+                        sl = candidate_sl
+                else:
+                    candidate_sl = close_arr[i - 1] - trail_distance
+                    if candidate_sl > sl:
+                        sl = candidate_sl
+
             exit_reason = None
             exit_price = None
 

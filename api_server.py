@@ -69,6 +69,9 @@ class BacktestRequest(BaseModel):
     spread_pips: float = 0.0
     slippage_pips: float = 0.0
     commission_per_trade: float = 0.0
+    use_atr_trailing_stop: bool = False
+    atr_trailing_length: int = 14
+    atr_trailing_multiplier: float = 2.0
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -94,6 +97,9 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "spread_pips": [req.spread_pips],
         "slippage_pips": [req.slippage_pips],
         "commission_per_trade": [req.commission_per_trade],
+        "use_atr_trailing_stop": [req.use_atr_trailing_stop],
+        "atr_trailing_length": [req.atr_trailing_length],
+        "atr_trailing_multiplier": [req.atr_trailing_multiplier],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -
