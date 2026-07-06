@@ -61,3 +61,23 @@ export function pathIsValid(node: TreeNode, path: number[]): boolean {
   }
   return pathIsValid(node.children[path[0]], path.slice(1))
 }
+
+function cartesianProduct<T>(arrays: T[][]): T[][] {
+  return arrays.reduce<T[][]>((acc, values) => acc.flatMap((combo) => values.map((v) => [...combo, v])), [[]])
+}
+
+/** Builds one condition_tree variant per combination of every enabled
+ * range's values (a full cross product, same composition rule the legacy
+ * BacktestConfig-field param_ranges already use) - N=1 range reduces to the
+ * original single-node sweep exactly. If the same path appears in more than
+ * one range, the later range's substitution wins for that combination
+ * (not guarded against - a harmless, if confusing, user configuration
+ * rather than something worth blocking). */
+export function buildConditionTreeVariants(
+  tree: TreeNode,
+  ranges: { path: number[]; values: number[] }[],
+): TreeNode[] {
+  if (ranges.length === 0) return []
+  const combos = cartesianProduct(ranges.map((r) => r.values))
+  return combos.map((combo) => ranges.reduce((acc, r, i) => setValueAtPath(acc, r.path, combo[i]), tree))
+}

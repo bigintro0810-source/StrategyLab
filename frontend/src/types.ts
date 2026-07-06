@@ -89,6 +89,14 @@ export interface BacktestRequest {
   partial_tp_fraction?: number
 }
 
+export interface ConditionOptimizeRange {
+  enabled: boolean
+  path: number[] | null
+  min: number
+  max: number
+  step: number
+}
+
 export interface ParamRangeConfig {
   enabled: boolean
   param: string
