@@ -64,6 +64,30 @@ class BacktestConfig:
     # cancelled if it doesn't.
     entry_method: str = "market"
     entry_offset_pips: float = 10.0
+    # Position sizing - default off. When off, "profit"/"net_profit"/etc
+    # everywhere stay in raw price-difference units exactly as today
+    # (1 lot implied). When on, ADDITIONAL fields are computed alongside
+    # the existing ones (lot_size, profit_currency, account_balance per
+    # trade) - the existing pip-based profit and every metric derived from
+    # it (PF, DD, ranking, etc.) are completely unaffected, so turning
+    # this on never changes how strategies compare to each other.
+    #
+    # Quote currency is inferred from pip_size (0.01 => JPY-quoted,
+    # matching JPY_PIP_SIZE below; anything else => USD-quoted) rather
+    # than needing the symbol string threaded through the engine, since
+    # that 1:1 correspondence already holds throughout this codebase.
+    # When account_currency differs from the quote currency, conversion
+    # uses a single fixed conversion_rate for the whole backtest (an
+    # approximation - not a bar-by-bar historical USDJPY rate) rather than
+    # loading a second currency pair's full history through every caller.
+    use_position_sizing: bool = False
+    position_sizing_method: str = "risk_percent"  # risk_percent | fixed_lot | compounding
+    initial_capital: float = 1_000_000.0
+    account_currency: str = "JPY"  # JPY | USD
+    risk_percent: float = 1.0
+    fixed_lot_size: float = 0.1
+    contract_size: float = 100_000.0
+    conversion_rate: float = 150.0
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -111,6 +135,54 @@ def calc_max_dd(profits: np.ndarray) -> float:
     drawdown = running_max - equity
 
     return float(drawdown.max())
+
+
+def _pip_value_in_account_currency(
+    pip_size: float, contract_size: float, account_currency: str, conversion_rate: float
+) -> float:
+    """Value of one pip move on one standard lot, expressed in the
+    account's currency. Quote currency is inferred from pip_size (0.01 =>
+    JPY-quoted, matching JPY_PIP_SIZE in main.py; anything else =>
+    USD-quoted) since that correspondence already holds throughout this
+    codebase. conversion_rate is a single fixed snapshot for the whole
+    backtest when the account currency differs from the quote currency -
+    an approximation, not a bar-by-bar historical rate."""
+    quote_currency = "JPY" if abs(pip_size - 0.01) < 1e-9 else "USD"
+    pip_value_quote = pip_size * contract_size
+
+    if account_currency == quote_currency:
+        return pip_value_quote
+    if account_currency == "JPY" and quote_currency == "USD":
+        return pip_value_quote * conversion_rate
+    return pip_value_quote / conversion_rate
+
+
+def _compute_lot_size(
+    method: str,
+    risk_percent: float,
+    fixed_lot_size: float,
+    initial_capital: float,
+    account_balance: float,
+    sl_distance_pips: float,
+    pip_value_account: float,
+) -> float:
+    if method == "fixed_lot":
+        return fixed_lot_size
+
+    # risk_percent always risks a % of the STARTING capital (a fixed pips
+    # risked per trade regardless of how the account has grown/shrunk);
+    # compounding risks a % of the CURRENT balance (grows/shrinks with it).
+    # Clamped at 0 (not the current, possibly negative, balance) - a wiped
+    # or negative account can't risk a % of a negative number and get a
+    # sane result (that would flip the sign, producing a "negative lot
+    # size" that doesn't correspond to any real position).
+    base_capital = initial_capital if method == "risk_percent" else max(0.0, account_balance)
+    risk_amount = base_capital * (risk_percent / 100.0)
+
+    if sl_distance_pips <= 0 or pip_value_account <= 0:
+        return 0.0
+
+    return risk_amount / (sl_distance_pips * pip_value_account)
 
 
 def prepare_indicator_columns(
@@ -257,6 +329,23 @@ def run_backtest(
     consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
     consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
 
+    use_position_sizing = bool(p.get("use_position_sizing", False))
+    position_sizing_method = str(p.get("position_sizing_method", "risk_percent"))
+    initial_capital = float(p.get("initial_capital", 1_000_000.0))
+    risk_percent = float(p.get("risk_percent", 1.0))
+    fixed_lot_size = float(p.get("fixed_lot_size", 0.1))
+    pip_value_account = (
+        _pip_value_in_account_currency(
+            pip,
+            float(p.get("contract_size", 100_000.0)),
+            str(p.get("account_currency", "JPY")),
+            float(p.get("conversion_rate", 150.0)),
+        )
+        if use_position_sizing
+        else 0.0
+    )
+    account_balance = initial_capital
+
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
     condition_tree = p.get("condition_tree")
@@ -321,6 +410,8 @@ def run_backtest(
     consecutive_losses = 0
     paused_until_bar: int | None = None
 
+    position_lot_size = 0.0
+
     for i in range(250, len(df)):
         dt = datetime_arr[i]
         hour = int(hour_arr[i])
@@ -358,6 +449,17 @@ def run_backtest(
                     else entry_price + risk_distance * rr
                 )
                 in_position = True
+
+                if use_position_sizing:
+                    position_lot_size = _compute_lot_size(
+                        position_sizing_method,
+                        risk_percent,
+                        fixed_lot_size,
+                        initial_capital,
+                        account_balance,
+                        risk_distance / pip,
+                        pip_value_account,
+                    )
 
             pending_entry = False
             pending_signal_low = np.nan
@@ -449,6 +551,11 @@ def run_backtest(
                     else:
                         consecutive_losses = 0
 
+                profit_currency = None
+                if use_position_sizing:
+                    profit_currency = (profit / pip) * pip_value_account * position_lot_size
+                    account_balance += profit_currency
+
                 if return_trades:
                     trade_logs.append(
                         {
@@ -466,6 +573,15 @@ def run_backtest(
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
                             "signal_high": round(float(position_signal_high), 5),
+                            **(
+                                {
+                                    "lot_size": round(position_lot_size, 4),
+                                    "profit_currency": round(profit_currency, 2),
+                                    "account_balance": round(account_balance, 2),
+                                }
+                                if use_position_sizing
+                                else {}
+                            ),
                         }
                     )
 
@@ -579,6 +695,14 @@ def run_backtest(
         "max_dd": round(max_dd, 5),
         "expected_value": round(expected_value, 5),
         "recovery_factor": round(recovery_factor, 3),
+        **(
+            {
+                "final_account_balance": round(account_balance, 2),
+                "total_profit_currency": round(account_balance - initial_capital, 2),
+            }
+            if use_position_sizing
+            else {}
+        ),
     }
 
     trades_df = pd.DataFrame(trade_logs)
@@ -1019,6 +1143,23 @@ def _run_dual_direction_backtest(
     consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
     consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
 
+    use_position_sizing = bool(p.get("use_position_sizing", False))
+    position_sizing_method = str(p.get("position_sizing_method", "risk_percent"))
+    initial_capital = float(p.get("initial_capital", 1_000_000.0))
+    risk_percent = float(p.get("risk_percent", 1.0))
+    fixed_lot_size = float(p.get("fixed_lot_size", 0.1))
+    pip_value_account = (
+        _pip_value_in_account_currency(
+            pip,
+            float(p.get("contract_size", 100_000.0)),
+            str(p.get("account_currency", "JPY")),
+            float(p.get("conversion_rate", 150.0)),
+        )
+        if use_position_sizing
+        else 0.0
+    )
+    account_balance = initial_capital
+
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
     long_candidate = evaluate_condition_tree(long_tree, df) if long_tree is not None else np.zeros(len(df), dtype=bool)
@@ -1094,6 +1235,7 @@ def _run_dual_direction_backtest(
     paused_for_dd = False
     consecutive_losses = 0
     paused_until_bar: int | None = None
+    position_lot_size = 0.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -1144,6 +1286,17 @@ def _run_dual_direction_backtest(
                         else entry_price + risk_distance * rr
                     )
                     in_position = True
+
+                    if use_position_sizing:
+                        position_lot_size = _compute_lot_size(
+                            position_sizing_method,
+                            risk_percent,
+                            fixed_lot_size,
+                            initial_capital,
+                            account_balance,
+                            risk_distance / pip,
+                            pip_value_account,
+                        )
 
                 clear_pending(side)
         elif not in_position and entries_blocked:
@@ -1221,6 +1374,11 @@ def _run_dual_direction_backtest(
                     else:
                         consecutive_losses = 0
 
+                profit_currency = None
+                if use_position_sizing:
+                    profit_currency = (profit / pip) * pip_value_account * position_lot_size
+                    account_balance += profit_currency
+
                 if return_trades:
                     trade_logs.append(
                         {
@@ -1239,6 +1397,15 @@ def _run_dual_direction_backtest(
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
                             "signal_high": round(float(position_signal_high), 5),
+                            **(
+                                {
+                                    "lot_size": round(position_lot_size, 4),
+                                    "profit_currency": round(profit_currency, 2),
+                                    "account_balance": round(account_balance, 2),
+                                }
+                                if use_position_sizing
+                                else {}
+                            ),
                         }
                     )
 
@@ -1342,6 +1509,14 @@ def _run_dual_direction_backtest(
         "max_dd": round(max_dd, 5),
         "expected_value": round(expected_value, 5),
         "recovery_factor": round(recovery_factor, 3),
+        **(
+            {
+                "final_account_balance": round(account_balance, 2),
+                "total_profit_currency": round(account_balance - initial_capital, 2),
+            }
+            if use_position_sizing
+            else {}
+        ),
     }
 
     trades_df = pd.DataFrame(trade_logs)

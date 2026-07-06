@@ -29,6 +29,13 @@ export default function StatsPanel({ row }: Props) {
     { label: 'Profit/DD', value: fmt(profitOverDd) },
   ]
 
+  if (row.final_account_balance !== undefined) {
+    stats.push(
+      { label: '最終残高', value: fmt(row.final_account_balance, 0) },
+      { label: '総損益(通貨額)', value: fmt(row.total_profit_currency, 0) },
+    )
+  }
+
   return (
     <div className="grid grid-cols-2 gap-2 text-sm">
       {stats.map((s) => (

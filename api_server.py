@@ -83,6 +83,17 @@ class BacktestRequest(BaseModel):
     # are set rather than silently ignoring one.
     entry_method: str = "market"
     entry_offset_pips: float = 10.0
+    # Position sizing - default off, in which case profit/net_profit/etc stay
+    # in raw pip units exactly as before (implied 1 lot). See
+    # engine/backtest_engine.py's _pip_value_in_account_currency/_compute_lot_size.
+    use_position_sizing: bool = False
+    position_sizing_method: str = "risk_percent"
+    initial_capital: float = 1_000_000.0
+    account_currency: str = "JPY"
+    risk_percent: float = 1.0
+    fixed_lot_size: float = 0.1
+    contract_size: float = 100_000.0
+    conversion_rate: float = 150.0
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -118,6 +129,14 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "consecutive_loss_stop_bars": [req.consecutive_loss_stop_bars],
         "entry_method": [req.entry_method],
         "entry_offset_pips": [req.entry_offset_pips],
+        "use_position_sizing": [req.use_position_sizing],
+        "position_sizing_method": [req.position_sizing_method],
+        "initial_capital": [req.initial_capital],
+        "account_currency": [req.account_currency],
+        "risk_percent": [req.risk_percent],
+        "fixed_lot_size": [req.fixed_lot_size],
+        "contract_size": [req.contract_size],
+        "conversion_rate": [req.conversion_rate],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -

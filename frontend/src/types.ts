@@ -64,6 +64,14 @@ export interface BacktestRequest {
   consecutive_loss_stop_bars?: number
   entry_method?: 'market' | 'limit' | 'stop'
   entry_offset_pips?: number
+  use_position_sizing?: boolean
+  position_sizing_method?: 'risk_percent' | 'fixed_lot' | 'compounding'
+  initial_capital?: number
+  account_currency?: 'JPY' | 'USD'
+  risk_percent?: number
+  fixed_lot_size?: number
+  contract_size?: number
+  conversion_rate?: number
 }
 
 export interface ParamRangeConfig {
@@ -107,6 +115,9 @@ export interface RankingRow {
   cagr: number
   calmar_ratio: number
   rr: number
+  // Only present when position sizing was enabled for the run.
+  final_account_balance?: number
+  total_profit_currency?: number
   [key: string]: unknown
 }
 
@@ -121,6 +132,10 @@ export interface TradeRow {
   // backtest, where direction varies per trade rather than being fixed for
   // the whole run.
   direction?: 'long' | 'short'
+  // Only present when position sizing was enabled for the run.
+  lot_size?: number
+  profit_currency?: number
+  account_balance?: number
   [key: string]: unknown
 }
 

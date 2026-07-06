@@ -19,6 +19,12 @@ const DIRECTION_COLUMN: { key: keyof TradeRow; label: string; format?: (v: unkno
   format: (v) => (v === 'long' ? 'Long' : v === 'short' ? 'Short' : ''),
 }
 
+const POSITION_SIZING_COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => string }[] = [
+  { key: 'lot_size', label: 'ロット' },
+  { key: 'profit_currency', label: '損益(通貨額)', format: (v) => Number(v).toLocaleString() },
+  { key: 'account_balance', label: '残高', format: (v) => Number(v).toLocaleString() },
+]
+
 const MAX_ROWS = 200
 
 export default function TradeHistoryTable({ rows }: Props) {
@@ -29,9 +35,14 @@ export default function TradeHistoryTable({ rows }: Props) {
   // Only a dual-direction (Long+Short simultaneous) backtest's trades carry a
   // per-trade direction - a single-direction run has no need for the column.
   const hasDirection = rows.some((r) => r.direction != null)
-  const COLUMNS = hasDirection
-    ? [BASE_COLUMNS[0], DIRECTION_COLUMN, ...BASE_COLUMNS.slice(1)]
-    : BASE_COLUMNS
+  // Only trades from a run with position sizing enabled carry these fields.
+  const hasPositionSizing = rows.some((r) => r.lot_size != null)
+  const COLUMNS = [
+    BASE_COLUMNS[0],
+    ...(hasDirection ? [DIRECTION_COLUMN] : []),
+    ...BASE_COLUMNS.slice(1),
+    ...(hasPositionSizing ? POSITION_SIZING_COLUMNS : []),
+  ]
 
   return (
     <div className="overflow-auto">

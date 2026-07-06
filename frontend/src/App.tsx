@@ -259,6 +259,19 @@ export default function App() {
   const [entryMethod, setEntryMethod] = useState<'market' | 'limit' | 'stop'>('market')
   const [entryOffsetPips, setEntryOffsetPips] = useState(10)
 
+  // Position sizing - off by default (results stay in raw pips, implied 1
+  // lot, today's existing behavior unchanged unless opted in). Confirmed
+  // with the user 2026-07-06: JPY/USD account currency switchable, default
+  // 1,000,000 JPY capital, all three methods (risk%/fixed lot/compounding)
+  // exposed since the user wants all three available.
+  const [usePositionSizing, setUsePositionSizing] = useState(false)
+  const [positionSizingMethod, setPositionSizingMethod] = useState<'risk_percent' | 'fixed_lot' | 'compounding'>('risk_percent')
+  const [initialCapital, setInitialCapital] = useState(1_000_000)
+  const [accountCurrency, setAccountCurrency] = useState<'JPY' | 'USD'>('JPY')
+  const [riskPercent, setRiskPercent] = useState(1.0)
+  const [fixedLotSize, setFixedLotSize] = useState(0.1)
+  const [conversionRate, setConversionRate] = useState(150.0)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -316,6 +329,21 @@ export default function App() {
         setEntryMethod(detail.params.entry_method)
       }
       if (typeof detail.params.entry_offset_pips === 'number') setEntryOffsetPips(detail.params.entry_offset_pips)
+      if (typeof detail.params.use_position_sizing === 'boolean') setUsePositionSizing(detail.params.use_position_sizing)
+      if (
+        detail.params.position_sizing_method === 'risk_percent' ||
+        detail.params.position_sizing_method === 'fixed_lot' ||
+        detail.params.position_sizing_method === 'compounding'
+      ) {
+        setPositionSizingMethod(detail.params.position_sizing_method)
+      }
+      if (typeof detail.params.initial_capital === 'number') setInitialCapital(detail.params.initial_capital)
+      if (detail.params.account_currency === 'JPY' || detail.params.account_currency === 'USD') {
+        setAccountCurrency(detail.params.account_currency)
+      }
+      if (typeof detail.params.risk_percent === 'number') setRiskPercent(detail.params.risk_percent)
+      if (typeof detail.params.fixed_lot_size === 'number') setFixedLotSize(detail.params.fixed_lot_size)
+      if (typeof detail.params.conversion_rate === 'number') setConversionRate(detail.params.conversion_rate)
     },
   })
 
@@ -357,6 +385,13 @@ export default function App() {
         // UI already hides the control in that mode.
         entry_method: dualDirectionMode ? 'market' : entryMethod,
         entry_offset_pips: entryOffsetPips,
+        use_position_sizing: usePositionSizing,
+        position_sizing_method: positionSizingMethod,
+        initial_capital: initialCapital,
+        account_currency: accountCurrency,
+        risk_percent: riskPercent,
+        fixed_lot_size: fixedLotSize,
+        conversion_rate: conversionRate,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -668,6 +703,101 @@ export default function App() {
                         onChange={(e) => setConsecutiveLossStopBars(Number(e.target.value))}
                       />
                     </label>
+                  </div>
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-400">
+                    <input
+                      type="checkbox"
+                      checked={usePositionSizing}
+                      onChange={(e) => setUsePositionSizing(e.target.checked)}
+                    />
+                    資金管理(ポジションサイジング)を使う
+                  </label>
+                  <div className={`space-y-1.5 pl-5 text-xs text-gray-300 ${!usePositionSizing ? 'opacity-40' : ''}`}>
+                    <label className="flex items-center justify-between gap-1">
+                      方式
+                      <select
+                        className="glass-input w-40 rounded-lg px-1.5 py-1 text-xs"
+                        disabled={!usePositionSizing}
+                        value={positionSizingMethod}
+                        onChange={(e) => setPositionSizingMethod(e.target.value as 'risk_percent' | 'fixed_lot' | 'compounding')}
+                      >
+                        <option value="risk_percent">資金%リスク(初期資金基準)</option>
+                        <option value="fixed_lot">固定ロット</option>
+                        <option value="compounding">複利(資金%を都度の残高で計算)</option>
+                      </select>
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="flex items-center justify-between gap-1">
+                        初期資金
+                        <input
+                          type="number"
+                          min={0}
+                          step={10000}
+                          disabled={!usePositionSizing}
+                          className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={initialCapital}
+                          onChange={(e) => setInitialCapital(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-1">
+                        口座通貨
+                        <select
+                          className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
+                          disabled={!usePositionSizing}
+                          value={accountCurrency}
+                          onChange={(e) => setAccountCurrency(e.target.value as 'JPY' | 'USD')}
+                        >
+                          <option value="JPY">JPY</option>
+                          <option value="USD">USD</option>
+                        </select>
+                      </label>
+                    </div>
+                    {(positionSizingMethod === 'risk_percent' || positionSizingMethod === 'compounding') && (
+                      <label className="flex items-center justify-between gap-1">
+                        リスク%(1取引あたり)
+                        <input
+                          type="number"
+                          min={0.01}
+                          step={0.1}
+                          disabled={!usePositionSizing}
+                          className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={riskPercent}
+                          onChange={(e) => setRiskPercent(Number(e.target.value))}
+                        />
+                      </label>
+                    )}
+                    {positionSizingMethod === 'fixed_lot' && (
+                      <label className="flex items-center justify-between gap-1">
+                        固定ロット数
+                        <input
+                          type="number"
+                          min={0.01}
+                          step={0.01}
+                          disabled={!usePositionSizing}
+                          className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={fixedLotSize}
+                          onChange={(e) => setFixedLotSize(Number(e.target.value))}
+                        />
+                      </label>
+                    )}
+                    <label className="flex items-center justify-between gap-1">
+                      為替換算レート(通貨ペア⇔口座通貨)
+                      <input
+                        type="number"
+                        min={0.01}
+                        step={0.01}
+                        disabled={!usePositionSizing}
+                        className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={conversionRate}
+                        onChange={(e) => setConversionRate(Number(e.target.value))}
+                      />
+                    </label>
+                    <div className="text-[11px] text-gray-500">
+                      ※為替換算レートはバックテスト全期間で固定の概算値です(日々の実勢レートではありません)
+                    </div>
                   </div>
                 </div>
 
