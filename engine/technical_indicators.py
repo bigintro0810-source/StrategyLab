@@ -262,3 +262,31 @@ def adx(
     adx_line = dx.ewm(alpha=1 / period, adjust=False).mean()
 
     return plus_di, minus_di, adx_line
+
+
+def daily_vwap(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+    datetime: pd.Series,
+) -> pd.Series:
+    """Volume Weighted Average Price, anchored to (reset at) each calendar
+    day - the standard default anchor most charting platforms use when no
+    custom session/anchor is configured. cumsum-based, so still fully
+    vectorized/causal (each bar only uses that day's bars up to itself).
+
+    Forex has no single central exchange, so `volume` here is whatever
+    tick/proxy volume the broker's feed reports (this project's data
+    pipeline - see data/raw/{SYMBOL}_Data/*.csv - already carries a
+    `volume` column for all 7 supported pairs), not true traded volume.
+    Treat VWAP distance/crosses as a rough participation-weighted average,
+    not a precise institutional benchmark, the same caveat that applies to
+    any forex VWAP."""
+    typical_price = (high + low + close) / 3.0
+    day = pd.to_datetime(datetime).dt.date
+
+    cum_pv = (typical_price * volume).groupby(day).cumsum()
+    cum_volume = volume.groupby(day).cumsum()
+
+    return cum_pv / cum_volume

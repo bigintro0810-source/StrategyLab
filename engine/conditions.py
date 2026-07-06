@@ -41,12 +41,15 @@ from engine.indicators import rsi as _rsi
 from engine.indicators import sma as _sma
 from engine.technical_indicators import adx as _adx
 from engine.technical_indicators import bollinger_bands, macd, stochastic_oscillator
+from engine.technical_indicators import daily_vwap as _daily_vwap
 from engine.technical_indicators import supertrend as _supertrend
 from engine.smc_indicators import (
     bearish_fvg,
     bearish_order_block,
     bos_choch_bearish,
     bos_choch_bullish,
+    breaker_block_bearish,
+    breaker_block_bullish,
     bullish_fvg,
     bullish_order_block,
     liquidity_sweep_bearish,
@@ -135,6 +138,15 @@ def _supertrend_direction(df: pd.DataFrame, length: int = 10, multiplier: float 
     return np.asarray(direction, dtype=float)
 
 
+def _vwap(df: pd.DataFrame) -> np.ndarray:
+    if "volume" not in df.columns:
+        raise ValueError(
+            "VWAPにはvolume列が必要ですが、この価格データにはありません"
+            "(volume列を含むデータソースを使用してください)"
+        )
+    return _daily_vwap(df["high"], df["low"], df["close"], df["volume"], df["datetime"]).to_numpy(dtype=float)
+
+
 # Indicator name -> function(df, **params) -> np.ndarray[float]. Add new indicators
 # here only - never touch Condition/ConditionGroup's evaluation logic to support one.
 INDICATOR_REGISTRY: dict[str, Any] = {
@@ -209,6 +221,17 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "choch_bearish": lambda df, length=5, **p: bos_choch_bearish(
         df["high"], df["low"], df["close"], int(length)
     )[1].astype(float),
+    "breaker_block_bullish": lambda df, **p: breaker_block_bullish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).astype(float),
+    "breaker_block_bearish": lambda df, **p: breaker_block_bearish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).astype(float),
+    # Forex "volume" is broker tick/proxy volume (no central exchange), not
+    # true traded volume - see engine/technical_indicators.py::daily_vwap's
+    # docstring. Raises a clear error if the loaded price data has no
+    # volume column rather than silently returning NaN/garbage.
+    "vwap": lambda df, **p: _vwap(df),
 }
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}

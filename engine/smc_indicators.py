@@ -18,6 +18,13 @@ project's charter explicitly forbids short-only design. The original
 bearish functions are unchanged, still consumed by the legacy
 trigger/filter system exactly as before.
 
+breaker_block_bullish/breaker_block_bearish (added 2026-07-06) build on
+top of bearish_order_block/bullish_order_block: a "breaker" is what an
+order block becomes once price breaks clean through it and later comes
+back to retest it from the other side, flipping its role (old resistance
+becomes support, or vice versa). Like the rest of this module, this is a
+simplified/exploratory approximation, not a verified reference definition.
+
 Swing-point detection (used by BOS/CHoCH/Liquidity Sweep) is causally
 careful: a swing point at bar k is only "confirmed" (usable without
 lookahead bias) `lookback` bars later, once we've seen enough future bars
@@ -219,3 +226,52 @@ def bos_choch_bullish(high: pd.Series, low: pd.Series, close: pd.Series, lookbac
     choch_bullish = fresh_break & was_downtrend & ~np.isnan(prev_arr)
 
     return bos_bullish, choch_bullish
+
+
+def _tracked_zone_level(ob_flags: pd.Series, zone_level: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Forward-fills `zone_level` starting from each bar where ob_flags is
+    True, so every bar carries the most recently formed order block's zone
+    price (NaN before the first one ever forms). Also returns an "epoch id"
+    (incrementing once per new order block) callers use to reset their own
+    "has this specific zone broken yet" tracking each time a newer order
+    block supersedes an older, still-untested one."""
+    epoch_id = ob_flags.cumsum()
+    level = zone_level.where(ob_flags).groupby(epoch_id).transform("first")
+    return level, epoch_id
+
+
+def breaker_block_bullish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> np.ndarray:
+    """A bearish order block (a bullish candle overwhelmed by a larger
+    bearish one - see bearish_order_block) that price later closes clean
+    above (breaking the resistance it was expected to hold), then pulls
+    back down and touches that same zone again - flipping it from
+    resistance to support. Fires on every bar the retest condition holds
+    (not just the first), matching liquidity_sweep/BOS-CHoCH's style."""
+    ob_flags = pd.Series(bearish_order_block(open_, close), index=close.index)
+    zone_high = np.maximum(open_, close)
+
+    tracked_high, epoch_id = _tracked_zone_level(ob_flags, zone_high)
+    broke_above = close > tracked_high
+    broken_so_far = broke_above.groupby(epoch_id).cummax().fillna(False)
+
+    return (broken_so_far & (low <= tracked_high)).fillna(False).to_numpy()
+
+
+def breaker_block_bearish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> np.ndarray:
+    """Mirror image of breaker_block_bullish: a bullish order block (a
+    bearish candle overwhelmed by a larger bullish one - see
+    bullish_order_block) that price later closes clean below (breaking the
+    support it was expected to hold), then pulls back up and touches that
+    same zone again - flipping it from support to resistance."""
+    ob_flags = pd.Series(bullish_order_block(open_, close), index=close.index)
+    zone_low = np.minimum(open_, close)
+
+    tracked_low, epoch_id = _tracked_zone_level(ob_flags, zone_low)
+    broke_below = close < tracked_low
+    broken_so_far = broke_below.groupby(epoch_id).cummax().fillna(False)
+
+    return (broken_so_far & (high >= tracked_low)).fillna(False).to_numpy()
