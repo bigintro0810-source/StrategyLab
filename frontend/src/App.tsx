@@ -147,6 +147,21 @@ const NAV_ITEMS = [
   '設定',
 ]
 
+// Scroll-to-panel targets, keyed by nav label - panel ids are `panel-${key}`
+// matching each <Panel key="..."> below. レポート/ツール/設定 have no
+// corresponding built feature yet, so they're intentionally left out
+// (undefined) rather than pointed at a guessed/wrong panel; NAV_ITEMS still
+// renders them as plain text, just without a click handler.
+const NAV_TARGETS: Record<string, string[] | undefined> = {
+  プロジェクト: ['builder'],
+  データ: ['chart'],
+  ストラテジー: ['saved'],
+  バックテスト: ['ranking'],
+  最適化: ['surface'],
+  分析: ['yearly', 'heatmap', 'stats'],
+  ランキング: ['ranking'],
+}
+
 const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD']
 const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
@@ -569,15 +584,38 @@ export default function App() {
   const bestRow = results?.ranking_total?.[0]
   const isRunning = statusQuery.data && !['done', 'error'].includes(statusQuery.data.status)
 
+  const handleNavClick = (item: string) => {
+    const targets = NAV_TARGETS[item]
+    if (!targets) return
+    targets.forEach((key, i) => {
+      const el = document.getElementById(`panel-${key}`)
+      if (!el) return
+      if (i === 0) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      el.classList.add('nav-highlight')
+      setTimeout(() => el.classList.remove('nav-highlight'), 1200)
+    })
+  }
+
   return (
     <div className="min-h-screen text-gray-200">
       <nav className="glass-nav sticky top-0 z-10 flex items-center gap-5 px-4 py-3 text-sm">
         <span className="brand-text text-base font-bold tracking-wide">Strategy Lab</span>
-        {NAV_ITEMS.map((item) => (
-          <span key={item} className="cursor-default text-gray-400 transition-colors hover:text-gray-200">
-            {item}
-          </span>
-        ))}
+        {NAV_ITEMS.map((item) =>
+          NAV_TARGETS[item] ? (
+            <button
+              key={item}
+              type="button"
+              onClick={() => handleNavClick(item)}
+              className="cursor-pointer text-gray-400 transition-colors hover:text-gray-200"
+            >
+              {item}
+            </button>
+          ) : (
+            <span key={item} className="cursor-default text-gray-600" title="準備中">
+              {item}
+            </span>
+          ),
+        )}
         <button
           type="button"
           onClick={resetLayout}
@@ -596,7 +634,7 @@ export default function App() {
             dragConfig={{ handle: '.drag-handle' }}
             onLayoutChange={handleLayoutChange}
           >
-            <Panel key="builder" title="① ストラテジービルダー">
+            <Panel key="builder" id="panel-builder" title="① ストラテジービルダー">
               <div className="space-y-3">
                 <label className="flex items-center gap-1.5 text-xs text-gray-300">
                   <input
@@ -1215,7 +1253,7 @@ export default function App() {
               </div>
             </Panel>
 
-            <Panel key="chart" title="② チャート">
+            <Panel key="chart" id="panel-chart" title="② チャート">
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
                 <div className="flex overflow-hidden rounded-lg border border-white/10">
                   {TIMEFRAMES.map((tf) => (
@@ -1257,7 +1295,7 @@ export default function App() {
               <DrawdownChart points={results?.equity_curve ?? []} />
             </Panel>
 
-            <Panel key="ranking" title="③ ランキング一覧">
+            <Panel key="ranking" id="panel-ranking" title="③ ランキング一覧">
               <RankingTable rows={results?.ranking_total ?? []} />
             </Panel>
 
@@ -1273,19 +1311,19 @@ export default function App() {
               />
             </Panel>
 
-            <Panel key="heatmap" title="⑦ 月別収益ヒートマップ">
+            <Panel key="heatmap" id="panel-heatmap" title="⑦ 月別収益ヒートマップ">
               <MonthlyHeatmap rows={results?.monthly_analysis ?? []} />
             </Panel>
 
-            <Panel key="yearly" title="⑥ 年別成績">
+            <Panel key="yearly" id="panel-yearly" title="⑥ 年別成績">
               <YearlyPerformanceChart rows={results?.yearly_analysis ?? []} />
             </Panel>
 
-            <Panel key="stats" title="⑪ 統計情報">
+            <Panel key="stats" id="panel-stats" title="⑪ 統計情報">
               <StatsPanel row={bestRow} />
             </Panel>
 
-            <Panel key="surface" title="⑧ 最適化サーフェス(3D)">
+            <Panel key="surface" id="panel-surface" title="⑧ 最適化サーフェス(3D)">
               {(() => {
                 const enabledParams = paramRanges.filter((r) => r.enabled).map((r) => r.param)
                 const effectiveX = enabledParams.includes(surfaceParamX) ? surfaceParamX : (enabledParams[0] ?? surfaceParamX)
@@ -1340,7 +1378,7 @@ export default function App() {
               <TradeHistoryTable rows={results?.trade_log ?? []} />
             </Panel>
 
-            <Panel key="saved" title="保存済み戦略">
+            <Panel key="saved" id="panel-saved" title="保存済み戦略">
               <SavedStrategiesPanel
                 strategies={strategiesQuery.data ?? []}
                 onLoad={(id) => loadStrategyMutation.mutate(id)}
