@@ -12,6 +12,7 @@ import {
   fetchStrategyDetail,
 } from './api'
 import type { BacktestResults, Direction, GroupNode, OptimizableParam, ParamRangeConfig } from './types'
+import { collectOptimizableConditions, pathIsValid, setValueAtPath } from './conditionTreeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
 import ChartPanel from './components/ChartPanel'
 import RankingTable from './components/RankingTable'
@@ -279,6 +280,18 @@ export default function App() {
   const [surfaceParamY, setSurfaceParamY] = useState('lookahead_bars')
   const [optimizationMetric, setOptimizationMetric] = useState('net_profit')
 
+  // Node-level condition-tree optimization: sweep a specific condition's own
+  // comparison value (e.g. "this RSI threshold, 60-80") rather than a whole
+  // BacktestConfig field. Off by default. Not supported together with
+  // Long+Short同時 dual-direction mode (this only targets the single `tree`,
+  // not longTree/shortTree) - UI hides it while dualDirectionMode is on,
+  // same precedent as entryMethod.
+  const [conditionOptimizeEnabled, setConditionOptimizeEnabled] = useState(false)
+  const [conditionOptimizePath, setConditionOptimizePath] = useState<number[] | null>(null)
+  const [conditionOptimizeMin, setConditionOptimizeMin] = useState(60)
+  const [conditionOptimizeMax, setConditionOptimizeMax] = useState(80)
+  const [conditionOptimizeStep, setConditionOptimizeStep] = useState(5)
+
   const [rr, setRr] = useState(1.2)
   const [useWeekendExit, setUseWeekendExit] = useState(true)
   const [weekendExitHour, setWeekendExitHour] = useState(4)
@@ -424,6 +437,12 @@ export default function App() {
         activeRanges.length > 0
           ? Object.fromEntries(activeRanges.map((r) => [r.param, buildRangeValues(r.min, r.max, r.step)]))
           : undefined
+      const condition_tree_variants =
+        !dualDirectionMode && conditionOptimizeEnabled && conditionOptimizePath && pathIsValid(tree, conditionOptimizePath)
+          ? buildRangeValues(conditionOptimizeMin, conditionOptimizeMax, conditionOptimizeStep).map((v) =>
+              setValueAtPath(tree, conditionOptimizePath, v),
+            )
+          : undefined
       return createBacktest({
         mode,
         timeframe,
@@ -431,6 +450,7 @@ export default function App() {
         optimizer: 'grid',
         direction,
         condition_tree: dualDirectionMode ? undefined : tree,
+        condition_tree_variants,
         long_condition_tree: dualDirectionMode ? longTree : undefined,
         short_condition_tree: dualDirectionMode ? shortTree : undefined,
         param_ranges,
@@ -495,6 +515,15 @@ export default function App() {
       queryClient.invalidateQueries({ queryKey: ['strategies'] })
     }
   }, [statusQuery.data?.status, saveAsName, queryClient])
+
+  // If editing the condition tree removes/restructures the condition the
+  // user previously marked for optimization, drop the stale selection
+  // rather than silently keeping an index that now points somewhere else.
+  useEffect(() => {
+    if (conditionOptimizePath && !pathIsValid(tree, conditionOptimizePath)) {
+      setConditionOptimizePath(null)
+    }
+  }, [tree, conditionOptimizePath])
 
   const results = resultsQuery.data
   const bestRow = results?.ranking_total?.[0]
@@ -998,6 +1027,77 @@ export default function App() {
                     ))}
                   </select>
                 </div>
+
+                {!dualDirectionMode &&
+                  (() => {
+                    const optimizableConditions = collectOptimizableConditions(tree)
+                    return (
+                      <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                        <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-400">
+                          <input
+                            type="checkbox"
+                            checked={conditionOptimizeEnabled}
+                            disabled={optimizableConditions.length === 0}
+                            onChange={(e) => setConditionOptimizeEnabled(e.target.checked)}
+                          />
+                          条件ツリー内の値を最適化
+                        </label>
+                        {optimizableConditions.length === 0 ? (
+                          <div className="text-[11px] text-gray-500">
+                            固定値と比較する条件がありません(「固定値」比較の条件を1つ追加してください)
+                          </div>
+                        ) : (
+                          <div className={`space-y-1.5 ${!conditionOptimizeEnabled ? 'opacity-40' : ''}`}>
+                            <select
+                              className="glass-input w-full rounded-lg px-1.5 py-1 text-xs"
+                              disabled={!conditionOptimizeEnabled}
+                              value={conditionOptimizePath ? JSON.stringify(conditionOptimizePath) : ''}
+                              onChange={(e) => setConditionOptimizePath(e.target.value ? JSON.parse(e.target.value) : null)}
+                            >
+                              <option value="">対象の条件を選択</option>
+                              {optimizableConditions.map((c) => (
+                                <option key={JSON.stringify(c.path)} value={JSON.stringify(c.path)}>
+                                  {c.label}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
+                                最小
+                                <input
+                                  type="number"
+                                  disabled={!conditionOptimizeEnabled}
+                                  className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                  value={conditionOptimizeMin}
+                                  onChange={(e) => setConditionOptimizeMin(Number(e.target.value))}
+                                />
+                              </label>
+                              <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
+                                最大
+                                <input
+                                  type="number"
+                                  disabled={!conditionOptimizeEnabled}
+                                  className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                  value={conditionOptimizeMax}
+                                  onChange={(e) => setConditionOptimizeMax(Number(e.target.value))}
+                                />
+                              </label>
+                              <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
+                                刻み
+                                <input
+                                  type="number"
+                                  disabled={!conditionOptimizeEnabled}
+                                  className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                  value={conditionOptimizeStep}
+                                  onChange={(e) => setConditionOptimizeStep(Number(e.target.value))}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                 <input
                   type="text"

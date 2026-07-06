@@ -46,6 +46,10 @@ export interface BacktestRequest {
   optimizer: string
   direction: Direction
   condition_tree?: TreeNode
+  // Node-level condition-tree optimization: N complete tree variants
+  // (built client-side, each differing only in one node's swept value).
+  // When set, this is what actually gets swept instead of condition_tree.
+  condition_tree_variants?: TreeNode[]
   // When both are set, the engine evaluates Long and Short simultaneously
   // (one shared position - no hedging) instead of condition_tree+direction.
   long_condition_tree?: GroupNode

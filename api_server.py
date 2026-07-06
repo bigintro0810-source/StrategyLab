@@ -50,6 +50,16 @@ class BacktestRequest(BaseModel):
     optimizer: str = "grid"
     direction: str = "short"
     condition_tree: Optional[dict] = None
+    # Node-level condition-tree optimization: N complete condition_tree
+    # variants (each a full tree, differing only in one node's swept value),
+    # pre-built client-side since the frontend already holds the live tree
+    # in memory and can substitute a value at a specific node far more
+    # simply than the backend re-deriving "which node" from a path/ID
+    # scheme. When set, this REPLACES condition_tree as the swept dimension
+    # - main.py's grid optimizer already cross-multiplies over whatever's
+    # in the params dict via itertools.product regardless of value type, so
+    # a list of N dicts here needs no new grid-building logic at all.
+    condition_tree_variants: Optional[list[dict]] = None
     # When both are set, the engine evaluates them simultaneously (one shared
     # position slot, no hedging) instead of the single condition_tree+direction
     # above - see engine/backtest_engine.py::_run_dual_direction_backtest.
@@ -161,7 +171,7 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         # symbol's other-timeframe data file to load.
         "symbol": [req.symbol],
         "direction": [req.direction],
-        "condition_tree": [req.condition_tree],
+        "condition_tree": req.condition_tree_variants if req.condition_tree_variants else [req.condition_tree],
         "long_condition_tree": [req.long_condition_tree],
         "short_condition_tree": [req.short_condition_tree],
     }
