@@ -179,7 +179,15 @@ def _compute_lot_size(
     base_capital = initial_capital if method == "risk_percent" else max(0.0, account_balance)
     risk_amount = base_capital * (risk_percent / 100.0)
 
-    if sl_distance_pips <= 0 or pip_value_account <= 0:
+    # The limit/stop entry path derives both the entry price (signal bar's
+    # close +/- entry_offset_pips) and the SL (that same signal bar's
+    # high/low) from the same candle, so for some candles the two can land
+    # a hair's-width apart - not exactly 0 (which the market-order path's
+    # >0 check already handles) but small enough that dividing by it
+    # produces an absurd multi-trillion-lot position. 0.01 pip is far
+    # below any economically meaningful stop distance, so this only catches
+    # that degenerate near-zero case, not real (if tight) stop placements.
+    if sl_distance_pips <= 0.01 or pip_value_account <= 0:
         return 0.0
 
     return risk_amount / (sl_distance_pips * pip_value_account)
@@ -795,6 +803,23 @@ def _run_limit_stop_backtest(
     consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
     consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
 
+    use_position_sizing = bool(p.get("use_position_sizing", False))
+    position_sizing_method = str(p.get("position_sizing_method", "risk_percent"))
+    initial_capital = float(p.get("initial_capital", 1_000_000.0))
+    risk_percent = float(p.get("risk_percent", 1.0))
+    fixed_lot_size = float(p.get("fixed_lot_size", 0.1))
+    pip_value_account = (
+        _pip_value_in_account_currency(
+            pip,
+            float(p.get("contract_size", 100_000.0)),
+            str(p.get("account_currency", "JPY")),
+            float(p.get("conversion_rate", 150.0)),
+        )
+        if use_position_sizing
+        else 0.0
+    )
+    account_balance = initial_capital
+
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
         candidate_signal = evaluate_condition_tree(condition_tree, df)
@@ -862,6 +887,7 @@ def _run_limit_stop_backtest(
     paused_for_dd = False
     consecutive_losses = 0
     paused_until_bar: int | None = None
+    position_lot_size = 0.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -909,6 +935,17 @@ def _run_limit_stop_backtest(
                                 else entry_price + risk_distance * rr
                             )
                             in_position = True
+
+                            if use_position_sizing:
+                                position_lot_size = _compute_lot_size(
+                                    position_sizing_method,
+                                    risk_percent,
+                                    fixed_lot_size,
+                                    initial_capital,
+                                    account_balance,
+                                    risk_distance / pip,
+                                    pip_value_account,
+                                )
 
                         order_active = False
 
@@ -980,6 +1017,11 @@ def _run_limit_stop_backtest(
                     else:
                         consecutive_losses = 0
 
+                profit_currency = None
+                if use_position_sizing:
+                    profit_currency = (profit / pip) * pip_value_account * position_lot_size
+                    account_balance += profit_currency
+
                 if return_trades:
                     trade_logs.append(
                         {
@@ -997,6 +1039,15 @@ def _run_limit_stop_backtest(
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
                             "signal_high": round(float(position_signal_high), 5),
+                            **(
+                                {
+                                    "lot_size": round(position_lot_size, 4),
+                                    "profit_currency": round(profit_currency, 2),
+                                    "account_balance": round(account_balance, 2),
+                                }
+                                if use_position_sizing
+                                else {}
+                            ),
                         }
                     )
 
@@ -1070,6 +1121,14 @@ def _run_limit_stop_backtest(
         "max_dd": round(max_dd, 5),
         "expected_value": round(expected_value, 5),
         "recovery_factor": round(recovery_factor, 3),
+        **(
+            {
+                "final_account_balance": round(account_balance, 2),
+                "total_profit_currency": round(account_balance - initial_capital, 2),
+            }
+            if use_position_sizing
+            else {}
+        ),
     }
 
     trades_df = pd.DataFrame(trade_logs)
