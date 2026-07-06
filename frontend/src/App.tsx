@@ -42,14 +42,35 @@ const DEFAULT_LAYOUT: Layout = [
   { i: 'saved', x: 0, y: 48, w: 12, h: 10, minW: 4, minH: 4 },
 ]
 
+// NOTE (2026-07-06): ema_length/rsi_min/ema_distance_pips/min_body_pips/
+// max_body_pips/max_wick_pips/breakout_bars were REMOVED from this list -
+// they only feed the legacy fixed-strategy signal builder
+// (build_candidate_signal in engine/backtest_engine.py), which only runs
+// when condition_tree is absent. This dashboard's builder ALWAYS sends a
+// condition_tree (see runMutation below), so sweeping any of those old
+// params silently produced N identical ranking rows - a real, confirmed
+// no-op bug, not just a missing feature. Every parameter listed here
+// actually affects a condition-tree strategy's result regardless of which
+// other opt-in features are toggled (rr/lookahead_bars always apply; the
+// rest only take effect once their own use_* checkbox above is also on -
+// same as directly typing a value into that field would).
 const OPTIMIZABLE_PARAMS: OptimizableParam[] = [
-  { id: 'ema_length', label: 'EMA期間' },
   { id: 'rr', label: 'リスクリワード比' },
-  { id: 'rsi_min', label: 'RSI下限' },
-  { id: 'ema_distance_pips', label: 'EMA乖離(pips)' },
-  { id: 'min_body_pips', label: '実体最小(pips)' },
   { id: 'lookahead_bars', label: '先読みバー数' },
-  { id: 'breakout_bars', label: 'ブレイクアウトバー数' },
+  { id: 'weekend_exit_hour', label: '週末決済時刻' },
+  { id: 'daily_exit_hour', label: '日次決済時刻' },
+  { id: 'spread_pips', label: 'スプレッド(pips)' },
+  { id: 'slippage_pips', label: 'スリッページ(pips)' },
+  { id: 'commission_per_trade', label: '手数料(1取引あたり)' },
+  { id: 'atr_trailing_length', label: 'ATRトレーリング期間 ※要チェックボックスON' },
+  { id: 'atr_trailing_multiplier', label: 'ATRトレーリング倍率 ※要チェックボックスON' },
+  { id: 'breakeven_trigger_rr', label: '建値移動トリガーRR ※要チェックボックスON' },
+  { id: 'partial_tp_rr', label: '部分利確到達RR ※要チェックボックスON' },
+  { id: 'partial_tp_fraction', label: '部分利確割合 ※要チェックボックスON' },
+  { id: 'max_dd_stop_pips', label: '最大DDストップ(pips) ※要チェックボックスON' },
+  { id: 'consecutive_loss_stop_count', label: '連敗ストップ数 ※要チェックボックスON' },
+  { id: 'entry_offset_pips', label: '指値/逆指値オフセット ※要指値/逆指値選択' },
+  { id: 'risk_percent', label: 'リスク%(資金管理) ※要チェックボックスON' },
 ]
 
 const OPTIMIZATION_METRICS = [
@@ -60,13 +81,22 @@ const OPTIMIZATION_METRICS = [
 ]
 
 const PARAM_DEFAULTS: Record<string, { min: number; max: number; step: number }> = {
-  ema_length: { min: 150, max: 250, step: 20 },
   rr: { min: 1, max: 2, step: 0.2 },
-  rsi_min: { min: 60, max: 80, step: 5 },
-  ema_distance_pips: { min: 20, max: 80, step: 20 },
-  min_body_pips: { min: 10, max: 30, step: 5 },
   lookahead_bars: { min: 10, max: 20, step: 5 },
-  breakout_bars: { min: 20, max: 40, step: 5 },
+  weekend_exit_hour: { min: 0, max: 6, step: 1 },
+  daily_exit_hour: { min: 0, max: 23, step: 1 },
+  spread_pips: { min: 0, max: 2, step: 0.5 },
+  slippage_pips: { min: 0, max: 2, step: 0.5 },
+  commission_per_trade: { min: 0, max: 1, step: 0.1 },
+  atr_trailing_length: { min: 7, max: 21, step: 7 },
+  atr_trailing_multiplier: { min: 1, max: 3, step: 0.5 },
+  breakeven_trigger_rr: { min: 0.3, max: 0.8, step: 0.1 },
+  partial_tp_rr: { min: 0.5, max: 1.5, step: 0.25 },
+  partial_tp_fraction: { min: 0.2, max: 0.7, step: 0.1 },
+  max_dd_stop_pips: { min: 50, max: 150, step: 25 },
+  consecutive_loss_stop_count: { min: 2, max: 5, step: 1 },
+  entry_offset_pips: { min: 5, max: 20, step: 5 },
+  risk_percent: { min: 0.5, max: 2, step: 0.5 },
 }
 
 function defaultParamRange(param: string): ParamRangeConfig {
@@ -142,10 +172,12 @@ function ParamRangeRow({
   label,
   value,
   onChange,
+  onRemove,
 }: {
   label: string
   value: ParamRangeConfig
   onChange: (next: ParamRangeConfig) => void
+  onRemove?: () => void
 }) {
   return (
     <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.02] p-2">
@@ -156,6 +188,16 @@ function ParamRangeRow({
           onChange={(e) => onChange({ ...value, enabled: e.target.checked })}
         />
         {label}を最適化
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="ml-auto text-gray-500 hover:text-red-400"
+            title="このパラメータ範囲を削除"
+          >
+            ✕
+          </button>
+        )}
       </label>
       <div className="grid grid-cols-4 gap-1">
         <select
@@ -219,8 +261,22 @@ export default function App() {
   const [chartTimeframe, setChartTimeframe] = useState('15m')
   const [emaLength, setEmaLength] = useState(20)
 
-  const [paramRangeX, setParamRangeX] = useState<ParamRangeConfig>(() => defaultParamRange('ema_length'))
-  const [paramRangeY, setParamRangeY] = useState<ParamRangeConfig>(() => defaultParamRange('rr'))
+  // Any number of parameter ranges (not capped at 2) - each independently
+  // enabled/disabled, all feeding one N-dimensional grid search on the
+  // backend (main.py's itertools.product-based grid was already fully
+  // generic; this UI cap was the only limitation). The 3D surface below can
+  // only ever plot 2 axes at once, so surfaceParamX/Y pick which 2 of the
+  // currently-enabled ranges to visualize.
+  const [paramRanges, setParamRanges] = useState<ParamRangeConfig[]>(() => [
+    defaultParamRange('rr'),
+    defaultParamRange('lookahead_bars'),
+  ])
+  const addParamRange = () => setParamRanges((prev) => [...prev, defaultParamRange('rr')])
+  const removeParamRange = (index: number) => setParamRanges((prev) => prev.filter((_, i) => i !== index))
+  const updateParamRange = (index: number, next: ParamRangeConfig) =>
+    setParamRanges((prev) => prev.map((r, i) => (i === index ? next : r)))
+  const [surfaceParamX, setSurfaceParamX] = useState('rr')
+  const [surfaceParamY, setSurfaceParamY] = useState('lookahead_bars')
   const [optimizationMetric, setOptimizationMetric] = useState('net_profit')
 
   const [rr, setRr] = useState(1.2)
@@ -363,7 +419,7 @@ export default function App() {
 
   const runMutation = useMutation({
     mutationFn: () => {
-      const activeRanges = [paramRangeX, paramRangeY].filter((r) => r.enabled)
+      const activeRanges = paramRanges.filter((r) => r.enabled)
       const param_ranges =
         activeRanges.length > 0
           ? Object.fromEntries(activeRanges.map((r) => [r.param, buildRangeValues(r.min, r.max, r.step)]))
@@ -913,9 +969,23 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-xs font-semibold text-gray-400">パラメータ最適化(任意・3Dグラフ用)</div>
-                  <ParamRangeRow label="パラメータ1" value={paramRangeX} onChange={setParamRangeX} />
-                  <ParamRangeRow label="パラメータ2" value={paramRangeY} onChange={setParamRangeY} />
+                  <div className="text-xs font-semibold text-gray-400">パラメータ最適化(任意・いくつでも追加可)</div>
+                  {paramRanges.map((range, i) => (
+                    <ParamRangeRow
+                      key={i}
+                      label={`パラメータ${i + 1}`}
+                      value={range}
+                      onChange={(next) => updateParamRange(i, next)}
+                      onRemove={paramRanges.length > 1 ? () => removeParamRange(i) : undefined}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addParamRange}
+                    className="w-full rounded-lg border border-dashed border-white/20 px-2 py-1 text-xs text-gray-400 hover:bg-white/5 hover:text-gray-200"
+                  >
+                    + パラメータ範囲を追加
+                  </button>
                   <select
                     className="glass-input w-full rounded-lg px-2 py-1.5 text-xs"
                     value={optimizationMetric}
@@ -1025,13 +1095,54 @@ export default function App() {
             </Panel>
 
             <Panel key="surface" title="⑧ 最適化サーフェス(3D)">
-              <OptimizationSurface
-                rows={results?.ranking_total ?? []}
-                paramX={paramRangeX.param}
-                paramY={paramRangeY.param}
-                metric={optimizationMetric}
-                metricLabel={OPTIMIZATION_METRICS.find((m) => m.id === optimizationMetric)?.label ?? optimizationMetric}
-              />
+              {(() => {
+                const enabledParams = paramRanges.filter((r) => r.enabled).map((r) => r.param)
+                const effectiveX = enabledParams.includes(surfaceParamX) ? surfaceParamX : (enabledParams[0] ?? surfaceParamX)
+                const effectiveY = enabledParams.includes(surfaceParamY) ? surfaceParamY : (enabledParams[1] ?? surfaceParamY)
+                return (
+                  <>
+                    {enabledParams.length > 2 && (
+                      <div className="mb-2 flex gap-2 text-xs text-gray-300">
+                        <label className="flex flex-1 items-center gap-1">
+                          X軸
+                          <select
+                            className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
+                            value={effectiveX}
+                            onChange={(e) => setSurfaceParamX(e.target.value)}
+                          >
+                            {enabledParams.map((param) => (
+                              <option key={param} value={param}>
+                                {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-1 items-center gap-1">
+                          Y軸
+                          <select
+                            className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
+                            value={effectiveY}
+                            onChange={(e) => setSurfaceParamY(e.target.value)}
+                          >
+                            {enabledParams.map((param) => (
+                              <option key={param} value={param}>
+                                {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+                    <OptimizationSurface
+                      rows={results?.ranking_total ?? []}
+                      paramX={effectiveX}
+                      paramY={effectiveY}
+                      metric={optimizationMetric}
+                      metricLabel={OPTIMIZATION_METRICS.find((m) => m.id === optimizationMetric)?.label ?? optimizationMetric}
+                    />
+                  </>
+                )
+              })()}
             </Panel>
 
             <Panel key="trades" title="⑤ 取引履歴">
