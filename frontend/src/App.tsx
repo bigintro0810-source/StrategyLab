@@ -21,6 +21,7 @@ import type {
   PartialTpLevel,
 } from './types'
 import { buildConditionTreeVariants, collectOptimizableConditions, pathIsValid } from './conditionTreeUtils'
+import { buildRangeValues } from './rangeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
 import ChartPanel from './components/ChartPanel'
 import RankingTable from './components/RankingTable'
@@ -111,15 +112,6 @@ const PARAM_DEFAULTS: Record<string, { min: number; max: number; step: number }>
 function defaultParamRange(param: string): ParamRangeConfig {
   const d = PARAM_DEFAULTS[param] ?? { min: 1, max: 10, step: 1 }
   return { enabled: false, param, ...d }
-}
-
-function buildRangeValues(min: number, max: number, step: number): number[] {
-  if (step <= 0 || max < min) return [min]
-  const values: number[] = []
-  for (let v = min; v <= max + 1e-9; v += step) {
-    values.push(Math.round(v * 1000) / 1000)
-  }
-  return values.length > 0 ? values : [min]
 }
 
 function loadLayout(): Layout {

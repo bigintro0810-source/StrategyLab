@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -10,5 +10,11 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8736',
     },
+  },
+  test: {
+    // Pure-logic unit tests only (conditionTreeUtils, rangeUtils) - no DOM
+    // needed, so the default 'node' environment is fine and avoids an extra
+    // jsdom dependency.
+    include: ['src/**/*.test.ts'],
   },
 })
