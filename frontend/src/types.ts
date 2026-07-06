@@ -128,7 +128,12 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 export interface BacktestStatus {
   status: JobStatus
   stdout_tail: string
+  // Raw traceback (Python file paths/line numbers) - useful for reporting
+  // a bug, not meant to be the first thing shown.
   error: string | null
+  // Short, Japanese, non-scary summary extracted from `error` - what the
+  // UI should show by default.
+  error_summary: string | null
 }
 
 export interface RankingRow {

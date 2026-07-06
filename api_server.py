@@ -15,6 +15,8 @@ Run with: uvicorn api_server:app --reload
 
 import asyncio
 import json
+import os
+import re
 import sys
 import uuid
 from datetime import datetime
@@ -199,13 +201,60 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
     return config_path
 
 
+def _extract_friendly_error(stderr: str) -> str:
+    """Distills a raw Python traceback down to a short, Japanese, non-scary
+    summary for display in the UI - the raw traceback (file paths, line
+    numbers, "Traceback (most recent call last):", etc.) is useful for
+    debugging but not something a non-technical user should have to read
+    first. Many of this codebase's own raised exceptions already carry a
+    Japanese message (engine/conditions.py's ValueErrors, main.py's
+    find_data_file's FileNotFoundError, etc.), so extracting just the
+    final "ExceptionType: message" line of the traceback alone surfaces
+    something readable in most real cases. The full stderr stays available
+    separately (the job's `error` field) for anyone who wants to see - or
+    report - the raw traceback."""
+    lines = [line for line in stderr.strip().splitlines() if line.strip()]
+    if not lines:
+        return "原因不明のエラーが発生しました。しばらく待ってからもう一度お試しください。"
+
+    last_line = lines[-1]
+    match = re.match(r"^([\w.]+(?:Error|Exception)):\s*(.*)$", last_line)
+    if match:
+        exc_type, message = match.group(1), match.group(2)
+        if message:
+            return f"バックテストの実行中にエラーが発生しました。\n\n{message}"
+        return (
+            f"バックテストの実行中にエラーが発生しました({exc_type})。\n\n"
+            "下の「詳細を見る」を開いて、内容を販売元にお問い合わせください。"
+        )
+
+    return (
+        f"バックテストの実行中にエラーが発生しました。\n\n{last_line}\n\n"
+        "下の「詳細を見る」を開いて、内容を販売元にお問い合わせください。"
+    )
+
+
 async def _run_job(job_id: str, cmd: list[str]) -> None:
     JOBS[job_id]["status"] = "running"
+
+    # Without an explicit UTF-8 override, main.py's own stdout/stderr encoding
+    # follows the Windows console codepage (e.g. cp932 on a Japanese-locale
+    # machine), so its Japanese messages arrive here as mojibake once decoded
+    # as UTF-8 below. PYTHON_COLORS=0 disables Python 3.13's colorized
+    # tracebacks (raw ANSI escape codes), which otherwise pollute stderr and
+    # break _extract_friendly_error's "ExceptionType: message" regex match.
+    child_env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "PYTHON_COLORS": "0",
+    }
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=child_env,
     )
     stdout, stderr = await process.communicate()
 
@@ -252,10 +301,12 @@ async def get_backtest_status(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
+    error = job["stderr"][-2000:] if job["status"] == "error" else None
     return {
         "status": job["status"],
         "stdout_tail": job["stdout"][-2000:],
-        "error": job["stderr"][-2000:] if job["status"] == "error" else None,
+        "error": error,
+        "error_summary": _extract_friendly_error(error) if error else None,
     }
 
 

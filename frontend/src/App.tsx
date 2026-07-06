@@ -1246,9 +1246,19 @@ export default function App() {
                 </button>
 
                 {statusQuery.data?.status === 'error' && (
-                  <pre className="max-h-40 overflow-auto rounded-lg border border-red-500/20 bg-red-950/40 p-2 text-xs text-red-300">
-                    {statusQuery.data.error}
-                  </pre>
+                  <div className="rounded-lg border border-red-500/20 bg-red-950/40 p-2.5 text-xs text-red-200">
+                    <p className="whitespace-pre-wrap leading-relaxed">
+                      {statusQuery.data.error_summary ?? 'バックテストの実行中にエラーが発生しました。'}
+                    </p>
+                    {statusQuery.data.error && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-red-400 hover:text-red-300">詳細を見る(技術情報)</summary>
+                        <pre className="mt-1 max-h-40 overflow-auto rounded-lg bg-black/30 p-2 text-[11px] text-red-300">
+                          {statusQuery.data.error}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
                 )}
               </div>
             </Panel>
