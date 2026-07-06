@@ -72,6 +72,11 @@ export interface BacktestRequest {
   fixed_lot_size?: number
   contract_size?: number
   conversion_rate?: number
+  use_breakeven_stop?: boolean
+  breakeven_trigger_rr?: number
+  use_partial_tp?: boolean
+  partial_tp_rr?: number
+  partial_tp_fraction?: number
 }
 
 export interface ParamRangeConfig {
@@ -136,6 +141,8 @@ export interface TradeRow {
   lot_size?: number
   profit_currency?: number
   account_balance?: number
+  // Only present for trades that actually took a partial profit (use_partial_tp).
+  partial_exit_price?: number
   [key: string]: unknown
 }
 

@@ -94,6 +94,13 @@ class BacktestRequest(BaseModel):
     fixed_lot_size: float = 0.1
     contract_size: float = 100_000.0
     conversion_rate: float = 150.0
+    # Breakeven stop move and partial profit-taking - both default off (SL/TP
+    # stay exactly as RR-computed at entry unless opted in).
+    use_breakeven_stop: bool = False
+    breakeven_trigger_rr: float = 0.5
+    use_partial_tp: bool = False
+    partial_tp_rr: float = 1.0
+    partial_tp_fraction: float = 0.5
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -137,6 +144,11 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "fixed_lot_size": [req.fixed_lot_size],
         "contract_size": [req.contract_size],
         "conversion_rate": [req.conversion_rate],
+        "use_breakeven_stop": [req.use_breakeven_stop],
+        "breakeven_trigger_rr": [req.breakeven_trigger_rr],
+        "use_partial_tp": [req.use_partial_tp],
+        "partial_tp_rr": [req.partial_tp_rr],
+        "partial_tp_fraction": [req.partial_tp_fraction],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -

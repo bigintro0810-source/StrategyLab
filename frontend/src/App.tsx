@@ -272,6 +272,15 @@ export default function App() {
   const [fixedLotSize, setFixedLotSize] = useState(0.1)
   const [conversionRate, setConversionRate] = useState(150.0)
 
+  // Breakeven stop move and partial profit-taking - both off by default
+  // (SL/TP stay exactly as RR-computed at entry, today's existing behavior
+  // unchanged unless opted in).
+  const [useBreakevenStop, setUseBreakevenStop] = useState(false)
+  const [breakevenTriggerRr, setBreakevenTriggerRr] = useState(0.5)
+  const [usePartialTp, setUsePartialTp] = useState(false)
+  const [partialTpRr, setPartialTpRr] = useState(1.0)
+  const [partialTpFraction, setPartialTpFraction] = useState(0.5)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -344,6 +353,11 @@ export default function App() {
       if (typeof detail.params.risk_percent === 'number') setRiskPercent(detail.params.risk_percent)
       if (typeof detail.params.fixed_lot_size === 'number') setFixedLotSize(detail.params.fixed_lot_size)
       if (typeof detail.params.conversion_rate === 'number') setConversionRate(detail.params.conversion_rate)
+      if (typeof detail.params.use_breakeven_stop === 'boolean') setUseBreakevenStop(detail.params.use_breakeven_stop)
+      if (typeof detail.params.breakeven_trigger_rr === 'number') setBreakevenTriggerRr(detail.params.breakeven_trigger_rr)
+      if (typeof detail.params.use_partial_tp === 'boolean') setUsePartialTp(detail.params.use_partial_tp)
+      if (typeof detail.params.partial_tp_rr === 'number') setPartialTpRr(detail.params.partial_tp_rr)
+      if (typeof detail.params.partial_tp_fraction === 'number') setPartialTpFraction(detail.params.partial_tp_fraction)
     },
   })
 
@@ -392,6 +406,11 @@ export default function App() {
         risk_percent: riskPercent,
         fixed_lot_size: fixedLotSize,
         conversion_rate: conversionRate,
+        use_breakeven_stop: useBreakevenStop,
+        breakeven_trigger_rr: breakevenTriggerRr,
+        use_partial_tp: usePartialTp,
+        partial_tp_rr: partialTpRr,
+        partial_tp_fraction: partialTpFraction,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -647,6 +666,61 @@ export default function App() {
                         className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={atrTrailingMultiplier}
                         onChange={(e) => setAtrTrailingMultiplier(Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useBreakevenStop}
+                      onChange={(e) => setUseBreakevenStop(e.target.checked)}
+                    />
+                    建値移動(ブレイクイーブン)を使う
+                    <span className="ml-auto flex items-center gap-1">
+                      <input
+                        type="number"
+                        step={0.1}
+                        min={0}
+                        disabled={!useBreakevenStop}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={breakevenTriggerRr}
+                        onChange={(e) => setBreakevenTriggerRr(Number(e.target.value))}
+                      />
+                      RR到達で
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={usePartialTp}
+                      onChange={(e) => setUsePartialTp(e.target.checked)}
+                    />
+                    部分利確を使う
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
+                    <label className="flex items-center justify-between gap-1">
+                      到達RR
+                      <input
+                        type="number"
+                        step={0.1}
+                        min={0.1}
+                        disabled={!usePartialTp}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={partialTpRr}
+                        onChange={(e) => setPartialTpRr(Number(e.target.value))}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1">
+                      決済割合
+                      <input
+                        type="number"
+                        step={0.05}
+                        min={0.05}
+                        max={0.95}
+                        disabled={!usePartialTp}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={partialTpFraction}
+                        onChange={(e) => setPartialTpFraction(Number(e.target.value))}
                       />
                     </label>
                   </div>
