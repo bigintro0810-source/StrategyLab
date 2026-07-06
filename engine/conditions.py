@@ -285,6 +285,18 @@ def _cache_key(indicator: str, params: dict[str, Any], timeframe: str | None = N
 def _resolve_mtf_series(
     df: pd.DataFrame, cache: dict, indicator: str, params: dict[str, Any], timeframe: str
 ) -> np.ndarray:
+    # NOTE: deliberately NOT cached beyond this one evaluate_condition_tree()
+    # call (unlike, say, a module-level cache keyed on symbol/timeframe
+    # alone). walk_forward.py calls run_backtest() repeatedly in the SAME
+    # process across different YEAR-SLICED windows of the same symbol/
+    # timeframe (see walk_forward.py's per-window test_result call) - a
+    # cache keyed only on (symbol, timeframe, indicator, params) would
+    # silently reuse one window's alignment for a different window's date
+    # range, corrupting walk-forward results with no visible error. Re-
+    # reading the MTF file/recomputing its indicator once per grid
+    # combination is measured overhead of ~0.05s/run - a correctness-over-
+    # speed tradeoff matching this project's own stated priority order
+    # (拡張性>保守性>速度>可読性).
     symbol = cache.get("__symbol__")
     if symbol is None:
         raise ValueError(

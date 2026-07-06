@@ -202,16 +202,21 @@ def _resolve_partial_tp_levels(p: dict[str, Any]) -> list[tuple[float, float]]:
     what's left, not 150% of the original).
 
     Falls back to the older single-level partial_tp_rr/partial_tp_fraction
-    scalar fields (as a 1-element list) for strategies saved before
-    multi-stage support existed - a 1-element list here reproduces that
-    original behavior exactly."""
+    scalar fields (as a 1-element list) only when partial_tp_levels is
+    completely ABSENT (None) - for strategies saved before multi-stage
+    support existed, where a 1-element list here reproduces the original
+    behavior exactly. An explicitly empty list ([]) is NOT treated as
+    "absent" - it means zero levels (no partial exits at all, trade rides
+    to the full TP/SL untouched), matching what an empty list should mean
+    rather than silently substituting an unrelated default the caller never
+    asked for."""
     raw_levels = p.get("partial_tp_levels")
-    if raw_levels:
-        return sorted(
-            ((float(lv["rr"]), float(lv["fraction"])) for lv in raw_levels),
-            key=lambda level: level[0],
-        )
-    return [(float(p.get("partial_tp_rr", 1.0)), float(p.get("partial_tp_fraction", 0.5)))]
+    if raw_levels is None:
+        return [(float(p.get("partial_tp_rr", 1.0)), float(p.get("partial_tp_fraction", 0.5)))]
+    return sorted(
+        ((float(lv["rr"]), float(lv["fraction"])) for lv in raw_levels),
+        key=lambda level: level[0],
+    )
 
 
 def prepare_indicator_columns(
