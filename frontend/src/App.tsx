@@ -109,7 +109,7 @@ const NAV_ITEMS = [
 ]
 
 const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD']
-const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
+const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
 function defaultTree(): GroupNode {
   return {

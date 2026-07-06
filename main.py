@@ -19,7 +19,7 @@ from engine.strategy_config_loader import load_strategy_config
 from engine.params import reconstruct_params_from_row
 
 
-AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 
 SUPPORTED_SYMBOLS = [
     "USDJPY",
