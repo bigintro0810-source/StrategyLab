@@ -30,6 +30,7 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "condition_tree": _reconstruct_tree(row, "condition_tree"),
         "long_condition_tree": _reconstruct_tree(row, "long_condition_tree"),
         "short_condition_tree": _reconstruct_tree(row, "short_condition_tree"),
+        "symbol": str(row.get("symbol", "USDJPY")),
         "ema_length": int(row["ema_length"]),
         "min_body_pips": float(row["min_body_pips"]),
         "max_body_pips": float(row["max_body_pips"]),

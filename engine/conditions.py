@@ -55,6 +55,47 @@ from engine.smc_indicators import (
     liquidity_sweep_bearish,
     liquidity_sweep_bullish,
 )
+from engine.data_loader import find_data_file, load_price_data
+
+_TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+    "1w": 604800,
+}
+
+
+def _infer_timeframe_label(datetime_series: pd.Series) -> str | None:
+    """Guesses which of this project's known timeframe labels a price
+    series' bars match, from the median gap between bars - used only to
+    detect when a condition's requested `timeframe` happens to equal the
+    backtest's own base timeframe, so that case can skip the multi-
+    timeframe alignment path entirely (which would otherwise introduce a
+    spurious 1-bar lag not present in a normal same-timeframe condition)."""
+    median_seconds = pd.to_datetime(datetime_series).diff().dt.total_seconds().median()
+    if pd.isna(median_seconds):
+        return None
+    label, _ = min(_TIMEFRAME_SECONDS.items(), key=lambda kv: abs(kv[1] - median_seconds))
+    return label
+
+
+def _align_mtf_series(base_datetime: pd.Series, tf_datetime: pd.Series, tf_values: np.ndarray) -> np.ndarray:
+    """Aligns another timeframe's indicator array down to base_datetime's bar
+    index, using only the most recently CLOSED bar of that other timeframe as
+    of each base bar. Shifting tf_values by 1 before an as-of backward merge
+    is the standard no-lookahead MTF alignment technique: row i of the
+    shifted series holds the value of the bar that just closed as of
+    tf_datetime[i], so backward-matching against it can never return a
+    still-forming bar's value."""
+    shifted = pd.Series(tf_values).shift(1)
+    tf_lookup = pd.DataFrame({"datetime": pd.to_datetime(tf_datetime), "value": shifted}).sort_values("datetime")
+    base_lookup = pd.DataFrame({"datetime": pd.to_datetime(base_datetime)})
+    merged = pd.merge_asof(base_lookup, tf_lookup, on="datetime", direction="backward")
+    return merged["value"].to_numpy(dtype=float)
 
 
 def _highest_high(df: pd.DataFrame, length: int = 20) -> np.ndarray:
@@ -237,13 +278,45 @@ INDICATOR_REGISTRY: dict[str, Any] = {
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}
 
 
-def _cache_key(indicator: str, params: dict[str, Any]) -> tuple:
-    return (indicator, tuple(sorted(params.items())))
+def _cache_key(indicator: str, params: dict[str, Any], timeframe: str | None = None) -> tuple:
+    return (indicator, tuple(sorted(params.items())), timeframe)
 
 
-def _resolve_series(df: pd.DataFrame, cache: dict, indicator: str, params: dict[str, Any]) -> np.ndarray:
+def _resolve_mtf_series(
+    df: pd.DataFrame, cache: dict, indicator: str, params: dict[str, Any], timeframe: str
+) -> np.ndarray:
+    symbol = cache.get("__symbol__")
+    if symbol is None:
+        raise ValueError(
+            "マルチタイムフレーム条件(timeframe指定)を使うにはsymbolが必要です"
+            "(evaluate_condition_treeにsymbol引数を渡してください)"
+        )
+
+    mtf_df_key = ("__mtf_df__", symbol, timeframe)
+    if mtf_df_key not in cache:
+        cache[mtf_df_key] = load_price_data(find_data_file(timeframe, symbol))
+    tf_df = cache[mtf_df_key]
+
+    series_key = _cache_key(indicator, params, timeframe)
+    if series_key not in cache:
+        raw = INDICATOR_REGISTRY[indicator](tf_df, **params)
+        cache[series_key] = _align_mtf_series(df["datetime"], tf_df["datetime"], raw)
+
+    return cache[series_key]
+
+
+def _resolve_series(
+    df: pd.DataFrame, cache: dict, indicator: str, params: dict[str, Any], timeframe: str | None = None
+) -> np.ndarray:
     if indicator not in INDICATOR_REGISTRY:
         raise ValueError(f"未知のindicatorです: {indicator}")
+
+    # A timeframe matching the backtest's own base timeframe is treated
+    # exactly like no timeframe at all (see _infer_timeframe_label's
+    # docstring) - only a genuinely different timeframe goes through the
+    # multi-timeframe alignment path.
+    if timeframe is not None and timeframe != cache.get("__base_timeframe__"):
+        return _resolve_mtf_series(df, cache, indicator, params, timeframe)
 
     key = _cache_key(indicator, params)
     if key not in cache:
@@ -261,23 +334,32 @@ def _shift_forward_false(arr: np.ndarray) -> np.ndarray:
 
 @dataclass
 class Condition:
-    """One indicator compared against a literal value or another indicator."""
+    """One indicator compared against a literal value or another indicator.
+
+    timeframe/value_timeframe (both optional, default None = the backtest's
+    own base timeframe, today's existing behavior unchanged) let either side
+    reference a DIFFERENT timeframe's data for the same symbol - e.g. a 15m
+    backtest filtering entries by a 1h or daily EMA. Causally safe: only the
+    most recently CLOSED bar of that other timeframe is ever visible to a
+    given base bar (see _align_mtf_series)."""
 
     indicator: str
     operator: str
     value: Union[float, "Condition"]
     params: dict[str, Any] = field(default_factory=dict)
     value_params: dict[str, Any] = field(default_factory=dict)
+    timeframe: str | None = None
+    value_timeframe: str | None = None
 
     def __post_init__(self) -> None:
         if self.operator not in _OPERATORS:
             raise ValueError(f"未知のoperatorです: {self.operator}")
 
     def evaluate(self, df: pd.DataFrame, cache: dict) -> np.ndarray:
-        left = _resolve_series(df, cache, self.indicator, self.params)
+        left = _resolve_series(df, cache, self.indicator, self.params, self.timeframe)
 
         if isinstance(self.value, str):
-            right = _resolve_series(df, cache, self.value, self.value_params)
+            right = _resolve_series(df, cache, self.value, self.value_params, self.value_timeframe)
         else:
             right = float(self.value)
 
@@ -308,6 +390,8 @@ class Condition:
             "value": value,
             "params": self.params,
             "value_params": self.value_params,
+            "timeframe": self.timeframe,
+            "value_timeframe": self.value_timeframe,
         }
 
     @staticmethod
@@ -321,6 +405,8 @@ class Condition:
             value=value,
             params=dict(data.get("params", {})),
             value_params=dict(data.get("value_params", {})),
+            timeframe=data.get("timeframe"),
+            value_timeframe=data.get("value_timeframe"),
         )
 
 
@@ -363,8 +449,16 @@ def node_from_dict(data: dict) -> Union[Condition, ConditionGroup]:
     return Condition.from_dict(data)
 
 
-def evaluate_condition_tree(tree: dict, df: pd.DataFrame) -> np.ndarray:
-    """Entry point used by engine/backtest_engine.py: JSON dict in, boolean array out."""
+def evaluate_condition_tree(tree: dict, df: pd.DataFrame, symbol: str | None = None) -> np.ndarray:
+    """Entry point used by engine/backtest_engine.py: JSON dict in, boolean array out.
+
+    `symbol` is only required if the tree contains a node with a `timeframe`
+    different from the backtest's own base timeframe (multi-timeframe
+    conditions) - otherwise unused, so every pre-existing caller that never
+    passes it keeps working unchanged."""
     node = node_from_dict(tree)
-    cache: dict = {}
+    cache: dict = {
+        "__symbol__": symbol,
+        "__base_timeframe__": _infer_timeframe_label(df["datetime"]),
+    }
     return node.evaluate(df, cache)

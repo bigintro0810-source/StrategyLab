@@ -370,7 +370,7 @@ def run_backtest(
         # V-next generic condition engine (engine/conditions.py) - additive path,
         # selected only when a strategy explicitly supplies a condition_tree. The
         # existing entry_trigger/use_X_filter path below is untouched otherwise.
-        candidate_signal = evaluate_condition_tree(condition_tree, df)
+        candidate_signal = evaluate_condition_tree(condition_tree, df, symbol=p.get("symbol"))
     else:
         candidate_signal = build_candidate_signal(
             df,
@@ -915,7 +915,7 @@ def _run_limit_stop_backtest(
 
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
-        candidate_signal = evaluate_condition_tree(condition_tree, df)
+        candidate_signal = evaluate_condition_tree(condition_tree, df, symbol=p.get("symbol"))
     else:
         ema_length = int(p["ema_length"])
         breakout_bars = int(p["breakout_bars"])
@@ -1388,9 +1388,9 @@ def _run_dual_direction_backtest(
 
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
-    long_candidate = evaluate_condition_tree(long_tree, df) if long_tree is not None else np.zeros(len(df), dtype=bool)
+    long_candidate = evaluate_condition_tree(long_tree, df, symbol=p.get("symbol")) if long_tree is not None else np.zeros(len(df), dtype=bool)
     short_candidate = (
-        evaluate_condition_tree(short_tree, df) if short_tree is not None else np.zeros(len(df), dtype=bool)
+        evaluate_condition_tree(short_tree, df, symbol=p.get("symbol")) if short_tree is not None else np.zeros(len(df), dtype=bool)
     )
 
     profits: list[float] = []

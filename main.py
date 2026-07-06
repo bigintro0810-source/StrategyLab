@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday, calc_max_dd
+from engine.data_loader import DATA_DIRS, build_data_candidates, find_data_file, load_price_data
 from engine.advanced_metrics import sharpe_ratio, sortino_ratio, cagr, calmar_ratio
 from engine.equity_curve import export_equity_curve
 from engine.monte_carlo import export_monte_carlo, print_monte_carlo_summary
@@ -30,8 +31,6 @@ SUPPORTED_SYMBOLS = [
     "EURUSD",
     "GBPUSD",
 ]
-
-DATA_DIRS = ["data/raw", "data", "input", "."]
 
 OUTPUT_DIR = Path("output")
 
@@ -108,34 +107,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_data_candidates(timeframe: str, symbol: str = "USDJPY") -> list[str]:
-    filenames = [
-        f"{symbol}_2003_2026_{timeframe}.csv",
-        f"{symbol}_2003_2026_{timeframe}_TV_NY.csv",
-    ]
-
-    if timeframe == "1m":
-        filenames.append(f"{symbol}_2003_2026_1min_filled.csv")
-
-    candidates = [
-        str(Path(d) / f"{symbol}_Data" / name) for d in DATA_DIRS for name in filenames
-    ]
-    candidates += [str(Path(d) / name) for d in DATA_DIRS for name in filenames]
-
-    return candidates
-
-
-def find_data_file(timeframe: str = "15m", symbol: str = "USDJPY") -> Path:
-    for file_path in build_data_candidates(timeframe, symbol):
-        path = Path(file_path)
-        if path.exists():
-            return path
-
-    raise FileNotFoundError(
-        f"{symbol}_2003_2026_{timeframe}.csv が見つかりません。data/raw に置いてください。"
-    )
-
-
 def resolve_output_dir(symbol: str, timeframe: str) -> Path:
     parts = []
 
@@ -146,44 +117,6 @@ def resolve_output_dir(symbol: str, timeframe: str) -> Path:
         parts.append(timeframe)
 
     return Path("output").joinpath(*parts) if parts else Path("output")
-
-
-def load_price_data(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-
-    rename_map = {}
-
-    for col in df.columns:
-        name = col.lower().strip()
-
-        if name in ["datetime", "time", "date", "timestamp", "gmt time"]:
-            rename_map[col] = "datetime"
-        elif name in ["open", "o"]:
-            rename_map[col] = "open"
-        elif name in ["high", "h"]:
-            rename_map[col] = "high"
-        elif name in ["low", "l"]:
-            rename_map[col] = "low"
-        elif name in ["close", "c"]:
-            rename_map[col] = "close"
-
-    df = df.rename(columns=rename_map)
-
-    required_cols = ["datetime", "open", "high", "low", "close"]
-    missing = [col for col in required_cols if col not in df.columns]
-
-    if missing:
-        raise ValueError(f"必要な列がありません: {missing}")
-
-    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
-
-    for col in ["open", "high", "low", "close"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df = df.dropna(subset=required_cols)
-    df = df.sort_values("datetime").reset_index(drop=True)
-
-    return df
 
 
 JPY_PIP_SIZE = 0.01
@@ -281,6 +214,7 @@ def build_parameter_space(mode: str, symbol: str = "USDJPY") -> dict[str, list]:
             "use_daily_exit": [False],
             "daily_exit_hour": [4],
             "pip_size": [pip_size],
+            "symbol": [symbol],
             **build_trigger_filter_defaults(),
         }
 
@@ -301,6 +235,7 @@ def build_parameter_space(mode: str, symbol: str = "USDJPY") -> dict[str, list]:
         "use_daily_exit": [False],
         "daily_exit_hour": [4],
         "pip_size": [pip_size],
+        "symbol": [symbol],
         **build_trigger_filter_defaults(),
     }
 

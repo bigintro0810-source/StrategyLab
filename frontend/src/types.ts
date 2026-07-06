@@ -11,6 +11,12 @@ export interface ConditionNode {
   value: number | string
   params: ConditionParams
   value_params: ConditionParams
+  // Multi-timeframe: undefined/omitted = the backtest's own base timeframe
+  // (today's existing behavior). Only meaningful when value is a string
+  // (an indicator reference) for value_timeframe - a literal number has no
+  // timeframe concept.
+  timeframe?: string
+  value_timeframe?: string
 }
 
 // Mirrors engine/conditions.py::ConditionGroup.to_dict()

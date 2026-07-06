@@ -156,6 +156,10 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         # silently corrupting every _pips-suffixed filter threshold and the
         # spread/slippage cost above for 3 of the 7 supported symbols.
         "pip_size": [pip_size_for_symbol(req.symbol)],
+        # Needed for multi-timeframe conditions (a condition node whose
+        # timeframe differs from req.timeframe) so the engine knows which
+        # symbol's other-timeframe data file to load.
+        "symbol": [req.symbol],
         "direction": [req.direction],
         "condition_tree": [req.condition_tree],
         "long_condition_tree": [req.long_condition_tree],

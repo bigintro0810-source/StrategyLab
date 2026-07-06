@@ -10,6 +10,12 @@ const OPERATORS: { id: Operator; label: string }[] = [
   { id: 'crosses_below', label: '下抜け' },
 ]
 
+// Multi-timeframe conditions: reference a different timeframe's own data
+// for this indicator (e.g. a 15m strategy filtering by a 1h/4h/daily EMA).
+// The empty option means "no override" (undefined - the backtest's own base
+// timeframe, today's existing behavior).
+const TIMEFRAME_OPTIONS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+
 interface Props {
   node: ConditionNode
   indicators: IndicatorInfo[]
@@ -55,6 +61,20 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           onChange={(e) => onChange({ ...node, params: { length: Number(e.target.value) } })}
         />
       )}
+
+      <select
+        className="glass-input rounded-lg px-1 py-1 text-xs"
+        title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+        value={node.timeframe ?? ''}
+        onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
+      >
+        <option value="">(自足)</option>
+        {TIMEFRAME_OPTIONS.map((tf) => (
+          <option key={tf} value={tf}>
+            {tf}
+          </option>
+        ))}
+      </select>
 
       <select
         className="glass-input rounded-lg px-2 py-1"
@@ -123,6 +143,19 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
               onChange={(e) => onChange({ ...node, value_params: { length: Number(e.target.value) } })}
             />
           )}
+          <select
+            className="glass-input rounded-lg px-1 py-1 text-xs"
+            title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+            value={node.value_timeframe ?? ''}
+            onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}
+          >
+            <option value="">(自足)</option>
+            {TIMEFRAME_OPTIONS.map((tf) => (
+              <option key={tf} value={tf}>
+                {tf}
+              </option>
+            ))}
+          </select>
         </>
       )}
 
