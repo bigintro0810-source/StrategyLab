@@ -243,6 +243,15 @@ export default function App() {
   const [atrTrailingLength, setAtrTrailingLength] = useState(14)
   const [atrTrailingMultiplier, setAtrTrailingMultiplier] = useState(2.0)
 
+  // Circuit breakers - both off by default (never pause, today's existing
+  // behavior unchanged unless opted in). Confirmed with the user
+  // 2026-07-06: both pause-and-resume rather than stopping permanently.
+  const [useMaxDdStop, setUseMaxDdStop] = useState(false)
+  const [maxDdStopPips, setMaxDdStopPips] = useState(100)
+  const [useConsecutiveLossStop, setUseConsecutiveLossStop] = useState(false)
+  const [consecutiveLossStopCount, setConsecutiveLossStopCount] = useState(3)
+  const [consecutiveLossStopBars, setConsecutiveLossStopBars] = useState(100)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -291,6 +300,11 @@ export default function App() {
       if (typeof detail.params.use_atr_trailing_stop === 'boolean') setUseAtrTrailingStop(detail.params.use_atr_trailing_stop)
       if (typeof detail.params.atr_trailing_length === 'number') setAtrTrailingLength(detail.params.atr_trailing_length)
       if (typeof detail.params.atr_trailing_multiplier === 'number') setAtrTrailingMultiplier(detail.params.atr_trailing_multiplier)
+      if (typeof detail.params.use_max_dd_stop === 'boolean') setUseMaxDdStop(detail.params.use_max_dd_stop)
+      if (typeof detail.params.max_dd_stop_pips === 'number') setMaxDdStopPips(detail.params.max_dd_stop_pips)
+      if (typeof detail.params.use_consecutive_loss_stop === 'boolean') setUseConsecutiveLossStop(detail.params.use_consecutive_loss_stop)
+      if (typeof detail.params.consecutive_loss_stop_count === 'number') setConsecutiveLossStopCount(detail.params.consecutive_loss_stop_count)
+      if (typeof detail.params.consecutive_loss_stop_bars === 'number') setConsecutiveLossStopBars(detail.params.consecutive_loss_stop_bars)
     },
   })
 
@@ -322,6 +336,11 @@ export default function App() {
         use_atr_trailing_stop: useAtrTrailingStop,
         atr_trailing_length: atrTrailingLength,
         atr_trailing_multiplier: atrTrailingMultiplier,
+        use_max_dd_stop: useMaxDdStop,
+        max_dd_stop_pips: maxDdStopPips,
+        use_consecutive_loss_stop: useConsecutiveLossStop,
+        consecutive_loss_stop_count: consecutiveLossStopCount,
+        consecutive_loss_stop_bars: consecutiveLossStopBars,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -548,6 +567,60 @@ export default function App() {
                         className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={atrTrailingMultiplier}
                         onChange={(e) => setAtrTrailingMultiplier(Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                  <div className="text-xs font-semibold text-gray-400">リスク管理(任意・一時停止して再開)</div>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useMaxDdStop}
+                      onChange={(e) => setUseMaxDdStop(e.target.checked)}
+                    />
+                    最大DDストップを使う
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      disabled={!useMaxDdStop}
+                      className="glass-input ml-auto w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                      value={maxDdStopPips}
+                      onChange={(e) => setMaxDdStopPips(Number(e.target.value))}
+                    />
+                    pips
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={useConsecutiveLossStop}
+                      onChange={(e) => setUseConsecutiveLossStop(e.target.checked)}
+                    />
+                    連敗ストップを使う
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
+                    <label className="flex items-center justify-between gap-1">
+                      連敗数
+                      <input
+                        type="number"
+                        min={1}
+                        disabled={!useConsecutiveLossStop}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={consecutiveLossStopCount}
+                        onChange={(e) => setConsecutiveLossStopCount(Number(e.target.value))}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1">
+                      停止バー数
+                      <input
+                        type="number"
+                        min={1}
+                        disabled={!useConsecutiveLossStop}
+                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={consecutiveLossStopBars}
+                        onChange={(e) => setConsecutiveLossStopBars(Number(e.target.value))}
                       />
                     </label>
                   </div>

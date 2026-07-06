@@ -43,6 +43,15 @@ class BacktestConfig:
     use_atr_trailing_stop: bool = False
     atr_trailing_length: int = 14
     atr_trailing_multiplier: float = 2.0
+    # Circuit breakers - both default off (never pause, today's exact
+    # behavior). Confirmed with the user 2026-07-06: both pause-and-resume
+    # rather than stopping permanently. Neither closes an already-open
+    # position early - they only block opening NEW ones while paused.
+    use_max_dd_stop: bool = False
+    max_dd_stop_pips: float = 100.0
+    use_consecutive_loss_stop: bool = False
+    consecutive_loss_stop_count: int = 3
+    consecutive_loss_stop_bars: int = 100
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -218,6 +227,12 @@ def run_backtest(
         else None
     )
 
+    use_max_dd_stop = bool(p.get("use_max_dd_stop", False))
+    max_dd_stop_pips = float(p.get("max_dd_stop_pips", 100.0))
+    use_consecutive_loss_stop = bool(p.get("use_consecutive_loss_stop", False))
+    consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
+    consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
+
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
     condition_tree = p.get("condition_tree")
@@ -273,17 +288,28 @@ def run_backtest(
     position_signal_bar = None
     position_signal_time = None
 
+    # Circuit breaker state - only tracked/consulted when the corresponding
+    # use_* flag is on, so this is a no-op when both are off.
+    cumulative_equity = 0.0
+    running_peak_equity = 0.0
+    current_dd = 0.0
+    paused_for_dd = False
+    consecutive_losses = 0
+    paused_until_bar: int | None = None
+
     for i in range(250, len(df)):
         dt = datetime_arr[i]
         hour = int(hour_arr[i])
         weekday = int(weekday_arr[i])
+
+        entries_blocked = paused_for_dd or (paused_until_bar is not None and i < paused_until_bar)
 
         open_price = float(open_arr[i])
         high_price = float(high_arr[i])
         low_price = float(low_arr[i])
         close_price = float(close_arr[i])
 
-        if pending_entry and not in_position:
+        if pending_entry and not in_position and not entries_blocked:
             entry_price = open_price
             entry_time = dt
             entry_bar_index = i
@@ -309,6 +335,15 @@ def run_backtest(
                 )
                 in_position = True
 
+            pending_entry = False
+            pending_signal_low = np.nan
+            pending_signal_high = np.nan
+            pending_signal_bar = None
+            pending_signal_time = None
+        elif pending_entry and not in_position and entries_blocked:
+            # A circuit breaker engaged while this signal was waiting to
+            # fire - discard it rather than entering on a stale signal
+            # once the pause lifts bars (or DD levels) later.
             pending_entry = False
             pending_signal_low = np.nan
             pending_signal_high = np.nan
@@ -371,6 +406,24 @@ def run_backtest(
                 )
                 profit -= cost_per_trade
                 profits.append(profit)
+                cumulative_equity += profit
+
+                if use_max_dd_stop:
+                    running_peak_equity = max(running_peak_equity, cumulative_equity)
+                    current_dd = running_peak_equity - cumulative_equity
+                    if current_dd >= max_dd_stop_pips:
+                        paused_for_dd = True
+                    elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
+                        paused_for_dd = False
+
+                if use_consecutive_loss_stop:
+                    if profit < 0:
+                        consecutive_losses += 1
+                        if consecutive_losses >= consecutive_loss_stop_count:
+                            paused_until_bar = i + consecutive_loss_stop_bars
+                            consecutive_losses = 0
+                    else:
+                        consecutive_losses = 0
 
                 if return_trades:
                     trade_logs.append(
@@ -406,6 +459,17 @@ def run_backtest(
                 position_signal_bar = None
                 position_signal_time = None
 
+            continue
+
+        if entries_blocked:
+            # A circuit breaker is active - don't track or confirm any new
+            # candidate signal while paused. Whatever was already being
+            # tracked (signal_bar) isn't touched here, but its elapsed-bar
+            # count keeps advancing in the background, so by the time the
+            # pause lifts it will very likely read as expired (matching
+            # how a stale signal already expires if bypassed while
+            # in_position elsewhere in this loop) rather than resuming a
+            # confirmation window based on years-old price levels.
             continue
 
         if signal_bar is not None:
@@ -558,6 +622,12 @@ def _run_dual_direction_backtest(
         else None
     )
 
+    use_max_dd_stop = bool(p.get("use_max_dd_stop", False))
+    max_dd_stop_pips = float(p.get("max_dd_stop_pips", 100.0))
+    use_consecutive_loss_stop = bool(p.get("use_consecutive_loss_stop", False))
+    consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
+    consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
+
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
     long_candidate = evaluate_condition_tree(long_tree, df) if long_tree is not None else np.zeros(len(df), dtype=bool)
@@ -625,17 +695,28 @@ def _run_dual_direction_backtest(
         state["signal_bar"] = None
         state["signal_time"] = None
 
+    # Circuit breaker state - only tracked/consulted when the corresponding
+    # use_* flag is on, so this is a no-op when both are off.
+    cumulative_equity = 0.0
+    running_peak_equity = 0.0
+    current_dd = 0.0
+    paused_for_dd = False
+    consecutive_losses = 0
+    paused_until_bar: int | None = None
+
     for i in range(250, len(df)):
         dt = datetime_arr[i]
         hour = int(hour_arr[i])
         weekday = int(weekday_arr[i])
+
+        entries_blocked = paused_for_dd or (paused_until_bar is not None and i < paused_until_bar)
 
         open_price = float(open_arr[i])
         high_price = float(high_arr[i])
         low_price = float(low_arr[i])
         close_price = float(close_arr[i])
 
-        if not in_position:
+        if not in_position and not entries_blocked:
             long_ready = side_state["long"]["pending_entry"]
             short_ready = side_state["short"]["pending_entry"]
 
@@ -674,6 +755,12 @@ def _run_dual_direction_backtest(
                     in_position = True
 
                 clear_pending(side)
+        elif not in_position and entries_blocked:
+            # A circuit breaker engaged while a signal was waiting to fire
+            # on either side - discard both rather than entering on a
+            # stale signal once the pause lifts.
+            clear_pending("long")
+            clear_pending("short")
 
         if in_position:
             if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
@@ -724,6 +811,24 @@ def _run_dual_direction_backtest(
                 )
                 profit -= cost_per_trade
                 profits.append(profit)
+                cumulative_equity += profit
+
+                if use_max_dd_stop:
+                    running_peak_equity = max(running_peak_equity, cumulative_equity)
+                    current_dd = running_peak_equity - cumulative_equity
+                    if current_dd >= max_dd_stop_pips:
+                        paused_for_dd = True
+                    elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
+                        paused_for_dd = False
+
+                if use_consecutive_loss_stop:
+                    if profit < 0:
+                        consecutive_losses += 1
+                        if consecutive_losses >= consecutive_loss_stop_count:
+                            paused_until_bar = i + consecutive_loss_stop_bars
+                            consecutive_losses = 0
+                    else:
+                        consecutive_losses = 0
 
                 if return_trades:
                     trade_logs.append(
@@ -761,6 +866,12 @@ def _run_dual_direction_backtest(
                 position_signal_bar = None
                 position_signal_time = None
 
+            continue
+
+        if entries_blocked:
+            # See the single-direction run_backtest()'s identical guard for
+            # why this doesn't need to actively freeze signal_bar - it just
+            # naturally reads as expired once the pause lifts.
             continue
 
         for side, candidate_signal in (("long", long_candidate), ("short", short_candidate)):

@@ -72,6 +72,11 @@ class BacktestRequest(BaseModel):
     use_atr_trailing_stop: bool = False
     atr_trailing_length: int = 14
     atr_trailing_multiplier: float = 2.0
+    use_max_dd_stop: bool = False
+    max_dd_stop_pips: float = 100.0
+    use_consecutive_loss_stop: bool = False
+    consecutive_loss_stop_count: int = 3
+    consecutive_loss_stop_bars: int = 100
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -100,6 +105,11 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "use_atr_trailing_stop": [req.use_atr_trailing_stop],
         "atr_trailing_length": [req.atr_trailing_length],
         "atr_trailing_multiplier": [req.atr_trailing_multiplier],
+        "use_max_dd_stop": [req.use_max_dd_stop],
+        "max_dd_stop_pips": [req.max_dd_stop_pips],
+        "use_consecutive_loss_stop": [req.use_consecutive_loss_stop],
+        "consecutive_loss_stop_count": [req.consecutive_loss_stop_count],
+        "consecutive_loss_stop_bars": [req.consecutive_loss_stop_bars],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -

@@ -57,6 +57,11 @@ export interface BacktestRequest {
   use_atr_trailing_stop?: boolean
   atr_trailing_length?: number
   atr_trailing_multiplier?: number
+  use_max_dd_stop?: boolean
+  max_dd_stop_pips?: number
+  use_consecutive_loss_stop?: boolean
+  consecutive_loss_stop_count?: number
+  consecutive_loss_stop_bars?: number
 }
 
 export interface ParamRangeConfig {
