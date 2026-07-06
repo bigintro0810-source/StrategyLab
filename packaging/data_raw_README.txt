@@ -15,7 +15,9 @@ data\raw\{通貨ペア}_Data\{通貨ペア}_2003_2026_{時間足}.csv
  従来の形式でも認識されますが、通貨が増えると混在しやすいため
  サブフォルダ形式を推奨します)
 
-対応する時間足: 1m, 5m, 15m, 1h, 4h, 1d
+対応する時間足: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w
+  (30mと1wはブローカー提供データが無い場合、同梱の
+   resample_timeframes.py で15m/1dデータから自動生成できます)
 対応する通貨ペア: USDJPY, EURJPY, GBPJPY, AUDJPY, AUDUSD, EURUSD, GBPUSD
   (1分足のみ、ファイル名が {通貨ペア}_2003_2026_1min_filled.csv でも
    認識されます)

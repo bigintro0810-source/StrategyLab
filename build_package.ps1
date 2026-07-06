@@ -3,13 +3,20 @@
 # Builds a self-contained, double-click-to-run distribution in dist\StrategyLab\.
 #
 # Uses "embeddable Python + pip install + batch launcher" instead of PyInstaller.
-# Reason: gui_app.py launches main.py via subprocess.run([sys.executable, "main.py", ...])
-# (main.py's ProcessPoolExecutor uses Windows' "spawn" start method - running it
-# in-process from Streamlit risks worker processes re-launching the Streamlit app
-# itself, a known footgun). If frozen with PyInstaller, sys.executable would point
-# back at the frozen GUI exe itself, breaking that subprocess call. With an embedded
-# Python, sys.executable correctly points at the bundled real python.exe, so the
-# existing code works unmodified.
+# Reason: api_server.py (and gui_app.py before it) launches main.py via
+# subprocess.run([sys.executable, "main.py", ...]) (main.py's ProcessPoolExecutor
+# uses Windows' "spawn" start method - running it in-process risks worker processes
+# re-launching the server app itself, a known footgun). If frozen with PyInstaller,
+# sys.executable would point back at the frozen exe itself, breaking that subprocess
+# call. With an embedded Python, sys.executable correctly points at the bundled real
+# python.exe, so the existing code works unmodified.
+#
+# The primary app is now the React+FastAPI web dashboard (api_server.py), which this
+# script builds for production (`npm run build`) and bundles as static files served
+# by api_server.py itself - end users never need Node.js installed, only this one
+# process. The older Streamlit GUI (gui_app.py) is still copied in and can be run
+# manually from the app folder for anyone who prefers it, but run.bat now launches
+# the web dashboard as the primary experience.
 #
 # Run from the repo root: & ".\build_package.ps1"
 # (No -ExecutionPolicy Bypass needed if the current session's Process-scope policy
@@ -67,20 +74,37 @@ Invoke-WebRequest -Uri $GetPipUrl -OutFile $GetPipPath
 Remove-Item $GetPipPath
 
 # --- 4. Install dependencies ---
-Write-Host "[4/8] Installing dependencies (pandas/numpy/streamlit/fpdf2/optuna)..."
+Write-Host "[4/9] Installing dependencies (pandas/numpy/streamlit/fastapi/uvicorn/fpdf2/optuna)..."
 Write-Host "  (this can take a few minutes)"
 & "$PythonDir\python.exe" -m pip install --no-warn-script-location -r "$RepoRoot\requirements.txt"
 
-# --- 5. Copy the application source ---
-Write-Host "[5/8] Copying application files..."
+# --- 5. Build the frontend for production ---
+# Runs on THIS (build) machine only - end users never need Node.js, since
+# the built static files (frontend/dist) are what gets shipped and served
+# by api_server.py itself. Requires `npm install` to have been run once in
+# frontend/ already (not re-run here to keep repeat builds fast).
+Write-Host "[5/9] Building frontend (npm run build)..."
+$FrontendDir = Join-Path $RepoRoot "frontend"
+Push-Location $FrontendDir
+try {
+    npm run build
+    if ($LASTEXITCODE -ne 0) {
+        throw "frontend build failed (npm run build exited with code $LASTEXITCODE)"
+    }
+} finally {
+    Pop-Location
+}
+
+# --- 6. Copy the application source ---
+Write-Host "[6/9] Copying application files..."
 
 $FilesToCopy = @(
-    "main.py", "gui_app.py", "walk_forward.py", "analyze_walk_forward.py",
+    "main.py", "api_server.py", "gui_app.py", "walk_forward.py", "analyze_walk_forward.py",
     "analyze_monthly.py", "analyze_yearly.py", "analyze_stability.py",
     "analyze_sensitivity.py", "analyze_confidence.py", "compare_signals.py",
     "compare_tradingview.py", "equity_curve.py", "monte_carlo.py",
     "rerank_results.py", "strategy_manager.py", "requirements.txt",
-    "generate_pinescript.py", "import_broker_csv.py"
+    "generate_pinescript.py", "import_broker_csv.py", "resample_timeframes.py"
 )
 
 foreach ($file in $FilesToCopy) {
@@ -94,24 +118,37 @@ Copy-Item (Join-Path $RepoRoot "engine") -Destination $AppSrcDir -Recurse
 Copy-Item (Join-Path $RepoRoot "strategy_configs") -Destination $AppSrcDir -Recurse
 Copy-Item (Join-Path $RepoRoot "config") -Destination $AppSrcDir -Recurse -Exclude "__pycache__"
 
-# --- 6. Create an empty data/raw folder with instructions ---
-Write-Host "[6/8] Preparing data folder..."
+# Only the built static output (frontend/dist) is needed at runtime -
+# api_server.py mounts this directory directly, so the app folder doesn't
+# need frontend/src, node_modules, package.json, etc.
+$FrontendDistSrc = Join-Path $FrontendDir "dist"
+$FrontendDistDest = Join-Path $AppSrcDir "frontend\dist"
+New-Item -ItemType Directory -Force -Path (Join-Path $AppSrcDir "frontend") | Out-Null
+Copy-Item $FrontendDistSrc -Destination $FrontendDistDest -Recurse
+
+# --- 7. Create an empty data/raw folder with instructions ---
+Write-Host "[7/9] Preparing data folder..."
 $DataRawDir = Join-Path $AppSrcDir "data\raw"
 New-Item -ItemType Directory -Force -Path $DataRawDir | Out-Null
 Copy-Item (Join-Path $RepoRoot "packaging\data_raw_README.txt") -Destination (Join-Path $DataRawDir "README.txt")
 
-# --- 7. Create run.bat ---
-Write-Host "[7/8] Creating launcher..."
+# --- 8. Create run.bat ---
+# Starts api_server.py in its own window (so its console/log output stays
+# visible and closing that window is the documented way to stop the
+# server), waits a few seconds for uvicorn to come up, then opens the
+# dashboard in the default browser.
+Write-Host "[8/9] Creating launcher..."
 $RunBatContent = @'
 @echo off
 cd /d "%~dp0app"
-"%~dp0python\python.exe" -m streamlit run gui_app.py
-pause
+start "Strategy Lab (このウィンドウを閉じると終了します)" "%~dp0python\python.exe" api_server.py
+timeout /t 3 /nobreak >nul
+start http://localhost:8736
 '@
 Set-Content -Path (Join-Path $AppDir "run.bat") -Value $RunBatContent -Encoding Default
 
-# --- 8. Place end-user README / disclaimer ---
-Write-Host "[8/8] Placing README..."
+# --- 9. Place end-user README / disclaimer ---
+Write-Host "[9/9] Placing README..."
 Copy-Item (Join-Path $RepoRoot "packaging\README_usage.txt") -Destination (Join-Path $AppDir "README.txt")
 
 Write-Host ""
