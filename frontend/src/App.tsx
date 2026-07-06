@@ -18,6 +18,7 @@ import type {
   GroupNode,
   OptimizableParam,
   ParamRangeConfig,
+  PartialTpLevel,
 } from './types'
 import { buildConditionTreeVariants, collectOptimizableConditions, pathIsValid } from './conditionTreeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
@@ -360,8 +361,15 @@ export default function App() {
   const [useBreakevenStop, setUseBreakevenStop] = useState(false)
   const [breakevenTriggerRr, setBreakevenTriggerRr] = useState(0.5)
   const [usePartialTp, setUsePartialTp] = useState(false)
-  const [partialTpRr, setPartialTpRr] = useState(1.0)
-  const [partialTpFraction, setPartialTpFraction] = useState(0.5)
+  // Multi-stage: any number of (rr, fraction) levels, each closing
+  // `fraction` of whatever REMAINS of the position at that level's rr.
+  // Starts with one level (1.0RR/50%) matching this feature's original
+  // single-level default.
+  const [partialTpLevels, setPartialTpLevels] = useState<PartialTpLevel[]>(() => [{ rr: 1.0, fraction: 0.5 }])
+  const addPartialTpLevel = () => setPartialTpLevels((prev) => [...prev, { rr: 1.0, fraction: 0.3 }])
+  const removePartialTpLevel = (index: number) => setPartialTpLevels((prev) => prev.filter((_, i) => i !== index))
+  const updatePartialTpLevel = (index: number, next: PartialTpLevel) =>
+    setPartialTpLevels((prev) => prev.map((l, i) => (i === index ? next : l)))
 
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
@@ -438,8 +446,11 @@ export default function App() {
       if (typeof detail.params.use_breakeven_stop === 'boolean') setUseBreakevenStop(detail.params.use_breakeven_stop)
       if (typeof detail.params.breakeven_trigger_rr === 'number') setBreakevenTriggerRr(detail.params.breakeven_trigger_rr)
       if (typeof detail.params.use_partial_tp === 'boolean') setUsePartialTp(detail.params.use_partial_tp)
-      if (typeof detail.params.partial_tp_rr === 'number') setPartialTpRr(detail.params.partial_tp_rr)
-      if (typeof detail.params.partial_tp_fraction === 'number') setPartialTpFraction(detail.params.partial_tp_fraction)
+      if (Array.isArray(detail.params.partial_tp_levels) && detail.params.partial_tp_levels.length > 0) {
+        setPartialTpLevels(detail.params.partial_tp_levels as PartialTpLevel[])
+      } else if (typeof detail.params.partial_tp_rr === 'number' && typeof detail.params.partial_tp_fraction === 'number') {
+        setPartialTpLevels([{ rr: detail.params.partial_tp_rr, fraction: detail.params.partial_tp_fraction }])
+      }
     },
   })
 
@@ -505,8 +516,7 @@ export default function App() {
         use_breakeven_stop: useBreakevenStop,
         breakeven_trigger_rr: breakevenTriggerRr,
         use_partial_tp: usePartialTp,
-        partial_tp_rr: partialTpRr,
-        partial_tp_fraction: partialTpFraction,
+        partial_tp_levels: partialTpLevels,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -810,34 +820,57 @@ export default function App() {
                       checked={usePartialTp}
                       onChange={(e) => setUsePartialTp(e.target.checked)}
                     />
-                    部分利確を使う
+                    部分利確を使う(複数段階可・残りに対する割合)
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
-                    <label className="flex items-center justify-between gap-1">
-                      到達RR
-                      <input
-                        type="number"
-                        step={0.1}
-                        min={0.1}
-                        disabled={!usePartialTp}
-                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
-                        value={partialTpRr}
-                        onChange={(e) => setPartialTpRr(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-1">
-                      決済割合
-                      <input
-                        type="number"
-                        step={0.05}
-                        min={0.05}
-                        max={0.95}
-                        disabled={!usePartialTp}
-                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
-                        value={partialTpFraction}
-                        onChange={(e) => setPartialTpFraction(Number(e.target.value))}
-                      />
-                    </label>
+                  <div className={`space-y-1.5 pl-5 ${!usePartialTp ? 'opacity-40' : ''}`}>
+                    {partialTpLevels.map((level, i) => (
+                      <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-1.5 text-xs text-gray-300">
+                        <label className="flex items-center justify-between gap-1">
+                          到達RR
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0.1}
+                            disabled={!usePartialTp}
+                            className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                            value={level.rr}
+                            onChange={(e) => updatePartialTpLevel(i, { ...level, rr: Number(e.target.value) })}
+                          />
+                        </label>
+                        <label className="flex items-center justify-between gap-1">
+                          決済割合
+                          <input
+                            type="number"
+                            step={0.05}
+                            min={0.05}
+                            max={0.95}
+                            disabled={!usePartialTp}
+                            className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                            value={level.fraction}
+                            onChange={(e) => updatePartialTpLevel(i, { ...level, fraction: Number(e.target.value) })}
+                          />
+                        </label>
+                        {partialTpLevels.length > 1 && (
+                          <button
+                            type="button"
+                            disabled={!usePartialTp}
+                            onClick={() => removePartialTpLevel(i)}
+                            className="text-gray-500 hover:text-red-400 disabled:opacity-40"
+                            title="この段階を削除"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      disabled={!usePartialTp}
+                      onClick={addPartialTpLevel}
+                      className="w-full rounded-lg border border-dashed border-white/20 px-2 py-1 text-xs text-gray-400 hover:bg-white/5 hover:text-gray-200 disabled:opacity-40"
+                    >
+                      + 段階を追加
+                    </button>
                   </div>
                 </div>
 

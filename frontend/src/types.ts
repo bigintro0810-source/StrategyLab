@@ -87,6 +87,15 @@ export interface BacktestRequest {
   use_partial_tp?: boolean
   partial_tp_rr?: number
   partial_tp_fraction?: number
+  // Multi-stage partial profit-taking: when set, replaces
+  // partial_tp_rr/partial_tp_fraction above. Each level closes `fraction`
+  // of whatever REMAINS of the position once price reaches that level's rr.
+  partial_tp_levels?: { rr: number; fraction: number }[]
+}
+
+export interface PartialTpLevel {
+  rr: number
+  fraction: number
 }
 
 export interface ConditionOptimizeRange {
@@ -159,8 +168,10 @@ export interface TradeRow {
   lot_size?: number
   profit_currency?: number
   account_balance?: number
-  // Only present for trades that actually took a partial profit (use_partial_tp).
-  partial_exit_price?: number
+  // Only present for trades that actually took at least one partial exit
+  // (use_partial_tp) - one price per triggered level, in order.
+  partial_exit_prices?: number[]
+  partial_exit_count?: number
   [key: string]: unknown
 }
 

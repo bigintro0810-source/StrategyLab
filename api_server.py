@@ -111,6 +111,13 @@ class BacktestRequest(BaseModel):
     use_partial_tp: bool = False
     partial_tp_rr: float = 1.0
     partial_tp_fraction: float = 0.5
+    # Multi-stage partial profit-taking: a list of {"rr": ..., "fraction":
+    # ...} levels, each closing `fraction` of whatever REMAINS of the
+    # position once price reaches that level's RR distance. When set, this
+    # replaces partial_tp_rr/partial_tp_fraction above (which stay as the
+    # fallback for older saved strategies with no partial_tp_levels key -
+    # see engine/backtest_engine.py::_resolve_partial_tp_levels).
+    partial_tp_levels: Optional[list[dict]] = None
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -159,6 +166,7 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "use_partial_tp": [req.use_partial_tp],
         "partial_tp_rr": [req.partial_tp_rr],
         "partial_tp_fraction": [req.partial_tp_fraction],
+        "partial_tp_levels": [req.partial_tp_levels],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -

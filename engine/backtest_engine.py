@@ -193,6 +193,27 @@ def _compute_lot_size(
     return risk_amount / (sl_distance_pips * pip_value_account)
 
 
+def _resolve_partial_tp_levels(p: dict[str, Any]) -> list[tuple[float, float]]:
+    """Multi-stage partial profit-taking config: a sorted-by-rr list of
+    (rr, fraction) levels. Each level closes `fraction` of whatever remains
+    of the position once price reaches that level's RR distance from entry
+    (fraction is "of the remaining position", not of the original - so
+    three 0.5-fraction levels close half, then half-of-half, then half of
+    what's left, not 150% of the original).
+
+    Falls back to the older single-level partial_tp_rr/partial_tp_fraction
+    scalar fields (as a 1-element list) for strategies saved before
+    multi-stage support existed - a 1-element list here reproduces that
+    original behavior exactly."""
+    raw_levels = p.get("partial_tp_levels")
+    if raw_levels:
+        return sorted(
+            ((float(lv["rr"]), float(lv["fraction"])) for lv in raw_levels),
+            key=lambda level: level[0],
+        )
+    return [(float(p.get("partial_tp_rr", 1.0)), float(p.get("partial_tp_fraction", 0.5)))]
+
+
 def prepare_indicator_columns(
     df: pd.DataFrame,
     ema_lengths: list[int] | tuple[int, ...],
@@ -360,8 +381,7 @@ def run_backtest(
     use_breakeven_stop = bool(p.get("use_breakeven_stop", False))
     breakeven_trigger_rr = float(p.get("breakeven_trigger_rr", 0.5))
     use_partial_tp = bool(p.get("use_partial_tp", False))
-    partial_tp_rr = float(p.get("partial_tp_rr", 1.0))
-    partial_tp_fraction = float(p.get("partial_tp_fraction", 0.5))
+    partial_tp_levels = _resolve_partial_tp_levels(p)
 
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
 
@@ -431,9 +451,9 @@ def run_backtest(
 
     breakeven_trigger_price = 0.0
     breakeven_ready = False
-    partial_tp_price = 0.0
-    partial_taken = False
-    partial_exit_price = 0.0
+    partial_tp_prices: list[float] = []
+    partial_legs: list[tuple[float, float]] = []
+    remaining_fraction = 1.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -479,13 +499,12 @@ def run_backtest(
                     else entry_price + risk_distance * breakeven_trigger_rr
                 )
                 breakeven_ready = False
-                partial_tp_price = (
-                    entry_price - risk_distance * partial_tp_rr
-                    if direction == "short"
-                    else entry_price + risk_distance * partial_tp_rr
-                )
-                partial_taken = False
-                partial_exit_price = 0.0
+                partial_tp_prices = [
+                    entry_price - risk_distance * rr_lvl if direction == "short" else entry_price + risk_distance * rr_lvl
+                    for rr_lvl, _fraction in partial_tp_levels
+                ]
+                partial_legs = []
+                remaining_fraction = 1.0
 
                 if use_position_sizing:
                     position_lot_size = _compute_lot_size(
@@ -584,19 +603,26 @@ def run_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
-                elif use_partial_tp and not partial_taken:
+                elif use_partial_tp:
                     # Only checked when the bar didn't already fully close
                     # the trade above - a partial fill and the full SL/TP
                     # exit never share a bar, avoiding any same-bar
-                    # ordering ambiguity between them.
-                    reached_partial_tp = (
-                        low_price <= partial_tp_price
-                        if direction == "short"
-                        else high_price >= partial_tp_price
-                    )
-                    if reached_partial_tp:
-                        partial_taken = True
-                        partial_exit_price = partial_tp_price
+                    # ordering ambiguity between them. A while-loop (not
+                    # if/elif) so a single large-range bar can trigger
+                    # several levels in one pass, in ascending order.
+                    while len(partial_legs) < len(partial_tp_levels):
+                        next_level_price = partial_tp_prices[len(partial_legs)]
+                        reached_next_level = (
+                            low_price <= next_level_price
+                            if direction == "short"
+                            else high_price >= next_level_price
+                        )
+                        if not reached_next_level:
+                            break
+                        _, level_fraction = partial_tp_levels[len(partial_legs)]
+                        closed_amount = remaining_fraction * level_fraction
+                        partial_legs.append((next_level_price, closed_amount))
+                        remaining_fraction -= closed_amount
 
             if exit_reason is not None:
                 full_leg_profit = (
@@ -604,16 +630,16 @@ def run_backtest(
                     if direction == "short"
                     else float(exit_price) - entry_price
                 )
-                if partial_taken:
-                    partial_leg_profit = (
-                        entry_price - partial_exit_price
-                        if direction == "short"
-                        else partial_exit_price - entry_price
+                if partial_legs:
+                    weighted_partial_profit = sum(
+                        weight * (
+                            entry_price - leg_exit_price
+                            if direction == "short"
+                            else leg_exit_price - entry_price
+                        )
+                        for leg_exit_price, weight in partial_legs
                     )
-                    profit = (
-                        partial_tp_fraction * partial_leg_profit
-                        + (1 - partial_tp_fraction) * full_leg_profit
-                    )
+                    profit = weighted_partial_profit + remaining_fraction * full_leg_profit
                 else:
                     profit = full_leg_profit
                 profit -= cost_per_trade
@@ -669,8 +695,11 @@ def run_backtest(
                                 else {}
                             ),
                             **(
-                                {"partial_exit_price": round(partial_exit_price, 5)}
-                                if partial_taken
+                                {
+                                    "partial_exit_prices": [round(p, 5) for p, _w in partial_legs],
+                                    "partial_exit_count": len(partial_legs),
+                                }
+                                if partial_legs
                                 else {}
                             ),
                         }
@@ -691,8 +720,8 @@ def run_backtest(
                 position_signal_time = None
 
                 breakeven_ready = False
-                partial_taken = False
-                partial_exit_price = 0.0
+                partial_legs = []
+                remaining_fraction = 1.0
 
             continue
 
@@ -910,8 +939,7 @@ def _run_limit_stop_backtest(
     use_breakeven_stop = bool(p.get("use_breakeven_stop", False))
     breakeven_trigger_rr = float(p.get("breakeven_trigger_rr", 0.5))
     use_partial_tp = bool(p.get("use_partial_tp", False))
-    partial_tp_rr = float(p.get("partial_tp_rr", 1.0))
-    partial_tp_fraction = float(p.get("partial_tp_fraction", 0.5))
+    partial_tp_levels = _resolve_partial_tp_levels(p)
 
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
@@ -984,9 +1012,9 @@ def _run_limit_stop_backtest(
 
     breakeven_trigger_price = 0.0
     breakeven_ready = False
-    partial_tp_price = 0.0
-    partial_taken = False
-    partial_exit_price = 0.0
+    partial_tp_prices: list[float] = []
+    partial_legs: list[tuple[float, float]] = []
+    remaining_fraction = 1.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -1041,13 +1069,12 @@ def _run_limit_stop_backtest(
                                 else entry_price + risk_distance * breakeven_trigger_rr
                             )
                             breakeven_ready = False
-                            partial_tp_price = (
-                                entry_price - risk_distance * partial_tp_rr
-                                if direction == "short"
-                                else entry_price + risk_distance * partial_tp_rr
-                            )
-                            partial_taken = False
-                            partial_exit_price = 0.0
+                            partial_tp_prices = [
+                                entry_price - risk_distance * rr_lvl if direction == "short" else entry_price + risk_distance * rr_lvl
+                                for rr_lvl, _fraction in partial_tp_levels
+                            ]
+                            partial_legs = []
+                            remaining_fraction = 1.0
 
                             if use_position_sizing:
                                 position_lot_size = _compute_lot_size(
@@ -1120,15 +1147,20 @@ def _run_limit_stop_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
-                elif use_partial_tp and not partial_taken:
-                    reached_partial_tp = (
-                        low_price <= partial_tp_price
-                        if direction == "short"
-                        else high_price >= partial_tp_price
-                    )
-                    if reached_partial_tp:
-                        partial_taken = True
-                        partial_exit_price = partial_tp_price
+                elif use_partial_tp:
+                    while len(partial_legs) < len(partial_tp_levels):
+                        next_level_price = partial_tp_prices[len(partial_legs)]
+                        reached_next_level = (
+                            low_price <= next_level_price
+                            if direction == "short"
+                            else high_price >= next_level_price
+                        )
+                        if not reached_next_level:
+                            break
+                        _, level_fraction = partial_tp_levels[len(partial_legs)]
+                        closed_amount = remaining_fraction * level_fraction
+                        partial_legs.append((next_level_price, closed_amount))
+                        remaining_fraction -= closed_amount
 
             if exit_reason is not None:
                 full_leg_profit = (
@@ -1136,16 +1168,16 @@ def _run_limit_stop_backtest(
                     if direction == "short"
                     else float(exit_price) - entry_price
                 )
-                if partial_taken:
-                    partial_leg_profit = (
-                        entry_price - partial_exit_price
-                        if direction == "short"
-                        else partial_exit_price - entry_price
+                if partial_legs:
+                    weighted_partial_profit = sum(
+                        weight * (
+                            entry_price - leg_exit_price
+                            if direction == "short"
+                            else leg_exit_price - entry_price
+                        )
+                        for leg_exit_price, weight in partial_legs
                     )
-                    profit = (
-                        partial_tp_fraction * partial_leg_profit
-                        + (1 - partial_tp_fraction) * full_leg_profit
-                    )
+                    profit = weighted_partial_profit + remaining_fraction * full_leg_profit
                 else:
                     profit = full_leg_profit
                 profit -= cost_per_trade
@@ -1201,8 +1233,11 @@ def _run_limit_stop_backtest(
                                 else {}
                             ),
                             **(
-                                {"partial_exit_price": round(partial_exit_price, 5)}
-                                if partial_taken
+                                {
+                                    "partial_exit_prices": [round(p, 5) for p, _w in partial_legs],
+                                    "partial_exit_count": len(partial_legs),
+                                }
+                                if partial_legs
                                 else {}
                             ),
                         }
@@ -1223,8 +1258,8 @@ def _run_limit_stop_backtest(
                 position_signal_time = None
 
                 breakeven_ready = False
-                partial_taken = False
-                partial_exit_price = 0.0
+                partial_legs = []
+                remaining_fraction = 1.0
 
             continue
 
@@ -1383,8 +1418,7 @@ def _run_dual_direction_backtest(
     use_breakeven_stop = bool(p.get("use_breakeven_stop", False))
     breakeven_trigger_rr = float(p.get("breakeven_trigger_rr", 0.5))
     use_partial_tp = bool(p.get("use_partial_tp", False))
-    partial_tp_rr = float(p.get("partial_tp_rr", 1.0))
-    partial_tp_fraction = float(p.get("partial_tp_fraction", 0.5))
+    partial_tp_levels = _resolve_partial_tp_levels(p)
 
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
@@ -1465,9 +1499,9 @@ def _run_dual_direction_backtest(
 
     breakeven_trigger_price = 0.0
     breakeven_ready = False
-    partial_tp_price = 0.0
-    partial_taken = False
-    partial_exit_price = 0.0
+    partial_tp_prices: list[float] = []
+    partial_legs: list[tuple[float, float]] = []
+    remaining_fraction = 1.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -1525,13 +1559,12 @@ def _run_dual_direction_backtest(
                         else entry_price + risk_distance * breakeven_trigger_rr
                     )
                     breakeven_ready = False
-                    partial_tp_price = (
-                        entry_price - risk_distance * partial_tp_rr
-                        if side == "short"
-                        else entry_price + risk_distance * partial_tp_rr
-                    )
-                    partial_taken = False
-                    partial_exit_price = 0.0
+                    partial_tp_prices = [
+                        entry_price - risk_distance * rr_lvl if side == "short" else entry_price + risk_distance * rr_lvl
+                        for rr_lvl, _fraction in partial_tp_levels
+                    ]
+                    partial_legs = []
+                    remaining_fraction = 1.0
 
                     if use_position_sizing:
                         position_lot_size = _compute_lot_size(
@@ -1610,15 +1643,20 @@ def _run_dual_direction_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
-                elif use_partial_tp and not partial_taken:
-                    reached_partial_tp = (
-                        low_price <= partial_tp_price
-                        if position_direction == "short"
-                        else high_price >= partial_tp_price
-                    )
-                    if reached_partial_tp:
-                        partial_taken = True
-                        partial_exit_price = partial_tp_price
+                elif use_partial_tp:
+                    while len(partial_legs) < len(partial_tp_levels):
+                        next_level_price = partial_tp_prices[len(partial_legs)]
+                        reached_next_level = (
+                            low_price <= next_level_price
+                            if position_direction == "short"
+                            else high_price >= next_level_price
+                        )
+                        if not reached_next_level:
+                            break
+                        _, level_fraction = partial_tp_levels[len(partial_legs)]
+                        closed_amount = remaining_fraction * level_fraction
+                        partial_legs.append((next_level_price, closed_amount))
+                        remaining_fraction -= closed_amount
 
             if exit_reason is not None:
                 full_leg_profit = (
@@ -1626,16 +1664,16 @@ def _run_dual_direction_backtest(
                     if position_direction == "short"
                     else float(exit_price) - entry_price
                 )
-                if partial_taken:
-                    partial_leg_profit = (
-                        entry_price - partial_exit_price
-                        if position_direction == "short"
-                        else partial_exit_price - entry_price
+                if partial_legs:
+                    weighted_partial_profit = sum(
+                        weight * (
+                            entry_price - leg_exit_price
+                            if position_direction == "short"
+                            else leg_exit_price - entry_price
+                        )
+                        for leg_exit_price, weight in partial_legs
                     )
-                    profit = (
-                        partial_tp_fraction * partial_leg_profit
-                        + (1 - partial_tp_fraction) * full_leg_profit
-                    )
+                    profit = weighted_partial_profit + remaining_fraction * full_leg_profit
                 else:
                     profit = full_leg_profit
                 profit -= cost_per_trade
@@ -1692,8 +1730,11 @@ def _run_dual_direction_backtest(
                                 else {}
                             ),
                             **(
-                                {"partial_exit_price": round(partial_exit_price, 5)}
-                                if partial_taken
+                                {
+                                    "partial_exit_prices": [round(p, 5) for p, _w in partial_legs],
+                                    "partial_exit_count": len(partial_legs),
+                                }
+                                if partial_legs
                                 else {}
                             ),
                         }
@@ -1715,8 +1756,8 @@ def _run_dual_direction_backtest(
                 position_signal_time = None
 
                 breakeven_ready = False
-                partial_taken = False
-                partial_exit_price = 0.0
+                partial_legs = []
+                remaining_fraction = 1.0
 
             continue
 

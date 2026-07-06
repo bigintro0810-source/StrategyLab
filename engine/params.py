@@ -25,6 +25,17 @@ def _reconstruct_tree(row: dict[str, Any], key: str) -> dict | None:
     return None
 
 
+def _reconstruct_list(row: dict[str, Any], key: str) -> list | None:
+    """Same CSV round-trip issue as _reconstruct_tree, for a list-of-dicts
+    cell (e.g. partial_tp_levels) instead of a single dict."""
+    raw = row.get(key)
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        return ast.literal_eval(raw)
+    return None
+
+
 def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
     return {
         "condition_tree": _reconstruct_tree(row, "condition_tree"),
@@ -66,6 +77,7 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "use_partial_tp": bool(row.get("use_partial_tp", False)),
         "partial_tp_rr": float(row.get("partial_tp_rr", 1.0)),
         "partial_tp_fraction": float(row.get("partial_tp_fraction", 0.5)),
+        "partial_tp_levels": _reconstruct_list(row, "partial_tp_levels"),
         "session_start": int(row["session_start"]),
         "session_end": int(row["session_end"]),
         "use_weekend_exit": bool(row["use_weekend_exit"]),

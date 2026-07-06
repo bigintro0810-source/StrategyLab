@@ -26,9 +26,9 @@ const POSITION_SIZING_COLUMNS: { key: keyof TradeRow; label: string; format?: (v
 ]
 
 const PARTIAL_TP_COLUMN: { key: keyof TradeRow; label: string; format?: (v: unknown) => string } = {
-  key: 'partial_exit_price',
+  key: 'partial_exit_prices',
   label: '部分利確価格',
-  format: (v) => (v == null ? '-' : Number(v).toFixed(3)),
+  format: (v) => (Array.isArray(v) && v.length > 0 ? v.map((n) => Number(n).toFixed(3)).join(', ') : '-'),
 }
 
 const MAX_ROWS = 200
@@ -45,7 +45,7 @@ export default function TradeHistoryTable({ rows }: Props) {
   const hasPositionSizing = rows.some((r) => r.lot_size != null)
   // Only present when at least one trade actually took a partial profit
   // (use_partial_tp) - most trades in such a run still won't have it.
-  const hasPartialTp = rows.some((r) => r.partial_exit_price != null)
+  const hasPartialTp = rows.some((r) => r.partial_exit_prices != null)
   const COLUMNS = [
     BASE_COLUMNS[0],
     ...(hasDirection ? [DIRECTION_COLUMN] : []),
