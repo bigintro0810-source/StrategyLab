@@ -24,6 +24,7 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from engine.conditions import INDICATOR_REGISTRY
@@ -383,3 +384,27 @@ async def get_strategy_detail(strategy_id: str) -> dict:
         return get_strategy(strategy_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="strategy not found")
+
+
+# Serves the built frontend (frontend/dist, produced by `npm run build`) as
+# static files - lets this ONE process be the entire app (no separate Vite/
+# Node process needed), which is what the packaged one-click launcher runs.
+# Mounted LAST so it never shadows the /api/* routes above (Starlette tries
+# routes in registration order). Only mounted if the build output actually
+# exists - running via `npm run dev` for local development still serves the
+# frontend separately on its own Vite dev server (proxying /api to this
+# server, see frontend/vite.config.ts), unaffected by this.
+_FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+
+
+if __name__ == "__main__":
+    # Entry point for the packaged launcher (run.bat runs
+    # `python.exe api_server.py`) - equivalent to
+    # `uvicorn api_server:app --host 127.0.0.1 --port 8736` but doesn't
+    # require a separate `uvicorn` command on PATH inside the embeddable
+    # Python distribution.
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8736)
