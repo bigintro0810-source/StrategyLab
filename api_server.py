@@ -77,6 +77,12 @@ class BacktestRequest(BaseModel):
     use_consecutive_loss_stop: bool = False
     consecutive_loss_stop_count: int = 3
     consecutive_loss_stop_bars: int = 100
+    # "market" (default) is today's unchanged behavior; "limit"/"stop" are
+    # not yet supported together with long_condition_tree/short_condition_tree
+    # (dual-direction) - main.py/run_backtest raises a clear error if both
+    # are set rather than silently ignoring one.
+    entry_method: str = "market"
+    entry_offset_pips: float = 10.0
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -110,6 +116,8 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "use_consecutive_loss_stop": [req.use_consecutive_loss_stop],
         "consecutive_loss_stop_count": [req.consecutive_loss_stop_count],
         "consecutive_loss_stop_bars": [req.consecutive_loss_stop_bars],
+        "entry_method": [req.entry_method],
+        "entry_offset_pips": [req.entry_offset_pips],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -

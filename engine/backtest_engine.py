@@ -52,6 +52,18 @@ class BacktestConfig:
     use_consecutive_loss_stop: bool = False
     consecutive_loss_stop_count: int = 3
     consecutive_loss_stop_bars: int = 100
+    # Entry order type - "market" (default) is today's exact unchanged
+    # behavior (signal candidate -> confirm via close beyond the signal
+    # bar's high/low within lookahead_bars -> enter at the NEXT bar's
+    # open). "limit"/"stop" skip that close-confirmation step entirely -
+    # the instant a candidate signal fires, a pending order is placed at
+    # entry_offset_pips away from that bar's close (limit: a better price,
+    # against the trade's direction; stop: a worse price, confirming
+    # momentum in the trade's direction) and fills at that EXACT price the
+    # first time the market touches it within lookahead_bars, or is
+    # cancelled if it doesn't.
+    entry_method: str = "market"
+    entry_offset_pips: float = 10.0
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -172,8 +184,20 @@ def run_backtest(
     # unaffected. See _run_dual_direction_backtest's docstring for the
     # same-bar-collision policy (skip that bar; confirmed with the user
     # rather than assumed, since it changes what a backtest result means).
+    entry_method = str(p.get("entry_method", "market")).lower()
+    if entry_method not in ("market", "limit", "stop"):
+        raise ValueError(f"未対応のentry_methodです(market/limit/stopのみ対応): {entry_method}")
+
     if p.get("long_condition_tree") is not None or p.get("short_condition_tree") is not None:
+        if entry_method != "market":
+            raise ValueError(
+                "limit/stopエントリーはLong+Short同時評価と組み合わせ未対応です"
+                "(どちらか一方のみ指定してください)。"
+            )
         return _run_dual_direction_backtest(df, p, return_trades=return_trades, is_intraday=is_intraday)
+
+    if entry_method != "market":
+        return _run_limit_stop_backtest(df, p, return_trades=return_trades, is_intraday=is_intraday)
 
     pip = float(p.get("pip_size", 0.01))
 
@@ -513,6 +537,373 @@ def run_backtest(
         signal_high = high_price
         signal_bar = i
         signal_time = dt
+
+    profits_arr = np.array(profits, dtype=float)
+
+    trades = int(len(profits_arr))
+    wins = int((profits_arr > 0).sum())
+    losses = int((profits_arr < 0).sum())
+
+    gross_profit = float(profits_arr[profits_arr > 0].sum()) if trades else 0.0
+    gross_loss = float(profits_arr[profits_arr < 0].sum()) if trades else 0.0
+    net_profit = float(profits_arr.sum()) if trades else 0.0
+
+    if gross_loss < 0:
+        profit_factor = gross_profit / abs(gross_loss)
+    elif gross_profit > 0:
+        profit_factor = 999.0
+    else:
+        profit_factor = 0.0
+
+    win_rate = wins / trades * 100.0 if trades else 0.0
+    max_dd = calc_max_dd(profits_arr)
+    expected_value = net_profit / trades if trades else 0.0
+
+    if max_dd > 0:
+        recovery_factor = net_profit / max_dd
+    elif net_profit > 0:
+        recovery_factor = 999.0
+    else:
+        recovery_factor = 0.0
+
+    result = {
+        **p,
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 2),
+        "net_profit": round(net_profit, 5),
+        "gross_profit": round(gross_profit, 5),
+        "gross_loss": round(gross_loss, 5),
+        "profit_factor": round(profit_factor, 3),
+        "max_dd": round(max_dd, 5),
+        "expected_value": round(expected_value, 5),
+        "recovery_factor": round(recovery_factor, 3),
+    }
+
+    trades_df = pd.DataFrame(trade_logs)
+
+    if return_trades:
+        return result, trades_df
+
+    return result
+
+
+def _run_limit_stop_backtest(
+    df: pd.DataFrame,
+    p: dict[str, Any],
+    return_trades: bool = False,
+    is_intraday: bool | None = None,
+) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
+    """entry_method="limit" or "stop" - a separate code path from
+    run_backtest()'s market-order state machine (signal -> confirm via
+    close beyond the signal bar's high/low -> enter at the next bar's
+    open), engaged only when entry_method is set to something other than
+    "market". Single-direction only for now - combining with the
+    simultaneous Long+Short dual-direction path is rejected with a clear
+    error in run_backtest() rather than silently ignored.
+
+    The instant a candidate signal fires, a pending order is placed at
+    entry_offset_pips away from that bar's close - "limit" places it at a
+    BETTER price (against the trade's direction, a pullback-style entry),
+    "stop" places it at a WORSE price (with the trade's direction,
+    confirming momentum before entering). The order fills at that EXACT
+    price the first time the market touches it on a LATER bar (never the
+    same bar it was placed on, to avoid using that bar's own close to set
+    a price and then immediately checking that same bar's range against
+    it), or is cancelled if lookahead_bars pass without a fill.
+
+    SL/TP once filled are computed exactly as run_backtest() does -
+    RR-based off the candidate signal bar's high/low - and everything
+    orthogonal (ATR trailing stop, circuit breakers, execution cost) is
+    identical to run_backtest(), just layered onto this different entry
+    mechanism.
+    """
+    pip = float(p.get("pip_size", 0.01))
+
+    cost_per_trade = (
+        float(p.get("spread_pips", 0.0)) * pip
+        + float(p.get("slippage_pips", 0.0)) * pip
+        + float(p.get("commission_per_trade", 0.0))
+    )
+
+    direction = str(p.get("direction", "short")).lower()
+    if direction not in ("short", "long"):
+        raise ValueError(f"未対応のdirectionです(short/longのみ対応): {direction}")
+
+    entry_method = str(p.get("entry_method", "market")).lower()
+    entry_offset = float(p.get("entry_offset_pips", 10.0)) * pip
+
+    lookahead_bars = int(p["lookahead_bars"])
+    rr = float(p["rr"])
+
+    use_weekend_exit = bool(p["use_weekend_exit"])
+    weekend_exit_hour = int(p["weekend_exit_hour"])
+
+    use_daily_exit = bool(p["use_daily_exit"])
+    daily_exit_hour = int(p["daily_exit_hour"])
+
+    datetime_arr = df["datetime"].to_numpy()
+
+    datetime_series = pd.to_datetime(df["datetime"])
+    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
+    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+
+    if is_intraday is None:
+        is_intraday = compute_is_intraday(datetime_series)
+
+    open_arr = df["open"].to_numpy(dtype=float)
+    high_arr = df["high"].to_numpy(dtype=float)
+    low_arr = df["low"].to_numpy(dtype=float)
+    close_arr = df["close"].to_numpy(dtype=float)
+
+    use_atr_trailing_stop = bool(p.get("use_atr_trailing_stop", False))
+    atr_trailing_multiplier = float(p.get("atr_trailing_multiplier", 2.0))
+    atr_trail_arr = (
+        _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
+        if use_atr_trailing_stop
+        else None
+    )
+
+    use_max_dd_stop = bool(p.get("use_max_dd_stop", False))
+    max_dd_stop_pips = float(p.get("max_dd_stop_pips", 100.0))
+    use_consecutive_loss_stop = bool(p.get("use_consecutive_loss_stop", False))
+    consecutive_loss_stop_count = int(p.get("consecutive_loss_stop_count", 3))
+    consecutive_loss_stop_bars = int(p.get("consecutive_loss_stop_bars", 100))
+
+    condition_tree = p.get("condition_tree")
+    if condition_tree is not None:
+        candidate_signal = evaluate_condition_tree(condition_tree, df)
+    else:
+        ema_length = int(p["ema_length"])
+        breakout_bars = int(p["breakout_bars"])
+        ema_arr = resolve_ema_series(df, ema_length).to_numpy(dtype=float)
+        rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
+        previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
+        candidate_signal = build_candidate_signal(
+            df,
+            p,
+            {
+                "open": open_arr,
+                "high": high_arr,
+                "low": low_arr,
+                "close": close_arr,
+                "ema": ema_arr,
+                "rsi": rsi_arr,
+                "previous_high": previous_high_arr,
+                "hour": hour_arr,
+                "weekday": weekday_arr,
+                "is_intraday": is_intraday,
+                "pip": pip,
+            },
+        )
+
+    # An order priced ABOVE the market at placement time fills when price
+    # rises to meet it (checked via that bar's high); one priced BELOW
+    # fills when price falls to meet it (checked via low). A short-limit
+    # (sell higher) and a long-stop (buy on further strength) are both
+    # "above market" orders; a short-stop and a long-limit are both
+    # "below market" orders.
+    order_above_market = (direction == "short" and entry_method == "limit") or (
+        direction == "long" and entry_method == "stop"
+    )
+
+    profits: list[float] = []
+    trade_logs: list[dict[str, Any]] = []
+
+    in_position = False
+
+    entry_price = 0.0
+    entry_time = None
+    entry_bar_index = None
+
+    sl = 0.0
+    tp = 0.0
+
+    order_active = False
+    order_price = 0.0
+    order_bar: int | None = None
+    order_signal_low = np.nan
+    order_signal_high = np.nan
+    order_signal_time = None
+
+    position_signal_low = np.nan
+    position_signal_high = np.nan
+    position_signal_bar = None
+    position_signal_time = None
+
+    cumulative_equity = 0.0
+    running_peak_equity = 0.0
+    current_dd = 0.0
+    paused_for_dd = False
+    consecutive_losses = 0
+    paused_until_bar: int | None = None
+
+    for i in range(250, len(df)):
+        dt = datetime_arr[i]
+        hour = int(hour_arr[i])
+        weekday = int(weekday_arr[i])
+
+        entries_blocked = paused_for_dd or (paused_until_bar is not None and i < paused_until_bar)
+
+        open_price = float(open_arr[i])
+        high_price = float(high_arr[i])
+        low_price = float(low_arr[i])
+        close_price = float(close_arr[i])
+
+        if order_active and not in_position:
+            if entries_blocked:
+                order_active = False
+            else:
+                bars_since_order = i - order_bar
+                if bars_since_order > lookahead_bars:
+                    order_active = False
+                else:
+                    filled = high_price >= order_price if order_above_market else low_price <= order_price
+                    if filled:
+                        entry_price = order_price
+                        entry_time = dt
+                        entry_bar_index = i
+
+                        position_signal_low = order_signal_low
+                        position_signal_high = order_signal_high
+                        position_signal_bar = order_bar
+                        position_signal_time = order_signal_time
+
+                        if direction == "short":
+                            stop_price = float(position_signal_high)
+                            risk_distance = stop_price - entry_price
+                        else:
+                            stop_price = float(position_signal_low)
+                            risk_distance = entry_price - stop_price
+
+                        if risk_distance > 0:
+                            sl = stop_price
+                            tp = (
+                                entry_price - risk_distance * rr
+                                if direction == "short"
+                                else entry_price + risk_distance * rr
+                            )
+                            in_position = True
+
+                        order_active = False
+
+        if in_position:
+            if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
+                trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+                if direction == "short":
+                    candidate_sl = close_arr[i - 1] + trail_distance
+                    if candidate_sl < sl:
+                        sl = candidate_sl
+                else:
+                    candidate_sl = close_arr[i - 1] - trail_distance
+                    if candidate_sl > sl:
+                        sl = candidate_sl
+
+            exit_reason = None
+            exit_price = None
+
+            if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
+                exit_reason = "Weekend"
+                exit_price = close_price
+
+            elif is_intraday and use_daily_exit and hour == daily_exit_hour:
+                exit_reason = "DailyExit"
+                exit_price = close_price
+
+            else:
+                if direction == "short":
+                    hit_sl = high_price >= sl
+                    hit_tp = low_price <= tp
+                else:
+                    hit_sl = low_price <= sl
+                    hit_tp = high_price >= tp
+
+                if hit_sl and hit_tp:
+                    exit_reason = "SL_and_TP_SL_first"
+                    exit_price = sl
+                elif hit_sl:
+                    exit_reason = "SL"
+                    exit_price = sl
+                elif hit_tp:
+                    exit_reason = "TP"
+                    exit_price = tp
+
+            if exit_reason is not None:
+                profit = (
+                    entry_price - float(exit_price)
+                    if direction == "short"
+                    else float(exit_price) - entry_price
+                )
+                profit -= cost_per_trade
+                profits.append(profit)
+                cumulative_equity += profit
+
+                if use_max_dd_stop:
+                    running_peak_equity = max(running_peak_equity, cumulative_equity)
+                    current_dd = running_peak_equity - cumulative_equity
+                    if current_dd >= max_dd_stop_pips:
+                        paused_for_dd = True
+                    elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
+                        paused_for_dd = False
+
+                if use_consecutive_loss_stop:
+                    if profit < 0:
+                        consecutive_losses += 1
+                        if consecutive_losses >= consecutive_loss_stop_count:
+                            paused_until_bar = i + consecutive_loss_stop_bars
+                            consecutive_losses = 0
+                    else:
+                        consecutive_losses = 0
+
+                if return_trades:
+                    trade_logs.append(
+                        {
+                            "entry_time": entry_time,
+                            "entry_bar_index": entry_bar_index,
+                            "entry_price": round(entry_price, 5),
+                            "exit_time": dt,
+                            "exit_bar_index": i,
+                            "exit_price": round(float(exit_price), 5),
+                            "sl": round(sl, 5),
+                            "tp": round(tp, 5),
+                            "profit": round(profit, 5),
+                            "exit_reason": exit_reason,
+                            "signal_time": position_signal_time,
+                            "signal_bar_index": position_signal_bar,
+                            "signal_low": round(float(position_signal_low), 5),
+                            "signal_high": round(float(position_signal_high), 5),
+                        }
+                    )
+
+                in_position = False
+
+                entry_price = 0.0
+                entry_time = None
+                entry_bar_index = None
+
+                sl = 0.0
+                tp = 0.0
+
+                position_signal_low = np.nan
+                position_signal_high = np.nan
+                position_signal_bar = None
+                position_signal_time = None
+
+            continue
+
+        if entries_blocked or order_active:
+            continue
+
+        if not candidate_signal[i]:
+            continue
+
+        order_price = close_price + entry_offset if order_above_market else close_price - entry_offset
+        order_bar = i
+        order_signal_low = low_price
+        order_signal_high = high_price
+        order_signal_time = dt
+        order_active = True
 
     profits_arr = np.array(profits, dtype=float)
 

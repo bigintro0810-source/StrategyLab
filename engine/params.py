@@ -50,6 +50,8 @@ def reconstruct_params_from_row(row: dict[str, Any]) -> dict:
         "use_consecutive_loss_stop": bool(row.get("use_consecutive_loss_stop", False)),
         "consecutive_loss_stop_count": int(row.get("consecutive_loss_stop_count", 3)),
         "consecutive_loss_stop_bars": int(row.get("consecutive_loss_stop_bars", 100)),
+        "entry_method": str(row.get("entry_method", "market")),
+        "entry_offset_pips": float(row.get("entry_offset_pips", 10.0)),
         "session_start": int(row["session_start"]),
         "session_end": int(row["session_end"]),
         "use_weekend_exit": bool(row["use_weekend_exit"]),

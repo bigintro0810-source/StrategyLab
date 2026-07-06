@@ -62,6 +62,8 @@ export interface BacktestRequest {
   use_consecutive_loss_stop?: boolean
   consecutive_loss_stop_count?: number
   consecutive_loss_stop_bars?: number
+  entry_method?: 'market' | 'limit' | 'stop'
+  entry_offset_pips?: number
 }
 
 export interface ParamRangeConfig {

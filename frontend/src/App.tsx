@@ -252,6 +252,13 @@ export default function App() {
   const [consecutiveLossStopCount, setConsecutiveLossStopCount] = useState(3)
   const [consecutiveLossStopBars, setConsecutiveLossStopBars] = useState(100)
 
+  // Entry order type - "market" (default) is today's unchanged behavior.
+  // Not supported together with Long+Short同時 dual-direction mode - the
+  // backend rejects that combination, so the UI hides this control while
+  // dualDirectionMode is on rather than letting the user reach that error.
+  const [entryMethod, setEntryMethod] = useState<'market' | 'limit' | 'stop'>('market')
+  const [entryOffsetPips, setEntryOffsetPips] = useState(10)
+
   const [layout, setLayout] = useState<Layout>(loadLayout)
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
 
@@ -305,6 +312,10 @@ export default function App() {
       if (typeof detail.params.use_consecutive_loss_stop === 'boolean') setUseConsecutiveLossStop(detail.params.use_consecutive_loss_stop)
       if (typeof detail.params.consecutive_loss_stop_count === 'number') setConsecutiveLossStopCount(detail.params.consecutive_loss_stop_count)
       if (typeof detail.params.consecutive_loss_stop_bars === 'number') setConsecutiveLossStopBars(detail.params.consecutive_loss_stop_bars)
+      if (detail.params.entry_method === 'market' || detail.params.entry_method === 'limit' || detail.params.entry_method === 'stop') {
+        setEntryMethod(detail.params.entry_method)
+      }
+      if (typeof detail.params.entry_offset_pips === 'number') setEntryOffsetPips(detail.params.entry_offset_pips)
     },
   })
 
@@ -341,6 +352,11 @@ export default function App() {
         use_consecutive_loss_stop: useConsecutiveLossStop,
         consecutive_loss_stop_count: consecutiveLossStopCount,
         consecutive_loss_stop_bars: consecutiveLossStopBars,
+        // limit/stop isn't supported together with dual-direction mode -
+        // force "market" here too as a second safety net even though the
+        // UI already hides the control in that mode.
+        entry_method: dualDirectionMode ? 'market' : entryMethod,
+        entry_offset_pips: entryOffsetPips,
         save_as: saveAsName.trim() || undefined,
       })
     },
@@ -432,6 +448,35 @@ export default function App() {
                       />
                       Long(買い)
                     </label>
+                  </div>
+                )}
+
+                {!dualDirectionMode && (
+                  <div className="flex items-center gap-2 text-xs text-gray-300">
+                    <span className="text-gray-400">エントリー方式</span>
+                    <select
+                      className="glass-input rounded-lg px-2 py-1"
+                      value={entryMethod}
+                      onChange={(e) => setEntryMethod(e.target.value as 'market' | 'limit' | 'stop')}
+                    >
+                      <option value="market">成行(条件確定の次の足で即エントリー)</option>
+                      <option value="limit">指値(有利な価格まで戻ったら約定)</option>
+                      <option value="stop">逆指値(さらにブレイクしたら約定)</option>
+                    </select>
+                    {entryMethod !== 'market' && (
+                      <label className="ml-auto flex items-center gap-1">
+                        オフセット
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
+                          value={entryOffsetPips}
+                          onChange={(e) => setEntryOffsetPips(Number(e.target.value))}
+                        />
+                        pips
+                      </label>
+                    )}
                   </div>
                 )}
 
