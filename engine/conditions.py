@@ -35,9 +35,23 @@ from typing import Any, Union
 import numpy as np
 import pandas as pd
 
+from engine.indicators import atr as _atr
 from engine.indicators import ema as _ema
 from engine.indicators import rsi as _rsi
+from engine.indicators import sma as _sma
+from engine.technical_indicators import adx as _adx
 from engine.technical_indicators import bollinger_bands, macd, stochastic_oscillator
+from engine.technical_indicators import supertrend as _supertrend
+from engine.smc_indicators import (
+    bearish_fvg,
+    bearish_order_block,
+    bos_choch_bearish,
+    bos_choch_bullish,
+    bullish_fvg,
+    bullish_order_block,
+    liquidity_sweep_bearish,
+    liquidity_sweep_bullish,
+)
 
 
 def _highest_high(df: pd.DataFrame, length: int = 20) -> np.ndarray:
@@ -93,6 +107,34 @@ def _stochastic_d(
     return d.to_numpy(dtype=float)
 
 
+def _adx_line(df: pd.DataFrame, length: int = 14) -> np.ndarray:
+    line, _plus_di, _minus_di = _adx(df["high"], df["low"], df["close"], length)
+    return line.to_numpy(dtype=float)
+
+
+def _plus_di(df: pd.DataFrame, length: int = 14) -> np.ndarray:
+    _line, plus_di, _minus_di = _adx(df["high"], df["low"], df["close"], length)
+    return plus_di.to_numpy(dtype=float)
+
+
+def _minus_di(df: pd.DataFrame, length: int = 14) -> np.ndarray:
+    _line, _plus_di, minus_di = _adx(df["high"], df["low"], df["close"], length)
+    return minus_di.to_numpy(dtype=float)
+
+
+def _supertrend_line(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> np.ndarray:
+    # multiplier isn't adjustable from the condition-builder UI yet (which
+    # only exposes one "length"-named field per indicator) - same tradeoff
+    # already made for bollinger_upper/lower's num_std above.
+    line, _direction = _supertrend(df["high"], df["low"], df["close"], length, multiplier)
+    return np.asarray(line, dtype=float)
+
+
+def _supertrend_direction(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> np.ndarray:
+    _line, direction = _supertrend(df["high"], df["low"], df["close"], length, multiplier)
+    return np.asarray(direction, dtype=float)
+
+
 # Indicator name -> function(df, **params) -> np.ndarray[float]. Add new indicators
 # here only - never touch Condition/ConditionGroup's evaluation logic to support one.
 INDICATOR_REGISTRY: dict[str, Any] = {
@@ -102,9 +144,12 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "low": lambda df, **p: df["low"].to_numpy(dtype=float),
     "hour": lambda df, **p: pd.to_datetime(df["datetime"]).dt.hour.to_numpy(dtype=float),
     "weekday": lambda df, **p: pd.to_datetime(df["datetime"]).dt.weekday.to_numpy(dtype=float),
+    "month": lambda df, **p: pd.to_datetime(df["datetime"]).dt.month.to_numpy(dtype=float),
     "candle_body": lambda df, **p: (df["close"] - df["open"]).to_numpy(dtype=float),
     "ema": lambda df, length=200, **p: _ema(df["close"], int(length)).to_numpy(dtype=float),
+    "sma": lambda df, length=200, **p: _sma(df["close"], int(length)).to_numpy(dtype=float),
     "rsi": lambda df, length=14, **p: _rsi(df["close"], int(length)).to_numpy(dtype=float),
+    "atr": lambda df, length=14, **p: _atr(df, int(length)).to_numpy(dtype=float),
     "highest_high": lambda df, length=20, **p: _highest_high(df, int(length)),
     "lowest_low": lambda df, length=20, **p: _lowest_low(df, int(length)),
     "donchian_mid": lambda df, length=20, **p: _donchian_mid(df, int(length)),
@@ -129,6 +174,41 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "stochastic_d": lambda df, k_period=14, d_period=3, smooth=3, **p: _stochastic_d(
         df, int(k_period), int(d_period), int(smooth)
     ),
+    "adx": lambda df, length=14, **p: _adx_line(df, int(length)),
+    "plus_di": lambda df, length=14, **p: _plus_di(df, int(length)),
+    "minus_di": lambda df, length=14, **p: _minus_di(df, int(length)),
+    "supertrend_line": lambda df, length=10, multiplier=3.0, **p: _supertrend_line(
+        df, int(length), float(multiplier)
+    ),
+    "supertrend_direction": lambda df, length=10, multiplier=3.0, **p: _supertrend_direction(
+        df, int(length), float(multiplier)
+    ),
+    # SMC (Smart Money Concepts) - boolean per-bar signals represented as
+    # 1.0/0.0, meant to be compared with =="1" ("did this fire on this
+    # bar"). Unverified against TradingView/any reference indicator -
+    # see engine/smc_indicators.py's module docstring.
+    "fvg_bullish": lambda df, **p: bullish_fvg(df["high"], df["low"]).astype(float),
+    "fvg_bearish": lambda df, **p: bearish_fvg(df["high"], df["low"]).astype(float),
+    "order_block_bullish": lambda df, **p: bullish_order_block(df["open"], df["close"]).astype(float),
+    "order_block_bearish": lambda df, **p: bearish_order_block(df["open"], df["close"]).astype(float),
+    "liquidity_sweep_bullish": lambda df, length=5, **p: liquidity_sweep_bullish(
+        df["high"], df["low"], df["close"], int(length)
+    ).astype(float),
+    "liquidity_sweep_bearish": lambda df, length=5, **p: liquidity_sweep_bearish(
+        df["high"], df["low"], df["close"], int(length)
+    ).astype(float),
+    "bos_bullish": lambda df, length=5, **p: bos_choch_bullish(
+        df["high"], df["low"], df["close"], int(length)
+    )[0].astype(float),
+    "choch_bullish": lambda df, length=5, **p: bos_choch_bullish(
+        df["high"], df["low"], df["close"], int(length)
+    )[1].astype(float),
+    "bos_bearish": lambda df, length=5, **p: bos_choch_bearish(
+        df["high"], df["low"], df["close"], int(length)
+    )[0].astype(float),
+    "choch_bearish": lambda df, length=5, **p: bos_choch_bearish(
+        df["high"], df["low"], df["close"], int(length)
+    )[1].astype(float),
 }
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}

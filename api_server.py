@@ -239,7 +239,9 @@ INDICATOR_LABELS: dict[str, str] = {
     "low": "安値",
     "candle_body": "実体(終値-始値、符号あり)",
     "ema": "EMA",
+    "sma": "SMA",
     "rsi": "RSI",
+    "atr": "ATR",
     "highest_high": "直近高値(N本)",
     "lowest_low": "直近安値(N本)",
     "donchian_mid": "ドンチアン中央値",
@@ -250,11 +252,32 @@ INDICATOR_LABELS: dict[str, str] = {
     "macd_signal": "MACDシグナル",
     "stochastic_k": "ストキャスティクス%K",
     "stochastic_d": "ストキャスティクス%D",
+    "adx": "ADX",
+    "plus_di": "+DI",
+    "minus_di": "-DI",
+    "supertrend_line": "SuperTrendライン",
+    "supertrend_direction": "SuperTrend方向(1=上昇/-1=下降)",
+    "fvg_bullish": "FVG(強気)",
+    "fvg_bearish": "FVG(弱気)",
+    "order_block_bullish": "オーダーブロック(強気)",
+    "order_block_bearish": "オーダーブロック(弱気)",
+    "liquidity_sweep_bullish": "流動性スイープ(強気)",
+    "liquidity_sweep_bearish": "流動性スイープ(弱気)",
+    "bos_bullish": "BOS(強気/上昇継続)",
+    "bos_bearish": "BOS(弱気/下降継続)",
+    "choch_bullish": "CHoCH(強気/上昇転換)",
+    "choch_bearish": "CHoCH(弱気/下降転換)",
     "hour": "時刻(JST)",
     "weekday": "曜日(0=月〜6=日)",
+    "month": "月(1〜12)",
 }
 
-INDICATORS_NEEDING_PERIOD = {"ema", "rsi", "highest_high", "lowest_low", "donchian_mid"}
+INDICATORS_NEEDING_PERIOD = {
+    "ema", "sma", "rsi", "atr", "highest_high", "lowest_low", "donchian_mid",
+    "adx", "plus_di", "minus_di", "supertrend_line", "supertrend_direction",
+    "liquidity_sweep_bullish", "liquidity_sweep_bearish", "bos_bullish", "bos_bearish",
+    "choch_bullish", "choch_bearish",
+}
 
 
 @app.get("/api/indicators")
