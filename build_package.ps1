@@ -137,11 +137,25 @@ Copy-Item (Join-Path $RepoRoot "packaging\data_raw_README.txt") -Destination (Jo
 # visible and closing that window is the documented way to stop the
 # server), waits a few seconds for uvicorn to come up, then opens the
 # dashboard in the default browser.
+#
+# The `start` window title is deliberately plain ASCII, not Japanese -
+# on a real end-user machine, whether the system codepage is a legacy
+# DBCS one (932/Shift-JIS) or the newer "Beta: Use Unicode UTF-8"
+# system-wide setting determines how `Set-Content -Encoding Default`
+# bytes get interpreted by cmd.exe when it parses this very line. A
+# mismatch between the two (this build machine writes actual UTF-8 bytes
+# under -Encoding Default, but cmd.exe's console codepage defaults to
+# 932 unless the user has enabled that beta setting) corrupts the title
+# into mojibake - and that corruption was observed to break `start`'s own
+# argument parsing badly enough that it silently failed to launch
+# python.exe at all (not just a cosmetic garbled title). ASCII sidesteps
+# the whole codepage question rather than trying to get the encoding
+# exactly right for every possible end-user locale configuration.
 Write-Host "[8/9] Creating launcher..."
 $RunBatContent = @'
 @echo off
 cd /d "%~dp0app"
-start "Strategy Lab (このウィンドウを閉じると終了します)" "%~dp0python\python.exe" api_server.py
+start "Strategy Lab (close this window to stop)" "%~dp0python\python.exe" api_server.py
 timeout /t 3 /nobreak >nul
 start http://localhost:8736
 '@
