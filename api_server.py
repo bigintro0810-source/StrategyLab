@@ -13,6 +13,7 @@ HTTP.
 Run with: uvicorn api_server:app --reload
 """
 
+import ast
 import asyncio
 import json
 import os
@@ -121,6 +122,25 @@ class BacktestRequest(BaseModel):
     # fallback for older saved strategies with no partial_tp_levels key -
     # see engine/backtest_engine.py::_resolve_partial_tp_levels).
     partial_tp_levels: Optional[list[dict]] = None
+    # Auto-exploration engine (optimizer="structure"/"structure_genetic") -
+    # ignored for every other optimizer value. Mirrors main.py's
+    # --n-candidates/--max-depth/--max-leaves/--min-trades/--mtf-probability/
+    # --mtf-timeframes/--population/--mutation-rate/--generations 1:1; see
+    # that file's parse_args() for what each one does. These runs generate
+    # their own condition_tree/direction internally (engine/structure_generator.py),
+    # so condition_tree/direction/rr/exit-rule/position-sizing fields above
+    # are not honored for these two optimizers - main.py's structure/
+    # structure_genetic branches use build_parameter_space()'s mode-based
+    # defaults for every non-tree field instead (see main.py::main()).
+    n_candidates: int = 500
+    max_depth: int = 2
+    max_leaves: int = 4
+    min_trades: int = 30
+    mtf_probability: float = 0.0
+    mtf_timeframes: Optional[str] = None
+    population: int = 20
+    mutation_rate: float = 0.2
+    generations: int = 30
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -275,7 +295,23 @@ async def create_backtest(req: BacktestRequest) -> dict:
         "--optimizer", req.optimizer,
     ]
 
-    if req.condition_tree is not None or req.long_condition_tree is not None or req.short_condition_tree is not None:
+    if req.optimizer in ("structure", "structure_genetic"):
+        cmd += [
+            "--n-candidates", str(req.n_candidates),
+            "--max-depth", str(req.max_depth),
+            "--max-leaves", str(req.max_leaves),
+            "--min-trades", str(req.min_trades),
+            "--mtf-probability", str(req.mtf_probability),
+        ]
+        if req.mtf_timeframes:
+            cmd += ["--mtf-timeframes", req.mtf_timeframes]
+        if req.optimizer == "structure_genetic":
+            cmd += [
+                "--population", str(req.population),
+                "--mutation-rate", str(req.mutation_rate),
+                "--generations", str(req.generations),
+            ]
+    elif req.condition_tree is not None or req.long_condition_tree is not None or req.short_condition_tree is not None:
         config_path = _build_strategy_config(req)
         cmd += ["--strategy-config", str(config_path)]
 
@@ -349,7 +385,26 @@ def _read_csv_records(path: Path) -> list[dict]:
     if not path.exists():
         return []
     df = pd.read_csv(path)
-    return json.loads(df.to_json(orient="records", date_format="iso"))
+    records = json.loads(df.to_json(orient="records", date_format="iso"))
+
+    # condition_tree cells are Python repr strings (single-quoted, True/
+    # False/None) - main.py writes the params dict straight to CSV via
+    # pandas, it doesn't go through json.dumps anywhere in that pipeline.
+    # Parse them back into real nested objects here so the frontend can
+    # render the actual tree (engine/structure_generator.py's auto-generated
+    # ones especially) instead of an opaque string. ast.literal_eval is safe
+    # here (unlike eval) since it only ever evaluates Python literals, never
+    # arbitrary expressions - and this file is one we generated ourselves.
+    if "condition_tree" in df.columns:
+        for record in records:
+            raw = record.get("condition_tree")
+            if isinstance(raw, str):
+                try:
+                    record["condition_tree"] = ast.literal_eval(raw)
+                except (ValueError, SyntaxError):
+                    pass
+
+    return records
 
 
 @app.get("/api/backtests/{job_id}/results")

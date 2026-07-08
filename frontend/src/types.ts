@@ -105,6 +105,19 @@ export interface BacktestRequest {
   // partial_tp_rr/partial_tp_fraction above. Each level closes `fraction`
   // of whatever REMAINS of the position once price reaches that level's rr.
   partial_tp_levels?: { rr: number; fraction: number }[]
+  // Auto-exploration engine (optimizer="structure"/"structure_genetic") -
+  // ignored server-side for every other optimizer value. See
+  // api_server.py::BacktestRequest for the field-by-field mapping to
+  // main.py's --n-candidates/--max-depth/etc CLI flags.
+  n_candidates?: number
+  max_depth?: number
+  max_leaves?: number
+  min_trades?: number
+  mtf_probability?: number
+  mtf_timeframes?: string
+  population?: number
+  mutation_rate?: number
+  generations?: number
 }
 
 export interface PartialTpLevel {
@@ -181,6 +194,11 @@ export interface RankingRow {
   // Only present when position sizing was enabled for the run.
   final_account_balance?: number
   total_profit_currency?: number
+  // Present on any run whose params carried a condition_tree (the new
+  // engine echoes params back into every result row) - parsed server-side
+  // from a Python repr string into a real tree, see
+  // api_server.py::_read_csv_records.
+  condition_tree?: TreeNode
   [key: string]: unknown
 }
 

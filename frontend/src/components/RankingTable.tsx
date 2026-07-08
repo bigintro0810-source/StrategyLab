@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { describeConditionTree } from '../conditionTreeUtils'
 import type { RankingRow } from '../types'
 
 interface Props {
@@ -19,6 +20,11 @@ const COLUMNS: { key: keyof RankingRow; label: string; format?: (v: unknown) => 
   { key: 'calmar_ratio', label: 'Calmar', format: (v) => Number(v).toFixed(2) },
   { key: 'cagr', label: 'CAGR%', format: (v) => (Number(v) * 100).toFixed(1) },
   { key: 'trades', label: '取引数' },
+  {
+    key: 'condition_tree',
+    label: '条件(自動探索)',
+    format: (v) => (v && typeof v === 'object' ? describeConditionTree(v as Parameters<typeof describeConditionTree>[0]) : ''),
+  },
 ]
 
 export default function RankingTable({ rows, selectedRank, onSelectRow }: Props) {
@@ -74,11 +80,22 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
                 selectedRank != null && Number(row.rank) === selectedRank ? 'bg-emerald-500/10' : ''
               }`}
             >
-              {COLUMNS.map((col) => (
-                <td key={String(col.key)} className="px-2 py-1">
-                  {col.format ? col.format(row[col.key]) : String(row[col.key] ?? '')}
-                </td>
-              ))}
+              {COLUMNS.map((col) => {
+                const text = col.format ? col.format(row[col.key]) : String(row[col.key] ?? '')
+                return (
+                  <td
+                    key={String(col.key)}
+                    title={col.key === 'condition_tree' ? text : undefined}
+                    className={
+                      col.key === 'condition_tree'
+                        ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
+                        : 'px-2 py-1'
+                    }
+                  >
+                    {text}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>

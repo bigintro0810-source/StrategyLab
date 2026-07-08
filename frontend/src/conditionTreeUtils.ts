@@ -101,6 +101,25 @@ export function optionIsValid(node: TreeNode, path: number[], field: OptimizeFie
   return optionIsValid(node.children[path[0]], path.slice(1), field)
 }
 
+/** Renders a condition tree as a compact, human-readable one-liner - used
+ * to show what an auto-generated strategy (--optimizer structure/
+ * structure_genetic) actually consists of in the ranking table, where each
+ * row has a DIFFERENT tree (unlike the manual builder, where every row
+ * shares the one tree already visible in the editor above). */
+export function describeConditionTree(node: TreeNode): string {
+  if (isGroup(node)) {
+    if (node.op === 'NOT') {
+      return `NOT(${node.children.map(describeConditionTree).join(', ')})`
+    }
+    return `(${node.children.map(describeConditionTree).join(` ${node.op} `)})`
+  }
+
+  const params = Object.entries(node.params)
+  const paramsText = params.length > 0 ? `(${params.map(([k, v]) => `${k}=${v}`).join(',')})` : ''
+  const value = typeof node.value === 'number' ? Number(node.value.toFixed(4)) : node.value
+  return `${node.indicator}${paramsText} ${node.operator} ${value}`
+}
+
 function cartesianProduct<T>(arrays: T[][]): T[][] {
   return arrays.reduce<T[][]>((acc, values) => acc.flatMap((combo) => values.map((v) => [...combo, v])), [[]])
 }
