@@ -42,8 +42,8 @@ with st.sidebar:
         "開発者は責任を負いません。"
     )
 
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
-SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "AUDUSD", "EURUSD", "GBPUSD"]
+TIMEFRAMES = ["1m", "5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"]
+SYMBOLS = ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "AUDUSD", "EURUSD", "GBPUSD", "XAUUSD", "XAGUSD"]
 
 tab_run, tab_builder, tab_saved = st.tabs(["バックテスト実行", "条件ビルダー", "保存済み戦略"])
 

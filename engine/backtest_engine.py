@@ -277,7 +277,17 @@ def run_backtest(
     params: dict[str, Any] | BacktestConfig,
     return_trades: bool = False,
     is_intraday: bool | None = None,
+    indicator_cache: dict | None = None,
 ) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
+    """indicator_cache is optional (default None = fresh cache per call,
+    today's existing behavior). Passing in a dict kept alive across many
+    calls lets evaluate_condition_tree() reuse indicator arrays (ema, rsi,
+    ...) across different condition_trees that happen to reference the same
+    (indicator, params) pair - only safe when every call sharing that dict
+    uses the exact same df (see evaluate_condition_tree's own docstring for
+    why). main.py's ProcessPoolExecutor workers opt into this (one `df` per
+    worker for that worker's whole lifetime); walk_forward.py and every
+    other caller keep the default and are unaffected."""
     if isinstance(params, BacktestConfig):
         p = asdict(params)
     else:
@@ -300,10 +310,14 @@ def run_backtest(
                 "limit/stopエントリーはLong+Short同時評価と組み合わせ未対応です"
                 "(どちらか一方のみ指定してください)。"
             )
-        return _run_dual_direction_backtest(df, p, return_trades=return_trades, is_intraday=is_intraday)
+        return _run_dual_direction_backtest(
+            df, p, return_trades=return_trades, is_intraday=is_intraday, indicator_cache=indicator_cache
+        )
 
     if entry_method != "market":
-        return _run_limit_stop_backtest(df, p, return_trades=return_trades, is_intraday=is_intraday)
+        return _run_limit_stop_backtest(
+            df, p, return_trades=return_trades, is_intraday=is_intraday, indicator_cache=indicator_cache
+        )
 
     pip = float(p.get("pip_size", 0.01))
 
@@ -346,8 +360,21 @@ def run_backtest(
     low_arr = df["low"].to_numpy(dtype=float)
     close_arr = df["close"].to_numpy(dtype=float)
 
-    ema_arr = resolve_ema_series(df, ema_length).to_numpy(dtype=float)
-    rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
+    # ema_arr/rsi_arr/previous_high_arr (below) are ONLY read by
+    # build_candidate_signal() in the legacy (non-condition_tree) branch a
+    # little further down - computing them unconditionally wasted ~50ms per
+    # backtest (profiled) whenever a strategy uses condition_tree instead,
+    # which is every auto-generated and manual-builder-built strategy.
+    # Checked here (instead of once, right before that branch) so
+    # condition_tree's own value doesn't need recomputing/re-fetching twice.
+    condition_tree = p.get("condition_tree")
+
+    if condition_tree is None:
+        ema_arr = resolve_ema_series(df, ema_length).to_numpy(dtype=float)
+        rsi_arr = resolve_rsi_series(df, 14).to_numpy(dtype=float)
+    else:
+        ema_arr = None
+        rsi_arr = None
 
     use_atr_trailing_stop = bool(p.get("use_atr_trailing_stop", False))
     atr_trailing_multiplier = float(p.get("atr_trailing_multiplier", 2.0))
@@ -388,14 +415,15 @@ def run_backtest(
     use_partial_tp = bool(p.get("use_partial_tp", False))
     partial_tp_levels = _resolve_partial_tp_levels(p)
 
-    previous_high_arr = build_previous_high_array(high_arr, breakout_bars)
+    previous_high_arr = build_previous_high_array(high_arr, breakout_bars) if condition_tree is None else None
 
-    condition_tree = p.get("condition_tree")
     if condition_tree is not None:
         # V-next generic condition engine (engine/conditions.py) - additive path,
         # selected only when a strategy explicitly supplies a condition_tree. The
         # existing entry_trigger/use_X_filter path below is untouched otherwise.
-        candidate_signal = evaluate_condition_tree(condition_tree, df, symbol=p.get("symbol"))
+        candidate_signal = evaluate_condition_tree(
+            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
+        )
     else:
         candidate_signal = build_candidate_signal(
             df,
@@ -413,6 +441,51 @@ def run_backtest(
                 "is_intraday": is_intraday,
                 "pip": pip,
             },
+        )
+
+    # Fast path: a numba-jitted reimplementation of the exact loop below,
+    # verified byte-for-byte identical to it (tests/test_fast_backtest_parity.py)
+    # across many condition trees/directions/rr/exit-flag combinations before
+    # being wired in here. Only dispatches when every advanced feature this
+    # fast path doesn't model is off - anything using ATR trailing/breakeven/
+    # partial-TP/circuit-breakers/position-sizing falls through to the full
+    # Python loop unchanged, so this is a pure speed opt-in with zero
+    # behavior change for strategies actually using those features. See
+    # engine/numba_fast_backtest.py's module docstring for why (profiling
+    # showed this loop itself, not condition-tree evaluation, is ~70% of a
+    # single backtest's cost).
+    fast_path_eligible = (
+        entry_method == "market"
+        and not use_atr_trailing_stop
+        and not use_breakeven_stop
+        and not use_partial_tp
+        and not use_max_dd_stop
+        and not use_consecutive_loss_stop
+        and not use_position_sizing
+    )
+    if fast_path_eligible:
+        from engine.numba_fast_backtest import run_market_backtest_fast
+
+        return run_market_backtest_fast(
+            p=p,
+            datetime_arr=datetime_arr,
+            open_arr=open_arr,
+            high_arr=high_arr,
+            low_arr=low_arr,
+            close_arr=close_arr,
+            hour_arr=hour_arr,
+            weekday_arr=weekday_arr,
+            candidate_signal=candidate_signal,
+            direction=direction,
+            lookahead_bars=lookahead_bars,
+            rr=rr,
+            cost_per_trade=cost_per_trade,
+            is_intraday=is_intraday,
+            use_weekend_exit=use_weekend_exit,
+            weekend_exit_hour=weekend_exit_hour,
+            use_daily_exit=use_daily_exit,
+            daily_exit_hour=daily_exit_hour,
+            return_trades=return_trades,
         )
 
     profits: list[float] = []
@@ -847,6 +920,7 @@ def _run_limit_stop_backtest(
     p: dict[str, Any],
     return_trades: bool = False,
     is_intraday: bool | None = None,
+    indicator_cache: dict | None = None,
 ) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
     """entry_method="limit" or "stop" - a separate code path from
     run_backtest()'s market-order state machine (signal -> confirm via
@@ -948,7 +1022,9 @@ def _run_limit_stop_backtest(
 
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
-        candidate_signal = evaluate_condition_tree(condition_tree, df, symbol=p.get("symbol"))
+        candidate_signal = evaluate_condition_tree(
+            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
+        )
     else:
         ema_length = int(p["ema_length"])
         breakout_bars = int(p["breakout_bars"])
@@ -1345,6 +1421,7 @@ def _run_dual_direction_backtest(
     p: dict[str, Any],
     return_trades: bool = False,
     is_intraday: bool | None = None,
+    indicator_cache: dict | None = None,
 ) -> dict[str, Any] | tuple[dict[str, Any], pd.DataFrame]:
     """Long and Short entry trees evaluated in the same backtest, sharing one
     position slot (no hedging - that's an explicit, separate scope decision
@@ -1427,9 +1504,15 @@ def _run_dual_direction_backtest(
 
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
-    long_candidate = evaluate_condition_tree(long_tree, df, symbol=p.get("symbol")) if long_tree is not None else np.zeros(len(df), dtype=bool)
+    long_candidate = (
+        evaluate_condition_tree(long_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        if long_tree is not None
+        else np.zeros(len(df), dtype=bool)
+    )
     short_candidate = (
-        evaluate_condition_tree(short_tree, df, symbol=p.get("symbol")) if short_tree is not None else np.zeros(len(df), dtype=bool)
+        evaluate_condition_tree(short_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        if short_tree is not None
+        else np.zeros(len(df), dtype=bool)
     )
 
     profits: list[float] = []

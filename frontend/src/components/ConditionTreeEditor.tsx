@@ -1,6 +1,6 @@
 import type { ConditionNode, GroupNode, IndicatorInfo, TreeNode } from '../types'
 import { isGroup } from '../types'
-import ConditionRow from './ConditionRow'
+import ConditionRow, { defaultParamsFor } from './ConditionRow'
 
 interface Props {
   node: GroupNode
@@ -16,7 +16,7 @@ function defaultCondition(indicators: IndicatorInfo[]): ConditionNode {
     indicator: first?.id ?? 'close',
     operator: '>',
     value: 0,
-    params: first?.needs_period ? { length: 14 } : {},
+    params: defaultParamsFor(first),
     value_params: {},
   }
 }

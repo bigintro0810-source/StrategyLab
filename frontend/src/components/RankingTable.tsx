@@ -3,6 +3,8 @@ import type { RankingRow } from '../types'
 
 interface Props {
   rows: RankingRow[]
+  selectedRank?: number | null
+  onSelectRow?: (row: RankingRow) => void
 }
 
 const COLUMNS: { key: keyof RankingRow; label: string; format?: (v: unknown) => string }[] = [
@@ -19,7 +21,7 @@ const COLUMNS: { key: keyof RankingRow; label: string; format?: (v: unknown) => 
   { key: 'trades', label: '取引数' },
 ]
 
-export default function RankingTable({ rows }: Props) {
+export default function RankingTable({ rows, selectedRank, onSelectRow }: Props) {
   const [sortKey, setSortKey] = useState<keyof RankingRow>('rank')
   const [sortAsc, setSortAsc] = useState(true)
 
@@ -65,7 +67,13 @@ export default function RankingTable({ rows }: Props) {
         </thead>
         <tbody>
           {sorted.map((row, i) => (
-            <tr key={i} className="border-b border-white/5 hover:bg-white/[0.04]">
+            <tr
+              key={i}
+              onClick={() => onSelectRow?.(row)}
+              className={`border-b border-white/5 ${onSelectRow ? 'cursor-pointer' : ''} hover:bg-white/[0.04] ${
+                selectedRank != null && Number(row.rank) === selectedRank ? 'bg-emerald-500/10' : ''
+              }`}
+            >
               {COLUMNS.map((col) => (
                 <td key={String(col.key)} className="px-2 py-1">
                   {col.format ? col.format(row[col.key]) : String(row[col.key] ?? '')}

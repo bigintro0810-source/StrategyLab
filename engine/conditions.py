@@ -41,8 +41,26 @@ from engine.indicators import rsi as _rsi
 from engine.indicators import sma as _sma
 from engine.technical_indicators import adx as _adx
 from engine.technical_indicators import bollinger_bands, macd, stochastic_oscillator
+from engine.technical_indicators import daily_reference_levels
+from engine.technical_indicators import round_number_distance_pips as _round_number_distance_pips
 from engine.technical_indicators import daily_vwap as _daily_vwap
+from engine.technical_indicators import ichimoku
 from engine.technical_indicators import supertrend as _supertrend
+from engine.technical_indicators import (
+    accumulation_distribution,
+    aroon,
+    camarilla_levels,
+    chaikin_money_flow,
+    cci as _cci,
+    choppiness_index as _choppiness_index,
+    fibonacci_pivot_levels,
+    keltner_channels,
+    money_flow_index,
+    on_balance_volume,
+    parabolic_sar,
+    williams_r as _williams_r,
+    woodie_pivot_levels,
+)
 from engine.smc_indicators import (
     bearish_fvg,
     bearish_order_block,
@@ -55,17 +73,27 @@ from engine.smc_indicators import (
     liquidity_sweep_bearish,
     liquidity_sweep_bullish,
 )
+import engine.candlestick_patterns as _cdl
+import engine.chart_patterns as _chart
+import engine.derived_indicators as _derived
+import engine.harmonic_patterns as _harmonic
+import engine.heikin_ashi as _ha
 from engine.data_loader import find_data_file, load_price_data
 
 _TIMEFRAME_SECONDS = {
     "1m": 60,
     "5m": 300,
+    "10m": 600,
     "15m": 900,
     "30m": 1800,
     "1h": 3600,
     "4h": 14400,
     "1d": 86400,
     "1w": 604800,
+    # Approximate (30 days) - months have variable length, but this dict is
+    # only ever used for "which known label is closest" inference (see
+    # _infer_timeframe_label), not exact duration math, so an average is fine.
+    "1mo": 2592000,
 }
 
 
@@ -179,6 +207,84 @@ def _supertrend_direction(df: pd.DataFrame, length: int = 10, multiplier: float 
     return np.asarray(direction, dtype=float)
 
 
+def _local_hour(datetime_series: pd.Series, tz: str) -> np.ndarray:
+    """Converts this project's datetime column (tz-naive, but always true
+    JST wall-clock - see import_broker_csv.py's SOURCE_TZ/TARGET_TZ
+    conversion) to another IANA timezone's local hour-of-day, via a real
+    tz-aware conversion rather than a hardcoded UTC-offset guess. Tokyo has
+    no DST so localizing to it is always unambiguous; converting onward to
+    a DST-observing zone (Europe/London, America/New_York) then correctly
+    picks up that zone's actual historical DST transition dates (the US
+    rule changed in 2007 - a fixed calendar rule would be wrong for this
+    project's pre-2007 data)."""
+    localized = pd.to_datetime(datetime_series).dt.tz_localize("Asia/Tokyo")
+    return localized.dt.tz_convert(tz).dt.hour.to_numpy(dtype=float)
+
+
+def _in_hour_range(hour_arr: np.ndarray, start: int, end: int) -> np.ndarray:
+    return (hour_arr >= start) & (hour_arr < end)
+
+
+# ICT/SMC "Kill Zone" time windows - fixed in each city's OWN local time
+# (confirmed by reverse-deriving from a JST DST/winter-time table: 3 of the
+# 4 zones show a 1-hour JST shift between DST/winter because JST itself has
+# no DST, while the underlying city-local window is identical in both rows).
+def _killzone_asian(df: pd.DataFrame) -> np.ndarray:
+    hour = pd.to_datetime(df["datetime"]).dt.hour.to_numpy(dtype=float)  # already Asia/Tokyo (=JST)
+    return _in_hour_range(hour, 8, 10)
+
+
+def _killzone_london(df: pd.DataFrame) -> np.ndarray:
+    return _in_hour_range(_local_hour(df["datetime"], "Europe/London"), 7, 10)
+
+
+def _killzone_newyork(df: pd.DataFrame) -> np.ndarray:
+    return _in_hour_range(_local_hour(df["datetime"], "America/New_York"), 7, 10)
+
+
+def _killzone_london_close(df: pd.DataFrame) -> np.ndarray:
+    return _in_hour_range(_local_hour(df["datetime"], "Europe/London"), 15, 17)
+
+
+def _daily_ref_column(df: pd.DataFrame, column: str, adr_period: int = 14) -> np.ndarray:
+    """Wraps daily_reference_levels() (previous-day high/low, classic daily
+    pivot/R1/S1, and ADR - all causally safe, shift(1) before broadcasting
+    onto every intraday bar of the following day). Called once per distinct
+    (column) request rather than shared across pivot/r1/s1/prev_day_high/
+    prev_day_low/adr - same "recompute per indicator name, cache misses
+    across siblings" tradeoff already accepted by adx/plus_di/minus_di
+    below (extensibility/correctness over speed, per this project's stated
+    priority order)."""
+    return daily_reference_levels(df, adr_period)[column].to_numpy(dtype=float)
+
+
+def _ichimoku_component(
+    df: pd.DataFrame,
+    component: str,
+    tenkan_period: int = 9,
+    kijun_period: int = 26,
+    senkou_b_period: int = 52,
+) -> np.ndarray:
+    tenkan, kijun, senkou_a, senkou_b = ichimoku(
+        df["high"], df["low"], tenkan_period, kijun_period, senkou_b_period
+    )
+    lines = {"tenkan": tenkan, "kijun": kijun, "senkou_a": senkou_a, "senkou_b": senkou_b}
+    return lines[component].to_numpy(dtype=float)
+
+
+def _fib_level(df: pd.DataFrame, length: int = 20, ratio: float = 0.618) -> np.ndarray:
+    """Fibonacci retracement/extension level: a linear interpolation
+    (ratio<1) or extrapolation (ratio>1) between the rolling N-bar high and
+    low - direction-agnostic by construction (ratio=0 sits at the high,
+    ratio=1 at the low; which end represents "the swing being retraced"
+    is left to how the resulting condition is used, same as how a manually
+    drawn Fibonacci tool doesn't know which of its two anchor points came
+    first chronologically either)."""
+    high = _highest_high(df, length)
+    low = _lowest_low(df, length)
+    return high - ratio * (high - low)
+
+
 def _vwap(df: pd.DataFrame) -> np.ndarray:
     if "volume" not in df.columns:
         raise ValueError(
@@ -186,6 +292,57 @@ def _vwap(df: pd.DataFrame) -> np.ndarray:
             "(volume列を含むデータソースを使用してください)"
         )
     return _daily_vwap(df["high"], df["low"], df["close"], df["volume"], df["datetime"]).to_numpy(dtype=float)
+
+
+def _require_volume(df: pd.DataFrame) -> pd.Series:
+    if "volume" not in df.columns:
+        raise ValueError(
+            "この指標にはvolume列が必要ですが、この価格データにはありません"
+            "(volume列を含むデータソースを使用してください)"
+        )
+    return df["volume"]
+
+
+def _parabolic_sar_line(df: pd.DataFrame, af_start: float = 0.02, af_step: float = 0.02, af_max: float = 0.2) -> np.ndarray:
+    sar, _direction = parabolic_sar(df["high"], df["low"], df["close"], af_start, af_step, af_max)
+    return np.asarray(sar, dtype=float)
+
+
+def _parabolic_sar_direction(df: pd.DataFrame, af_start: float = 0.02, af_step: float = 0.02, af_max: float = 0.2) -> np.ndarray:
+    _sar, direction = parabolic_sar(df["high"], df["low"], df["close"], af_start, af_step, af_max)
+    return np.asarray(direction, dtype=float)
+
+
+def _aroon_up(df: pd.DataFrame, period: int = 14) -> np.ndarray:
+    up, _down = aroon(df["high"], df["low"], int(period))
+    return up.to_numpy(dtype=float)
+
+
+def _aroon_down(df: pd.DataFrame, period: int = 14) -> np.ndarray:
+    _up, down = aroon(df["high"], df["low"], int(period))
+    return down.to_numpy(dtype=float)
+
+
+def _aroon_oscillator(df: pd.DataFrame, period: int = 14) -> np.ndarray:
+    up, down = aroon(df["high"], df["low"], int(period))
+    return (up - down).to_numpy(dtype=float)
+
+
+def _keltner_band(df: pd.DataFrame, band: str, period: int = 20, atr_period: int = 10, multiplier: float = 2.0) -> np.ndarray:
+    upper, middle, lower = keltner_channels(df["high"], df["low"], df["close"], int(period), int(atr_period), float(multiplier))
+    return {"upper": upper, "middle": middle, "lower": lower}[band].to_numpy(dtype=float)
+
+
+def _woodie_column(df: pd.DataFrame, column: str) -> np.ndarray:
+    return woodie_pivot_levels(df)[column].to_numpy(dtype=float)
+
+
+def _camarilla_column(df: pd.DataFrame, column: str) -> np.ndarray:
+    return camarilla_levels(df)[column].to_numpy(dtype=float)
+
+
+def _fib_pivot_column(df: pd.DataFrame, column: str) -> np.ndarray:
+    return fibonacci_pivot_levels(df)[column].to_numpy(dtype=float)
 
 
 # Indicator name -> function(df, **params) -> np.ndarray[float]. Add new indicators
@@ -273,7 +430,422 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     # docstring. Raises a clear error if the loaded price data has no
     # volume column rather than silently returning NaN/garbage.
     "vwap": lambda df, **p: _vwap(df),
+    # ICT/SMC "Kill Zone" sessions - boolean per-bar signals (1.0/0.0),
+    # meant to be compared with =="1" like the SMC signals above.
+    "killzone_asian": lambda df, **p: _killzone_asian(df).astype(float),
+    "killzone_london": lambda df, **p: _killzone_london(df).astype(float),
+    "killzone_newyork": lambda df, **p: _killzone_newyork(df).astype(float),
+    "killzone_london_close": lambda df, **p: _killzone_london_close(df).astype(float),
+    # Previous-day high/low + classic daily pivot/R1/S1 (all shift(1),
+    # no lookahead) and ADR - see _daily_ref_column's docstring.
+    "prev_day_high": lambda df, **p: _daily_ref_column(df, "prev_day_high"),
+    "prev_day_low": lambda df, **p: _daily_ref_column(df, "prev_day_low"),
+    "pivot": lambda df, **p: _daily_ref_column(df, "pivot"),
+    "pivot_r1": lambda df, **p: _daily_ref_column(df, "r1"),
+    "pivot_s1": lambda df, **p: _daily_ref_column(df, "s1"),
+    "adr": lambda df, adr_period=14, **p: _daily_ref_column(df, "adr", int(adr_period)),
+    "ichimoku_tenkan": lambda df, tenkan_period=9, kijun_period=26, senkou_b_period=52, **p: _ichimoku_component(
+        df, "tenkan", int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    ),
+    "ichimoku_kijun": lambda df, tenkan_period=9, kijun_period=26, senkou_b_period=52, **p: _ichimoku_component(
+        df, "kijun", int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    ),
+    "ichimoku_senkou_a": lambda df, tenkan_period=9, kijun_period=26, senkou_b_period=52, **p: _ichimoku_component(
+        df, "senkou_a", int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    ),
+    "ichimoku_senkou_b": lambda df, tenkan_period=9, kijun_period=26, senkou_b_period=52, **p: _ichimoku_component(
+        df, "senkou_b", int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    ),
+    "fib_level": lambda df, length=20, ratio=0.618, **p: _fib_level(df, int(length), float(ratio)),
+    # Candlestick patterns (engine/candlestick_patterns.py) - boolean per-bar
+    # signals (1.0/0.0), meant to be compared with =="1" like the SMC
+    # signals above. Not verified against any reference charting platform -
+    # see that module's own docstring for why, and for why hammer/
+    # hanging_man and inverted_hammer/shooting_star are registered twice
+    # under the same underlying shape function.
+    "bullish_candle": lambda df, **p: _cdl.bullish_candle(df["open"], df["close"]).to_numpy(dtype=float),
+    "bearish_candle": lambda df, **p: _cdl.bearish_candle(df["open"], df["close"]).to_numpy(dtype=float),
+    "large_bullish_candle": lambda df, lookback=20, multiplier=1.5, **p: _cdl.large_bullish_candle(
+        df["open"], df["high"], df["low"], df["close"], int(lookback), float(multiplier)
+    ).to_numpy(dtype=float),
+    "large_bearish_candle": lambda df, lookback=20, multiplier=1.5, **p: _cdl.large_bearish_candle(
+        df["open"], df["high"], df["low"], df["close"], int(lookback), float(multiplier)
+    ).to_numpy(dtype=float),
+    "small_bullish_candle": lambda df, lookback=20, multiplier=0.5, **p: _cdl.small_bullish_candle(
+        df["open"], df["high"], df["low"], df["close"], int(lookback), float(multiplier)
+    ).to_numpy(dtype=float),
+    "small_bearish_candle": lambda df, lookback=20, multiplier=0.5, **p: _cdl.small_bearish_candle(
+        df["open"], df["high"], df["low"], df["close"], int(lookback), float(multiplier)
+    ).to_numpy(dtype=float),
+    "doji": lambda df, body_ratio_threshold=0.1, **p: _cdl.doji(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "long_upper_wick": lambda df, wick_ratio_threshold=0.6, **p: _cdl.long_upper_wick(
+        df["open"], df["high"], df["low"], df["close"], float(wick_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "long_lower_wick": lambda df, wick_ratio_threshold=0.6, **p: _cdl.long_lower_wick(
+        df["open"], df["high"], df["low"], df["close"], float(wick_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "no_upper_wick": lambda df, threshold=0.05, **p: _cdl.no_upper_wick(
+        df["open"], df["high"], df["low"], df["close"], float(threshold)
+    ).to_numpy(dtype=float),
+    "no_lower_wick": lambda df, threshold=0.05, **p: _cdl.no_lower_wick(
+        df["open"], df["high"], df["low"], df["close"], float(threshold)
+    ).to_numpy(dtype=float),
+    "marubozu_bullish": lambda df, body_ratio_threshold=0.95, **p: _cdl.marubozu_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "marubozu_bearish": lambda df, body_ratio_threshold=0.95, **p: _cdl.marubozu_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "pin_bar_bullish": lambda df, body_ratio_max=0.3, wick_ratio_min=0.6, **p: _cdl.pin_bar_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_max), float(wick_ratio_min)
+    ).to_numpy(dtype=float),
+    "pin_bar_bearish": lambda df, body_ratio_max=0.3, wick_ratio_min=0.6, **p: _cdl.pin_bar_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_max), float(wick_ratio_min)
+    ).to_numpy(dtype=float),
+    "hammer": lambda df, body_ratio_max=0.3, lower_wick_ratio_min=0.6, upper_wick_ratio_max=0.1, **p: _cdl.hammer_shape(
+        df["open"], df["high"], df["low"], df["close"],
+        float(body_ratio_max), float(lower_wick_ratio_min), float(upper_wick_ratio_max),
+    ).to_numpy(dtype=float),
+    "hanging_man": lambda df, body_ratio_max=0.3, lower_wick_ratio_min=0.6, upper_wick_ratio_max=0.1, **p: _cdl.hammer_shape(
+        df["open"], df["high"], df["low"], df["close"],
+        float(body_ratio_max), float(lower_wick_ratio_min), float(upper_wick_ratio_max),
+    ).to_numpy(dtype=float),
+    "inverted_hammer": lambda df, body_ratio_max=0.3, upper_wick_ratio_min=0.6, lower_wick_ratio_max=0.1, **p: _cdl.inverted_hammer_shape(
+        df["open"], df["high"], df["low"], df["close"],
+        float(body_ratio_max), float(upper_wick_ratio_min), float(lower_wick_ratio_max),
+    ).to_numpy(dtype=float),
+    "shooting_star": lambda df, body_ratio_max=0.3, upper_wick_ratio_min=0.6, lower_wick_ratio_max=0.1, **p: _cdl.inverted_hammer_shape(
+        df["open"], df["high"], df["low"], df["close"],
+        float(body_ratio_max), float(upper_wick_ratio_min), float(lower_wick_ratio_max),
+    ).to_numpy(dtype=float),
+    "engulfing_bullish": lambda df, **p: _cdl.engulfing_bullish(df["open"], df["close"]).to_numpy(dtype=float),
+    "engulfing_bearish": lambda df, **p: _cdl.engulfing_bearish(df["open"], df["close"]).to_numpy(dtype=float),
+    "inside_bar": lambda df, **p: _cdl.inside_bar(df["high"], df["low"]).to_numpy(dtype=float),
+    "outside_bar": lambda df, **p: _cdl.outside_bar(df["high"], df["low"]).to_numpy(dtype=float),
+    "tweezer_top": lambda df, tolerance_pct=0.1, **p: _cdl.tweezer_top(
+        df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
+    ).to_numpy(dtype=float),
+    "tweezer_bottom": lambda df, tolerance_pct=0.1, **p: _cdl.tweezer_bottom(
+        df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
+    ).to_numpy(dtype=float),
+    "harami_bullish": lambda df, **p: _cdl.harami_bullish(df["open"], df["close"]).to_numpy(dtype=float),
+    "harami_bearish": lambda df, **p: _cdl.harami_bearish(df["open"], df["close"]).to_numpy(dtype=float),
+    "gap_up": lambda df, **p: _cdl.gap_up(df["open"], df["high"]).to_numpy(dtype=float),
+    "gap_down": lambda df, **p: _cdl.gap_down(df["open"], df["low"]).to_numpy(dtype=float),
+    "morning_star": lambda df, small_body_ratio=0.3, **p: _cdl.morning_star(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    ).to_numpy(dtype=float),
+    "evening_star": lambda df, small_body_ratio=0.3, **p: _cdl.evening_star(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    ).to_numpy(dtype=float),
+    "three_white_soldiers": lambda df, **p: _cdl.three_white_soldiers(df["open"], df["close"]).to_numpy(dtype=float),
+    "three_black_crows": lambda df, **p: _cdl.three_black_crows(df["open"], df["close"]).to_numpy(dtype=float),
+    "rising_three_methods": lambda df, **p: _cdl.rising_three_methods(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "falling_three_methods": lambda df, **p: _cdl.falling_three_methods(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "consecutive_bullish_candles": lambda df, n=3, **p: _cdl.consecutive_bullish_candles(
+        df["open"], df["close"], int(n)
+    ).to_numpy(dtype=float),
+    "consecutive_bearish_candles": lambda df, n=3, **p: _cdl.consecutive_bearish_candles(
+        df["open"], df["close"], int(n)
+    ).to_numpy(dtype=float),
+    "consecutive_higher_highs": lambda df, n=3, **p: _cdl.consecutive_higher_highs(df["high"], int(n)).to_numpy(dtype=float),
+    "consecutive_lower_lows": lambda df, n=3, **p: _cdl.consecutive_lower_lows(df["low"], int(n)).to_numpy(dtype=float),
+    "body_larger_than_average": lambda df, lookback=20, multiplier=1.5, **p: _cdl.body_larger_than_average(
+        df["open"], df["high"], df["low"], df["close"], int(lookback), float(multiplier)
+    ).to_numpy(dtype=float),
+    "wick_ratio_at_least": lambda df, threshold_pct=50.0, **p: _cdl.wick_ratio_at_least(
+        df["open"], df["high"], df["low"], df["close"], float(threshold_pct)
+    ).to_numpy(dtype=float),
+    "body_ratio_at_least": lambda df, threshold_pct=50.0, **p: _cdl.body_ratio_at_least(
+        df["open"], df["high"], df["low"], df["close"], float(threshold_pct)
+    ).to_numpy(dtype=float),
+    # 2026-07-08追加分 (candlestick_patterns.py拡張)
+    "long_legged_doji": lambda df, body_ratio_threshold=0.1, wick_ratio_min=0.35, **p: _cdl.long_legged_doji(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold), float(wick_ratio_min)
+    ).to_numpy(dtype=float),
+    "dragonfly_doji": lambda df, body_ratio_threshold=0.1, lower_wick_ratio_min=0.6, upper_wick_ratio_max=0.1, **p: _cdl.dragonfly_doji(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold), float(lower_wick_ratio_min), float(upper_wick_ratio_max)
+    ).to_numpy(dtype=float),
+    "gravestone_doji": lambda df, body_ratio_threshold=0.1, upper_wick_ratio_min=0.6, lower_wick_ratio_max=0.1, **p: _cdl.gravestone_doji(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold), float(upper_wick_ratio_min), float(lower_wick_ratio_max)
+    ).to_numpy(dtype=float),
+    "spinning_top": lambda df, body_ratio_max=0.3, wick_ratio_min=0.3, **p: _cdl.spinning_top(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_max), float(wick_ratio_min)
+    ).to_numpy(dtype=float),
+    "kicker_bullish": lambda df, body_ratio_threshold=0.7, **p: _cdl.kicker_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "kicker_bearish": lambda df, body_ratio_threshold=0.7, **p: _cdl.kicker_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    ).to_numpy(dtype=float),
+    "belt_hold_bullish": lambda df, lower_wick_ratio_max=0.05, body_ratio_min=0.7, **p: _cdl.belt_hold_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(lower_wick_ratio_max), float(body_ratio_min)
+    ).to_numpy(dtype=float),
+    "belt_hold_bearish": lambda df, upper_wick_ratio_max=0.05, body_ratio_min=0.7, **p: _cdl.belt_hold_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(upper_wick_ratio_max), float(body_ratio_min)
+    ).to_numpy(dtype=float),
+    "abandoned_baby_bullish": lambda df, small_body_ratio=0.1, **p: _cdl.abandoned_baby_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    ).to_numpy(dtype=float),
+    "abandoned_baby_bearish": lambda df, small_body_ratio=0.1, **p: _cdl.abandoned_baby_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    ).to_numpy(dtype=float),
+    "three_inside_up": lambda df, **p: _cdl.three_inside_up(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "three_inside_down": lambda df, **p: _cdl.three_inside_down(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "three_outside_up": lambda df, **p: _cdl.three_outside_up(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "three_outside_down": lambda df, **p: _cdl.three_outside_down(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    # ラウンドナンバー(キリ番)までの距離 - engine/technical_indicators.pyの
+    # round_number_distance_pipsは旧filters.pyでは使われていたが、条件ツリー
+    # エンジンにはまだ繋がれていなかった。pip_sizeは通貨ペアごとに違うため
+    # (JPYペアは0.01、それ以外は0.0001)、条件側のparamsで明示指定する。
+    "dist_to_round_number": lambda df, pip_size=0.01, **p: _round_number_distance_pips(
+        df["close"], float(pip_size)
+    ).to_numpy(dtype=float),
 }
+
+# engine/derived_indicators.py's functions already match the registry's
+# (df, **params) -> np.ndarray calling convention exactly, so they're
+# registered directly (no wrapping lambda needed) - see that module's
+# docstring for why it's a separate file.
+INDICATOR_REGISTRY.update(_derived.DISTANCE_INDICATORS)
+INDICATOR_REGISTRY.update(_derived.SLOPE_INDICATORS)
+INDICATOR_REGISTRY.update({
+    # SMC zone distance
+    "dist_order_block_bullish": _derived.dist_to_order_block_bullish,
+    "dist_order_block_bearish": _derived.dist_to_order_block_bearish,
+    "dist_fvg_bullish": _derived.dist_to_fvg_bullish,
+    "dist_fvg_bearish": _derived.dist_to_fvg_bearish,
+    "dist_bos_bullish": _derived.dist_to_bos_bullish,
+    "dist_bos_bearish": _derived.dist_to_bos_bearish,
+    # Time since session open
+    "minutes_since_london_open": _derived.minutes_since_london_open,
+    "minutes_since_ny_open": _derived.minutes_since_ny_open,
+    # 傾き系 extras (rising/falling for 7 series already merged in via
+    # SLOPE_INDICATORS above)
+    "ema_slope_degrees": _derived.ema_slope_degrees,
+    "ema_roc": _derived.ema_roc,
+    "atr_roc": _derived.atr_roc,
+    "higher_high": _derived.higher_high,
+    "higher_low": _derived.higher_low,
+    "lower_high": _derived.lower_high,
+    "lower_low": _derived.lower_low,
+    # 価格位置
+    "bb_percent_b": _derived.bb_percent_b,
+    "donchian_percent_position": _derived.donchian_percent_position,
+    "dist_to_ema_atr_ratio": _derived.dist_to_ema_atr_ratio,
+    "today_range_pct_of_adr": _derived.today_range_pct_of_adr,
+    "prev_day_mid": _derived.prev_day_mid,
+    "today_range_position": _derived.today_range_position,
+    "dist_to_fib": _derived.dist_to_fib,
+    # 統計系
+    "rolling_mean_high": _derived.rolling_mean_high,
+    "rolling_mean_low": _derived.rolling_mean_low,
+    "avg_body_size": _derived.avg_body_size,
+    "max_body_size": _derived.max_body_size,
+    "min_body_size": _derived.min_body_size,
+    "body_size_std": _derived.body_size_std,
+    "avg_upper_wick": _derived.avg_upper_wick,
+    "avg_lower_wick": _derived.avg_lower_wick,
+    "atr_rolling_mean": _derived.atr_rolling_mean,
+    "atr_deviation": _derived.atr_deviation,
+    "close_rolling_std": _derived.close_rolling_std,
+    "rsi_rolling_mean": _derived.rsi_rolling_mean,
+    "rsi_deviation": _derived.rsi_deviation,
+    "adx_rolling_mean": _derived.adx_rolling_mean,
+    "macd_rolling_mean": _derived.macd_rolling_mean,
+    "percentile_rank_rsi": _derived.percentile_rank_rsi,
+    "percentile_rank_atr": _derived.percentile_rank_atr,
+    "percentile_rank_body": _derived.percentile_rank_body,
+    "zscore_close": _derived.zscore_close,
+    "zscore_rsi": _derived.zscore_rsi,
+    "zscore_atr": _derived.zscore_atr,
+    "is_max_body_of_n": _derived.is_max_body_of_n,
+    "is_min_atr_of_n": _derived.is_min_atr_of_n,
+    "is_max_rsi_of_n": _derived.is_max_rsi_of_n,
+    # エントリー専用イベント
+    "bb_width": _derived.bb_width,
+    "bb_squeeze": _derived.bb_squeeze,
+    "bb_expansion": _derived.bb_expansion,
+    "supertrend_flip_bullish": _derived.supertrend_flip_bullish,
+    "supertrend_flip_bearish": _derived.supertrend_flip_bearish,
+    "today_new_high": _derived.today_new_high,
+    "today_new_low": _derived.today_new_low,
+    # 一瞬だけ起きる変化
+    "rsi_divergence_bearish": _derived.rsi_divergence_bearish,
+    "rsi_divergence_bullish": _derived.rsi_divergence_bullish,
+    "macd_divergence_bearish": _derived.macd_divergence_bearish,
+    "macd_divergence_bullish": _derived.macd_divergence_bullish,
+    "ema_perfect_order_bullish": _derived.ema_perfect_order_bullish,
+    "ema_perfect_order_bearish": _derived.ema_perfect_order_bearish,
+    "ema_perfect_order_broken_bullish": _derived.ema_perfect_order_broken_bullish,
+    "ema_perfect_order_broken_bearish": _derived.ema_perfect_order_broken_bearish,
+    "first_pullback_after_breakout_bullish": _derived.first_pullback_after_breakout_bullish,
+    "first_pullback_after_breakout_bearish": _derived.first_pullback_after_breakout_bearish,
+    "fvg_first_retest_bullish": _derived.fvg_first_retest_bullish,
+    "fvg_first_retest_bearish": _derived.fvg_first_retest_bearish,
+    "order_block_first_retest_bullish": _derived.order_block_first_retest_bullish,
+    "order_block_first_retest_bearish": _derived.order_block_first_retest_bearish,
+})
+
+# Classic multi-swing chart patterns (engine/chart_patterns.py) - unlike
+# every other function in this registry, these take (high, low, close, ...)
+# directly rather than the whole df, so each needs a thin unpacking lambda.
+INDICATOR_REGISTRY.update({
+    "double_top_breakdown": lambda df, **p: _chart.double_top_breakdown(df["high"], df["low"], df["close"], **p),
+    "double_bottom_breakout": lambda df, **p: _chart.double_bottom_breakout(df["high"], df["low"], df["close"], **p),
+    "triple_top_breakdown": lambda df, **p: _chart.triple_top_breakdown(df["high"], df["low"], df["close"], **p),
+    "triple_bottom_breakout": lambda df, **p: _chart.triple_bottom_breakout(df["high"], df["low"], df["close"], **p),
+    "head_and_shoulders_breakdown": lambda df, **p: _chart.head_and_shoulders_breakdown(df["high"], df["low"], df["close"], **p),
+    "inverse_head_and_shoulders_breakout": lambda df, **p: _chart.inverse_head_and_shoulders_breakout(df["high"], df["low"], df["close"], **p),
+    "ascending_triangle_breakout": lambda df, **p: _chart.ascending_triangle_breakout(df["high"], df["low"], df["close"], **p),
+    "descending_triangle_breakdown": lambda df, **p: _chart.descending_triangle_breakdown(df["high"], df["low"], df["close"], **p),
+    "symmetrical_triangle_breakout_bullish": lambda df, **p: _chart.symmetrical_triangle_breakout_bullish(df["high"], df["low"], df["close"], **p),
+    "symmetrical_triangle_breakout_bearish": lambda df, **p: _chart.symmetrical_triangle_breakout_bearish(df["high"], df["low"], df["close"], **p),
+    "rising_wedge_breakdown": lambda df, **p: _chart.rising_wedge_breakdown(df["high"], df["low"], df["close"], **p),
+    "falling_wedge_breakout": lambda df, **p: _chart.falling_wedge_breakout(df["high"], df["low"], df["close"], **p),
+    "bull_flag_breakout": lambda df, **p: _chart.bull_flag_breakout(df["high"], df["low"], df["close"], **p),
+    "bear_flag_breakdown": lambda df, **p: _chart.bear_flag_breakdown(df["high"], df["low"], df["close"], **p),
+    "bullish_pennant_breakout": lambda df, **p: _chart.bullish_pennant_breakout(df["high"], df["low"], df["close"], **p),
+    "bearish_pennant_breakdown": lambda df, **p: _chart.bearish_pennant_breakdown(df["high"], df["low"], df["close"], **p),
+    "in_range_box": lambda df, **p: _chart.in_range_box(df["high"], df["low"], df["close"], **p),
+    "range_box_breakout_bullish": lambda df, **p: _chart.range_box_breakout_bullish(df["high"], df["low"], df["close"], **p),
+    "range_box_breakdown_bearish": lambda df, **p: _chart.range_box_breakdown_bearish(df["high"], df["low"], df["close"], **p),
+})
+
+# 2026-07-08追加(3巡目): 定番オシレーター/トレンド系 + ボリューム系 +
+# ピボットバリエーション
+INDICATOR_REGISTRY.update({
+    "cci": lambda df, period=20, **p: _cci(df["high"], df["low"], df["close"], int(period)).to_numpy(dtype=float),
+    "williams_r": lambda df, period=14, **p: _williams_r(df["high"], df["low"], df["close"], int(period)).to_numpy(dtype=float),
+    "parabolic_sar_line": lambda df, af_start=0.02, af_step=0.02, af_max=0.2, **p: _parabolic_sar_line(
+        df, float(af_start), float(af_step), float(af_max)
+    ),
+    "parabolic_sar_direction": lambda df, af_start=0.02, af_step=0.02, af_max=0.2, **p: _parabolic_sar_direction(
+        df, float(af_start), float(af_step), float(af_max)
+    ),
+    "aroon_up": lambda df, period=14, **p: _aroon_up(df, int(period)),
+    "aroon_down": lambda df, period=14, **p: _aroon_down(df, int(period)),
+    "aroon_oscillator": lambda df, period=14, **p: _aroon_oscillator(df, int(period)),
+    "choppiness_index": lambda df, period=14, **p: _choppiness_index(
+        df["high"], df["low"], df["close"], int(period)
+    ).to_numpy(dtype=float),
+    "keltner_upper": lambda df, period=20, atr_period=10, multiplier=2.0, **p: _keltner_band(
+        df, "upper", int(period), int(atr_period), float(multiplier)
+    ),
+    "keltner_middle": lambda df, period=20, atr_period=10, multiplier=2.0, **p: _keltner_band(
+        df, "middle", int(period), int(atr_period), float(multiplier)
+    ),
+    "keltner_lower": lambda df, period=20, atr_period=10, multiplier=2.0, **p: _keltner_band(
+        df, "lower", int(period), int(atr_period), float(multiplier)
+    ),
+    "obv": lambda df, **p: on_balance_volume(df["close"], _require_volume(df)).to_numpy(dtype=float),
+    "mfi": lambda df, period=14, **p: money_flow_index(
+        df["high"], df["low"], df["close"], _require_volume(df), int(period)
+    ).to_numpy(dtype=float),
+    "cmf": lambda df, period=20, **p: chaikin_money_flow(
+        df["high"], df["low"], df["close"], _require_volume(df), int(period)
+    ).to_numpy(dtype=float),
+    "ad_line": lambda df, **p: accumulation_distribution(
+        df["high"], df["low"], df["close"], _require_volume(df)
+    ).to_numpy(dtype=float),
+    "woodie_pivot": lambda df, **p: _woodie_column(df, "pivot"),
+    "woodie_r1": lambda df, **p: _woodie_column(df, "r1"),
+    "woodie_s1": lambda df, **p: _woodie_column(df, "s1"),
+    "woodie_r2": lambda df, **p: _woodie_column(df, "r2"),
+    "woodie_s2": lambda df, **p: _woodie_column(df, "s2"),
+    "camarilla_r1": lambda df, **p: _camarilla_column(df, "r1"),
+    "camarilla_r2": lambda df, **p: _camarilla_column(df, "r2"),
+    "camarilla_r3": lambda df, **p: _camarilla_column(df, "r3"),
+    "camarilla_r4": lambda df, **p: _camarilla_column(df, "r4"),
+    "camarilla_s1": lambda df, **p: _camarilla_column(df, "s1"),
+    "camarilla_s2": lambda df, **p: _camarilla_column(df, "s2"),
+    "camarilla_s3": lambda df, **p: _camarilla_column(df, "s3"),
+    "camarilla_s4": lambda df, **p: _camarilla_column(df, "s4"),
+    "fib_pivot": lambda df, **p: _fib_pivot_column(df, "pivot"),
+    "fib_pivot_r1": lambda df, **p: _fib_pivot_column(df, "r1"),
+    "fib_pivot_r2": lambda df, **p: _fib_pivot_column(df, "r2"),
+    "fib_pivot_r3": lambda df, **p: _fib_pivot_column(df, "r3"),
+    "fib_pivot_s1": lambda df, **p: _fib_pivot_column(df, "s1"),
+    "fib_pivot_s2": lambda df, **p: _fib_pivot_column(df, "s2"),
+    "fib_pivot_s3": lambda df, **p: _fib_pivot_column(df, "s3"),
+    # TTM Squeeze + Ichimoku completion (engine/derived_indicators.py)
+    "ttm_squeeze": _derived.ttm_squeeze,
+    "ttm_squeeze_release": _derived.ttm_squeeze_release,
+    "ichimoku_price_vs_cloud": _derived.ichimoku_price_vs_cloud,
+    "ichimoku_kumo_twist_bullish": _derived.ichimoku_kumo_twist_bullish,
+    "ichimoku_kumo_twist_bearish": _derived.ichimoku_kumo_twist_bearish,
+    "ichimoku_chikou_signal": _derived.ichimoku_chikou_signal,
+    "linreg_slope_atr_ratio": _derived.linreg_slope_atr_ratio,
+    "linreg_angle_degrees": _derived.linreg_angle_degrees,
+    "linreg_value": _derived.linreg_value,
+    "linreg_upper": _derived.linreg_upper,
+    "linreg_lower": _derived.linreg_lower,
+    # Heikin-Ashi (engine/heikin_ashi.py)
+    "ha_bullish": _ha.ha_bullish,
+    "ha_bearish": _ha.ha_bearish,
+    "ha_strong_bullish": _ha.ha_strong_bullish,
+    "ha_strong_bearish": _ha.ha_strong_bearish,
+    # Harmonic patterns (engine/harmonic_patterns.py) - take (high, low)
+    # directly rather than the whole df, like engine/chart_patterns.py's
+    # functions do, so each needs a thin unpacking lambda.
+    "gartley_bullish": lambda df, **p: _harmonic.gartley_bullish(df["high"], df["low"], **p),
+    "gartley_bearish": lambda df, **p: _harmonic.gartley_bearish(df["high"], df["low"], **p),
+    "bat_bullish": lambda df, **p: _harmonic.bat_bullish(df["high"], df["low"], **p),
+    "bat_bearish": lambda df, **p: _harmonic.bat_bearish(df["high"], df["low"], **p),
+    "butterfly_bullish": lambda df, **p: _harmonic.butterfly_bullish(df["high"], df["low"], **p),
+    "butterfly_bearish": lambda df, **p: _harmonic.butterfly_bearish(df["high"], df["low"], **p),
+    "crab_bullish": lambda df, **p: _harmonic.crab_bullish(df["high"], df["low"], **p),
+    "crab_bearish": lambda df, **p: _harmonic.crab_bearish(df["high"], df["low"], **p),
+    "ab_cd_bullish": lambda df, **p: _harmonic.ab_cd_bullish(df["high"], df["low"], **p),
+    "ab_cd_bearish": lambda df, **p: _harmonic.ab_cd_bearish(df["high"], df["low"], **p),
+    "three_drives_bullish": lambda df, **p: _harmonic.three_drives_bullish(df["high"], df["low"], **p),
+    "three_drives_bearish": lambda df, **p: _harmonic.three_drives_bearish(df["high"], df["low"], **p),
+})
+
+# 2026-07-08追加(4巡目): トレンドライン/平行チャネル/フェイクブレイク
+# (engine/chart_patterns.py) + NR4/NR7/出来高クライマックス
+# (engine/derived_indicators.py)
+INDICATOR_REGISTRY.update({
+    "uptrend_line_break": lambda df, **p: _chart.uptrend_line_break(df["high"], df["low"], df["close"], **p),
+    "downtrend_line_break": lambda df, **p: _chart.downtrend_line_break(df["high"], df["low"], df["close"], **p),
+    "ascending_channel_break": lambda df, **p: _chart.ascending_channel_break(df["high"], df["low"], df["close"], **p),
+    "descending_channel_break": lambda df, **p: _chart.descending_channel_break(df["high"], df["low"], df["close"], **p),
+    "false_breakout_bullish_reversal": lambda df, **p: _chart.false_breakout_bullish_reversal(df["high"], df["low"], df["close"], **p),
+    "false_breakout_bearish_reversal": lambda df, **p: _chart.false_breakout_bearish_reversal(df["high"], df["low"], df["close"], **p),
+    "nr4": _derived.nr4,
+    "nr7": _derived.nr7,
+    "volume_climax_bullish": _derived.volume_climax_bullish,
+    "volume_climax_bearish": _derived.volume_climax_bearish,
+})
+
+# 2026-07-08追加(5巡目、HFM記事の未実装分): ソーサートップ/ボトム、上昇/下降
+# レクタングル、ブロードニングフォーメーション、ダイヤモンドフォーメーション、
+# カップウィズハンドル (engine/chart_patterns.py)
+INDICATOR_REGISTRY.update({
+    "saucer_top": lambda df, **p: _chart.saucer_top(df["high"], df["low"], df["close"], **p),
+    "saucer_bottom": lambda df, **p: _chart.saucer_bottom(df["high"], df["low"], df["close"], **p),
+    "ascending_rectangle_breakout": lambda df, **p: _chart.ascending_rectangle_breakout(df["high"], df["low"], df["close"], **p),
+    "descending_rectangle_breakdown": lambda df, **p: _chart.descending_rectangle_breakdown(df["high"], df["low"], df["close"], **p),
+    "broadening_formation_breakout_bullish": lambda df, **p: _chart.broadening_formation_breakout_bullish(df["high"], df["low"], df["close"], **p),
+    "broadening_formation_breakout_bearish": lambda df, **p: _chart.broadening_formation_breakout_bearish(df["high"], df["low"], df["close"], **p),
+    "diamond_formation_breakout_bullish": lambda df, **p: _chart.diamond_formation_breakout_bullish(df["high"], df["low"], df["close"], **p),
+    "diamond_formation_breakout_bearish": lambda df, **p: _chart.diamond_formation_breakout_bearish(df["high"], df["low"], df["close"], **p),
+    "cup_with_handle_breakout": lambda df, **p: _chart.cup_with_handle_breakout(df["high"], df["low"], df["close"], **p),
+})
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}
 
@@ -282,21 +854,56 @@ def _cache_key(indicator: str, params: dict[str, Any], timeframe: str | None = N
     return (indicator, tuple(sorted(params.items())), timeframe)
 
 
+# Caps how many distinct (indicator, params[, timeframe]) series arrays a
+# single cache dict holds before evicting the oldest - relevant now that
+# main.py's workers keep ONE cache dict alive across many/all tasks (see
+# evaluate_condition_tree's docstring), so without a cap it would grow for
+# the whole lifetime of a large batch. Simple FIFO (dict insertion order),
+# not true LRU - good enough since a long-running worker's distinct
+# (indicator, params) combinations cluster early rather than being
+# revisited in a hot-and-cold pattern that would make FIFO much worse than
+# LRU. 500 entries * ~4.6MB/array (a 578k-bar 15m dataset's float64 series)
+# is a generous ~2.3GB worst case per worker, rarely approached in practice
+# since auto-generated candidates reuse far fewer distinct combinations
+# than that.
+_MAX_CACHED_SERIES = 500
+
+
+def _is_protected_cache_key(key: Any) -> bool:
+    """Context keys (__symbol__/__base_timeframe__) and loaded MTF
+    dataframes (__mtf_df__ tuples - few in number, expensive to reload,
+    always worth keeping) are never eviction candidates - only the
+    per-series numpy arrays _resolve_series/_resolve_mtf_series add are."""
+    if isinstance(key, str) and key.startswith("__"):
+        return True
+    if isinstance(key, tuple) and key and isinstance(key[0], str) and key[0].startswith("__"):
+        return True
+    return False
+
+
+def _evict_oldest_series_if_full(cache: dict) -> None:
+    if len(cache) <= _MAX_CACHED_SERIES:
+        return
+    for key in cache:
+        if not _is_protected_cache_key(key):
+            del cache[key]
+            return
+
+
 def _resolve_mtf_series(
     df: pd.DataFrame, cache: dict, indicator: str, params: dict[str, Any], timeframe: str
 ) -> np.ndarray:
-    # NOTE: deliberately NOT cached beyond this one evaluate_condition_tree()
-    # call (unlike, say, a module-level cache keyed on symbol/timeframe
-    # alone). walk_forward.py calls run_backtest() repeatedly in the SAME
-    # process across different YEAR-SLICED windows of the same symbol/
-    # timeframe (see walk_forward.py's per-window test_result call) - a
-    # cache keyed only on (symbol, timeframe, indicator, params) would
-    # silently reuse one window's alignment for a different window's date
-    # range, corrupting walk-forward results with no visible error. Re-
-    # reading the MTF file/recomputing its indicator once per grid
-    # combination is measured overhead of ~0.05s/run - a correctness-over-
-    # speed tradeoff matching this project's own stated priority order
-    # (拡張性>保守性>速度>可読性).
+    # Callers that pass cache=None to evaluate_condition_tree() (the
+    # default - walk_forward.py, the manual builder's api_server.py path,
+    # etc) get a fresh cache per call as before, so nothing here is ever
+    # reused beyond one evaluate_condition_tree() call for them. Callers
+    # that deliberately keep ONE cache dict alive across many calls sharing
+    # the exact same df (main.py's ProcessPoolExecutor workers - see
+    # evaluate_condition_tree's docstring) DO get MTF series reused across
+    # calls now - safe there specifically because that df (and therefore
+    # its date range) never changes for that cache's whole lifetime, unlike
+    # walk_forward.py's per-window date-sliced dataframes, which is exactly
+    # why walk_forward.py must never opt into a shared cache.
     symbol = cache.get("__symbol__")
     if symbol is None:
         raise ValueError(
@@ -311,6 +918,7 @@ def _resolve_mtf_series(
 
     series_key = _cache_key(indicator, params, timeframe)
     if series_key not in cache:
+        _evict_oldest_series_if_full(cache)
         raw = INDICATOR_REGISTRY[indicator](tf_df, **params)
         cache[series_key] = _align_mtf_series(df["datetime"], tf_df["datetime"], raw)
 
@@ -332,6 +940,7 @@ def _resolve_series(
 
     key = _cache_key(indicator, params)
     if key not in cache:
+        _evict_oldest_series_if_full(cache)
         cache[key] = INDICATOR_REGISTRY[indicator](df, **params)
 
     return cache[key]
@@ -461,16 +1070,32 @@ def node_from_dict(data: dict) -> Union[Condition, ConditionGroup]:
     return Condition.from_dict(data)
 
 
-def evaluate_condition_tree(tree: dict, df: pd.DataFrame, symbol: str | None = None) -> np.ndarray:
+def evaluate_condition_tree(
+    tree: dict, df: pd.DataFrame, symbol: str | None = None, cache: dict | None = None
+) -> np.ndarray:
     """Entry point used by engine/backtest_engine.py: JSON dict in, boolean array out.
 
     `symbol` is only required if the tree contains a node with a `timeframe`
     different from the backtest's own base timeframe (multi-timeframe
     conditions) - otherwise unused, so every pre-existing caller that never
-    passes it keeps working unchanged."""
+    passes it keeps working unchanged.
+
+    `cache` is optional and defaults to a fresh dict per call (existing
+    behavior, unchanged for every caller that doesn't pass one - walk_forward.py,
+    the manual builder's api_server.py path, etc). Passing in a dict the
+    caller keeps ALIVE ACROSS MULTIPLE CALLS lets indicator arrays (ema,
+    rsi, ...) be reused instead of recomputed whenever different generated
+    trees happen to reference the same (indicator, params) pair - safe ONLY
+    when every one of those calls shares the exact same `df` (same symbol/
+    timeframe/date-range) for the cache's whole lifetime, which is exactly
+    main.py's ProcessPoolExecutor worker model (one fixed `_WORKER_DF` per
+    worker process, reused across every task that worker ever runs) but is
+    NOT true of e.g. walk_forward.py's direct run_backtest() calls across
+    different year-sliced windows in the same process - callers there must
+    keep passing cache=None (the default) rather than opting into this."""
     node = node_from_dict(tree)
-    cache: dict = {
-        "__symbol__": symbol,
-        "__base_timeframe__": _infer_timeframe_label(df["datetime"]),
-    }
+    if cache is None:
+        cache = {}
+    cache["__symbol__"] = symbol
+    cache["__base_timeframe__"] = _infer_timeframe_label(df["datetime"])
     return node.evaluate(df, cache)

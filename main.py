@@ -5,6 +5,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import numpy as np
 import pandas as pd
 
 from engine.backtest_engine import run_backtest, compute_is_intraday, calc_max_dd
@@ -17,10 +18,11 @@ from engine.pdf_report import export_pdf_report
 from engine.strategy_registry import save_strategy
 from engine.optimizer_search import GeneticSearch, run_bayesian_search, sample_random_combos
 from engine.strategy_config_loader import load_strategy_config
+from engine.structure_generator import StructureGeneticSearch, coarser_timeframes, generate_candidate_trees
 from engine.params import reconstruct_params_from_row
 
 
-AVAILABLE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+AVAILABLE_TIMEFRAMES = ["1m", "5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"]
 
 SUPPORTED_SYMBOLS = [
     "USDJPY",
@@ -30,14 +32,37 @@ SUPPORTED_SYMBOLS = [
     "AUDUSD",
     "EURUSD",
     "GBPUSD",
+    "XAUUSD",
+    "XAGUSD",
 ]
 
 OUTPUT_DIR = Path("output")
 
-MAX_WORKERS = 8
+# os.cpu_count() reports LOGICAL processors (16 here), not physical cores
+# (10 on this machine - 2-way hyperthreading/SMT). Measured directly rather
+# than assumed: for this numba-jitted, CPU-bound per-bar loop, matching
+# os.cpu_count() exactly (16 workers) measured SLOWER than the original
+# hardcoded 8 (174s vs 161s on the same 500-candidate benchmark), and even
+# matching the true physical core count (10) was still slower than 8
+# (172s) - two hyperthreads sharing one physical core's execution units
+# don't give a real 2x for tight compute-bound work, so oversubscribing
+# past the physical core count adds scheduling/cache overhead without a
+# matching throughput gain. `os.cpu_count() // 2` approximates the physical
+# core count under the common 2-way SMT assumption (portable across
+# machines, unlike hardcoding 8) without needing a new dependency (psutil)
+# just to read the true physical count.
+MAX_WORKERS = max((os.cpu_count() or 16) // 2, 1)
 
 _WORKER_DF = None
 _WORKER_IS_INTRADAY = True
+# One cache dict per worker process, alive for that worker's whole
+# lifetime (every task it ever runs shares the same _WORKER_DF - see
+# engine/conditions.py::evaluate_condition_tree's docstring for why this is
+# safe here specifically) - lets indicator arrays (ema, rsi, ...) be reused
+# across different generated condition_trees that happen to reference the
+# same (indicator, params) pair, instead of recomputing from scratch every
+# single task.
+_WORKER_INDICATOR_CACHE: dict = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,9 +97,55 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--optimizer",
-        choices=["grid", "random", "genetic", "bayesian"],
+        choices=["grid", "random", "genetic", "bayesian", "structure", "structure_genetic"],
         default="grid",
-        help="grid=全探索 / random=ランダムサンプリング / genetic=遺伝的アルゴリズム / bayesian=ベイズ最適化(optuna) (デフォルト: grid)",
+        help="grid=全探索 / random=ランダムサンプリング / genetic=遺伝的アルゴリズム / bayesian=ベイズ最適化(optuna) / "
+        "structure=条件ツリーの自動構造生成(ランダムスクリーニング) / "
+        "structure_genetic=条件ツリー構造自体を交叉・突然変異で進化させる (デフォルト: grid)",
+    )
+
+    parser.add_argument(
+        "--n-candidates",
+        type=int,
+        default=500,
+        help="--optimizer structure で生成する候補ストラテジー数 (デフォルト: 500)",
+    )
+
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=2,
+        help="--optimizer structure で生成する条件ツリーのAND/OR/NOTネスト最大深さ (デフォルト: 2)",
+    )
+
+    parser.add_argument(
+        "--max-leaves",
+        type=int,
+        default=4,
+        help="--optimizer structure で生成する条件ツリー1本あたりの条件数の目安上限 (デフォルト: 4)",
+    )
+
+    parser.add_argument(
+        "--min-trades",
+        type=int,
+        default=30,
+        help="--optimizer structure でランキング対象に残す最低トレード数。少なすぎるトレード数の候補は"
+        "勝率100%/PF999のような統計的に無意味な値でランキング上位を占めてしまうため除外する (デフォルト: 30)",
+    )
+
+    parser.add_argument(
+        "--mtf-probability",
+        type=float,
+        default=0.0,
+        help="--optimizer structure/structure_genetic で、生成する条件の指標(または比較先)が"
+        "バックテスト自身より粗い時間足を参照する確率 (デフォルト: 0.0=マルチタイムフレーム条件を生成しない)",
+    )
+
+    parser.add_argument(
+        "--mtf-timeframes",
+        default=None,
+        help="--mtf-probability > 0 のときに参照する時間足をカンマ区切りで指定 "
+        "(例: 1h,4h,1d)。未指定なら--timeframeより粗い時間足すべてを自動で対象にする",
     )
 
     parser.add_argument(
@@ -92,10 +163,21 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--mutation-rate",
+        type=float,
+        default=0.2,
+        help="--optimizer genetic/structure_genetic の突然変異率 (デフォルト: 0.2)。"
+        "structure_geneticでは葉の再生成/AND⇔OR反転が各ノードごとにこの確率で発生し、"
+        "方向(Long/Short)反転はこの1/4の確率",
+    )
+
+    parser.add_argument(
         "--generations",
         type=int,
-        default=10,
-        help="--optimizer genetic の世代数 (デフォルト: 10)",
+        default=30,
+        help="--optimizer genetic/structure_genetic の世代数 (デフォルト: 30)。"
+        "同じ総評価数(個体数×世代数)なら個体数を増やすより世代数を増やす方が"
+        "良い結果に繋がりやすいという実験結果に基づく既定値(project_auto_exploration_core_goal.md参照)",
     )
 
     parser.add_argument(
@@ -121,9 +203,19 @@ def resolve_output_dir(symbol: str, timeframe: str) -> Path:
 
 JPY_PIP_SIZE = 0.01
 NON_JPY_PIP_SIZE = 0.0001
+# Metals quote to a different number of decimals than FX pairs (XAUUSD ~2000.00,
+# XAGUSD ~25.000), so neither the JPY nor the non-JPY FX convention applies -
+# each gets its own conventional pip size instead of falling through to
+# NON_JPY_PIP_SIZE (which would be 100x too fine for both).
+METAL_PIP_SIZE = {
+    "XAUUSD": 0.01,
+    "XAGUSD": 0.001,
+}
 
 
 def pip_size_for_symbol(symbol: str) -> float:
+    if symbol in METAL_PIP_SIZE:
+        return METAL_PIP_SIZE[symbol]
     return JPY_PIP_SIZE if symbol.endswith("JPY") else NON_JPY_PIP_SIZE
 
 
@@ -255,6 +347,17 @@ def init_worker(df: pd.DataFrame) -> None:
     global _WORKER_DF, _WORKER_IS_INTRADAY
     _WORKER_DF = df
     _WORKER_IS_INTRADAY = compute_is_intraday(df["datetime"])
+    # In real ProcessPoolExecutor usage this only ever runs once per worker
+    # process (the initializer, called at worker startup) so this reset is
+    # a no-op there - but init_worker can legitimately be called more than
+    # once with a DIFFERENT df in the same process outside that context
+    # (e.g. tests/test_regression.py calls it directly, once per timeframe
+    # case, in a single process) - without clearing here, a stale cached
+    # series computed against the OLD df could get silently reused against
+    # the new one if both dataframes happened to produce the same
+    # (indicator, params) cache key, exactly the danger
+    # evaluate_condition_tree's docstring warns callers about.
+    _WORKER_INDICATOR_CACHE.clear()
 
 
 def run_one_backtest(task: tuple[int, dict]) -> dict:
@@ -268,12 +371,15 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
     result, trade_log = run_backtest(
         df=_WORKER_DF,
         params=params,
+        indicator_cache=_WORKER_INDICATOR_CACHE,
         return_trades=True,
         is_intraday=_WORKER_IS_INTRADAY,
     )
 
-    stability = calculate_stability_metrics(trade_log)
-    advanced = calculate_advanced_metrics(trade_log)
+    yearly_df = build_yearly_analysis(trade_log)
+    monthly_df = build_monthly_analysis(trade_log)
+    stability = calculate_stability_metrics(trade_log, yearly_df, monthly_df)
+    advanced = calculate_advanced_metrics(trade_log, monthly_df)
 
     result["param_id"] = param_id
     result["yearly_stability_score"] = stability["yearly_stability_score"]
@@ -286,6 +392,51 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
     result["calmar_ratio"] = advanced["calmar_ratio"]
 
     return result
+
+
+def export_single_strategy_analysis(df: pd.DataFrame, params: dict, output_dir: Path) -> dict:
+    """Runs one backtest for `params` and writes every per-strategy analysis
+    artifact (trade_log/equity_curve/yearly/monthly/stability/monte_carlo)
+    to output_dir - exactly what main()'s own end-of-run "best row" export
+    already did inline. Factored out so rerun_ranking_row.py (re-running an
+    arbitrary OTHER ranking row the user picked in the dashboard, not just
+    the top-ranked one) shares this instead of risking a second copy drifting
+    from main()'s own version.
+
+    export_yearly_analysis/export_monthly_analysis/export_stability_analysis
+    (unlike export_equity_curve/export_monte_carlo) write to the module-level
+    OUTPUT_DIR global rather than taking an output_dir parameter - a
+    pre-existing inconsistency in this file, not introduced here. Setting the
+    global explicitly makes this function actually honor its own output_dir
+    argument regardless of what the caller left OUTPUT_DIR set to, rather
+    than silently depending on main() having already set it correctly."""
+    global OUTPUT_DIR
+    OUTPUT_DIR = output_dir
+
+    _, trade_log = run_backtest(df=df, params=params, return_trades=True)
+
+    trade_log_path = output_dir / "trade_log.csv"
+    trade_log.to_csv(trade_log_path, index=False, encoding="utf-8-sig")
+
+    yearly_df = export_yearly_analysis(trade_log)
+    monthly_df = export_monthly_analysis(trade_log)
+    stability_df = export_stability_analysis(yearly_df, monthly_df)
+
+    equity_df = export_equity_curve(trade_log=trade_log, output_dir=output_dir)
+
+    monte_carlo_results, monte_carlo_summary = export_monte_carlo(
+        trade_log=trade_log, output_dir=output_dir
+    )
+
+    return {
+        "trade_log": trade_log,
+        "yearly_df": yearly_df,
+        "monthly_df": monthly_df,
+        "stability_df": stability_df,
+        "equity_df": equity_df,
+        "monte_carlo_results": monte_carlo_results,
+        "monte_carlo_summary": monte_carlo_summary,
+    }
 
 
 def add_rank_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -419,89 +570,94 @@ def calc_stability_score(profits: pd.Series) -> float:
     return round(max(0.0, min(score, 100.0)), 2)
 
 
-def build_yearly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
+def _build_period_analysis(trade_log: pd.DataFrame, period_column: str, period_key: pd.Series) -> pd.DataFrame:
+    """Shared vectorized implementation for build_yearly_analysis/
+    build_monthly_analysis - groups by period_key and aggregates via
+    groupby().agg() (compiled/vectorized pandas internals) instead of a
+    Python for-loop over the groupby object. Iterating a groupby object
+    materializes a new sub-DataFrame slice per group, which profiled at
+    ~0.6s for a ~14,000-trade/~290-group backtest despite each group's own
+    computation being trivial - purely per-iteration Python/pandas
+    overhead, and this function is called on every single mass-search task
+    (via calculate_stability_metrics/calculate_advanced_metrics), so it was
+    the single largest remaining cost after the market-order loop itself
+    was moved to numba (engine/numba_fast_backtest.py)."""
     if trade_log.empty:
         return pd.DataFrame()
 
     df = trade_log.copy()
-    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
-    df["year"] = df["entry_time"].dt.year
+    df[period_column] = period_key
+    df["_is_win"] = df["profit"] > 0
+    df["_is_loss"] = df["profit"] < 0
+    df["_gross_profit_part"] = df["profit"].where(df["_is_win"], 0.0)
+    df["_gross_loss_part"] = df["profit"].where(df["_is_loss"], 0.0)
 
-    rows = []
+    grouped = df.groupby(period_column).agg(
+        trades=("profit", "size"),
+        wins=("_is_win", "sum"),
+        losses=("_is_loss", "sum"),
+        net_profit=("profit", "sum"),
+        gross_profit=("_gross_profit_part", "sum"),
+        gross_loss=("_gross_loss_part", "sum"),
+    ).reset_index()
 
-    for year, group in df.groupby("year"):
-        profits = group["profit"]
+    grouped["wins"] = grouped["wins"].astype(int)
+    grouped["losses"] = grouped["losses"].astype(int)
+    grouped["win_rate"] = np.where(
+        grouped["trades"] > 0, grouped["wins"] / grouped["trades"] * 100, 0.0
+    )
+    grouped["profit_factor"] = np.where(
+        grouped["gross_loss"] < 0,
+        grouped["gross_profit"] / grouped["gross_loss"].abs(),
+        np.where(grouped["gross_profit"] > 0, 999.0, 0.0),
+    )
 
-        trades = len(group)
-        wins = int((profits > 0).sum())
-        losses = int((profits < 0).sum())
-        win_rate = wins / trades * 100 if trades else 0.0
+    grouped["win_rate"] = grouped["win_rate"].round(2)
+    grouped["net_profit"] = grouped["net_profit"].round(5)
+    grouped["gross_profit"] = grouped["gross_profit"].round(5)
+    grouped["gross_loss"] = grouped["gross_loss"].round(5)
+    grouped["profit_factor"] = grouped["profit_factor"].round(3)
 
-        net_profit = profits.sum()
-        gross_profit = profits[profits > 0].sum()
-        gross_loss = profits[profits < 0].sum()
-        profit_factor = calc_profit_factor(profits)
+    return grouped[
+        [period_column, "trades", "wins", "losses", "win_rate", "net_profit", "gross_profit", "gross_loss", "profit_factor"]
+    ].sort_values(period_column).reset_index(drop=True)
 
-        rows.append(
-            {
-                "year": int(year),
-                "trades": trades,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": round(win_rate, 2),
-                "net_profit": round(net_profit, 5),
-                "gross_profit": round(gross_profit, 5),
-                "gross_loss": round(gross_loss, 5),
-                "profit_factor": round(profit_factor, 3),
-            }
-        )
 
-    return pd.DataFrame(rows).sort_values("year")
+def build_yearly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
+    if trade_log.empty:
+        return pd.DataFrame()
+
+    entry_time = pd.to_datetime(trade_log["entry_time"], errors="coerce")
+    result = _build_period_analysis(trade_log, "year", entry_time.dt.year)
+    result["year"] = result["year"].astype(int)
+    return result
 
 
 def build_monthly_analysis(trade_log: pd.DataFrame) -> pd.DataFrame:
     if trade_log.empty:
         return pd.DataFrame()
 
-    df = trade_log.copy()
-    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
-    df["year_month"] = df["entry_time"].dt.to_period("M").astype(str)
-
-    rows = []
-
-    for year_month, group in df.groupby("year_month"):
-        profits = group["profit"]
-
-        trades = len(group)
-        wins = int((profits > 0).sum())
-        losses = int((profits < 0).sum())
-        win_rate = wins / trades * 100 if trades else 0.0
-
-        net_profit = profits.sum()
-        gross_profit = profits[profits > 0].sum()
-        gross_loss = profits[profits < 0].sum()
-        profit_factor = calc_profit_factor(profits)
-
-        rows.append(
-            {
-                "year_month": year_month,
-                "trades": trades,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": round(win_rate, 2),
-                "net_profit": round(net_profit, 5),
-                "gross_profit": round(gross_profit, 5),
-                "gross_loss": round(gross_loss, 5),
-                "profit_factor": round(profit_factor, 3),
-            }
-        )
-
-    return pd.DataFrame(rows).sort_values("year_month")
+    entry_time = pd.to_datetime(trade_log["entry_time"], errors="coerce")
+    return _build_period_analysis(trade_log, "year_month", entry_time.dt.to_period("M").astype(str))
 
 
-def calculate_stability_metrics(trade_log: pd.DataFrame) -> dict:
-    yearly_df = build_yearly_analysis(trade_log)
-    monthly_df = build_monthly_analysis(trade_log)
+def calculate_stability_metrics(
+    trade_log: pd.DataFrame,
+    yearly_df: pd.DataFrame | None = None,
+    monthly_df: pd.DataFrame | None = None,
+) -> dict:
+    # yearly_df/monthly_df accepted pre-computed (falling back to computing
+    # them here if not given, so existing callers passing just trade_log
+    # keep working unchanged) - run_one_backtest computes both once and
+    # shares them with calculate_advanced_metrics below, since this
+    # function and that one previously each computed build_monthly_analysis
+    # independently for every single mass-search task (profiled: ~0.6s per
+    # call before build_yearly_analysis/build_monthly_analysis were
+    # vectorized, doubled by being computed twice).
+    if yearly_df is None:
+        yearly_df = build_yearly_analysis(trade_log)
+    if monthly_df is None:
+        monthly_df = build_monthly_analysis(trade_log)
 
     if yearly_df.empty or monthly_df.empty:
         return {
@@ -539,7 +695,7 @@ def calculate_stability_metrics(trade_log: pd.DataFrame) -> dict:
     }
 
 
-def calculate_advanced_metrics(trade_log: pd.DataFrame) -> dict:
+def calculate_advanced_metrics(trade_log: pd.DataFrame, monthly_df: pd.DataFrame | None = None) -> dict:
     if trade_log.empty:
         return {
             "sharpe_ratio": 0.0,
@@ -548,7 +704,8 @@ def calculate_advanced_metrics(trade_log: pd.DataFrame) -> dict:
             "calmar_ratio": 0.0,
         }
 
-    monthly_df = build_monthly_analysis(trade_log)
+    if monthly_df is None:
+        monthly_df = build_monthly_analysis(trade_log)
     monthly_returns = monthly_df["net_profit"] if not monthly_df.empty else pd.Series(dtype=float)
 
     entry_times = pd.to_datetime(trade_log["entry_time"], errors="coerce")
@@ -707,7 +864,46 @@ def main() -> None:
     print(f"データ数: {len(df):,}")
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
 
-    if args.strategy_config:
+    # Shared by both structure/structure_genetic modes: resolve which
+    # timeframes MTF-generated conditions may reference. Explicit
+    # --mtf-timeframes wins; otherwise, if MTF generation is enabled at all
+    # (--mtf-probability > 0), default to every timeframe coarser than this
+    # run's own --timeframe (the only sane MTF direction - see
+    # coarser_timeframes()'s docstring).
+    if args.mtf_timeframes:
+        mtf_timeframes = [tf.strip() for tf in args.mtf_timeframes.split(",") if tf.strip()]
+    elif args.mtf_probability > 0:
+        mtf_timeframes = coarser_timeframes(args.timeframe)
+    else:
+        mtf_timeframes = None
+
+    if args.optimizer == "structure":
+        # Phase 1 of the auto-exploration engine (see
+        # project_auto_exploration_core_goal.md): base_space supplies every
+        # non-tree field (rr/session/exit rules/etc, all single-value in
+        # dev mode) exactly as build_parameter_space() already does for any
+        # other run; condition_tree and direction are then overridden with
+        # the generated candidates, and build_grid_from_space's existing
+        # itertools.product cross-multiplies each generated structure
+        # against both directions - no change needed to the grid/backtest/
+        # ranking machinery below.
+        param_space = build_parameter_space(args.mode, args.symbol)
+        param_space["condition_tree"] = generate_candidate_trees(
+            n=args.n_candidates,
+            max_depth=args.max_depth,
+            max_leaves=args.max_leaves,
+            mtf_timeframes=mtf_timeframes,
+            mtf_probability=args.mtf_probability,
+        )
+        param_space["direction"] = ["long", "short"]
+        print(f"構造生成candidate数: {len(param_space['condition_tree'])} (要求: {args.n_candidates})")
+    elif args.optimizer == "structure_genetic":
+        # base_space's non-tree fields (rr/session/exit rules/etc) stay
+        # fixed defaults exactly like --optimizer structure - only
+        # condition_tree/direction evolve here, driven per-generation below
+        # (StructureGeneticSearch), not by build_grid_from_space.
+        param_space = build_parameter_space(args.mode, args.symbol)
+    elif args.strategy_config:
         param_space = load_strategy_config(Path(args.strategy_config))
         print(f"ストラテジー設定ファイル: {args.strategy_config}")
     else:
@@ -735,7 +931,7 @@ def main() -> None:
             progress_callback=bayesian_progress,
         )
     else:
-        if args.optimizer == "grid":
+        if args.optimizer in ("grid", "structure"):
             parameter_list = build_grid_from_space(param_space)
             total_tasks = len(parameter_list)
         elif args.optimizer == "random":
@@ -748,7 +944,7 @@ def main() -> None:
         workers = min(MAX_WORKERS, os.cpu_count() or 1, total_tasks)
 
         print(f"最適化方式: {args.optimizer}")
-        if args.optimizer == "genetic":
+        if args.optimizer in ("genetic", "structure_genetic"):
             print(f"検証パターン数: {total_tasks} x {args.generations}世代")
         else:
             print(f"検証パターン数: {total_tasks}")
@@ -776,10 +972,77 @@ def main() -> None:
             initializer=init_worker,
             initargs=(df,),
         ) as executor:
-            if args.optimizer in ("grid", "random"):
+            if args.optimizer in ("grid", "random", "structure"):
                 results = run_batch(executor, parameter_list, id_offset=1)
+            elif args.optimizer == "structure_genetic":
+                # base_defaults supplies every non-tree field (rr/session/
+                # exit rules/etc) as plain scalars, extracted once from the
+                # dev/full-mode single-value lists - each generation's
+                # individuals ({"condition_tree","direction"} only) get
+                # merged with this into a full run_one_backtest()-ready
+                # params dict.
+                base_defaults = {key: values[0] for key, values in param_space.items()}
+                search = StructureGeneticSearch(
+                    population_size=args.population,
+                    mutation_rate=args.mutation_rate,
+                    max_depth=args.max_depth,
+                    max_leaves=args.max_leaves,
+                    mtf_timeframes=mtf_timeframes,
+                    mtf_probability=args.mtf_probability,
+                )
+                population = search.initial_population()
+                next_id = 1
+
+                for generation in range(1, args.generations + 1):
+                    print(f"[構造遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
+                    task_params = [
+                        {**base_defaults, "condition_tree": ind["condition_tree"], "direction": ind["direction"]}
+                        for ind in population
+                    ]
+                    generation_results = run_batch(executor, task_params, id_offset=next_id)
+                    next_id += len(population)
+                    results.extend(generation_results)
+
+                    # Fitness must penalize low trade counts BEFORE selection,
+                    # not just at the final ranking step (see
+                    # StructureGeneticSearch's docstring) - otherwise the GA's
+                    # selection pressure converges the whole population onto
+                    # the same 1-3-trade profit_factor=999 exploit that MVP1's
+                    # ranking-only --min-trades filter had to clean up after
+                    # the fact.
+                    #
+                    # Rebuilt from each result's OWN echoed-back params
+                    # (result = {**p, ...} in backtest_engine.py) rather than
+                    # zip(generation_results, population) - run_batch collects
+                    # futures via as_completed(), which yields results in
+                    # COMPLETION order, not submission order, so pairing by
+                    # position silently mismatched each fitness score with the
+                    # wrong individual (confirmed: this broke elitism in a
+                    # real run - best fitness was NOT monotonic across
+                    # generations despite next_population()'s elite carryover
+                    # being correct in isolation, see
+                    # project_auto_exploration_core_goal.md). This mirrors the
+                    # scalar `genetic` branch below, which was never affected
+                    # since it already rebuilds each individual from `result`
+                    # itself instead of a separately-tracked population list.
+                    scored_population = [
+                        (
+                            result["profit_factor"] if result["trades"] >= args.min_trades else 0.0,
+                            {"condition_tree": result["condition_tree"], "direction": result["direction"]},
+                        )
+                        for result in generation_results
+                    ]
+                    fitness_values = [fitness for fitness, _ in scored_population]
+                    print(
+                        f"  世代{generation} 適応度: best={max(fitness_values):.3f} "
+                        f"avg={sum(fitness_values) / len(fitness_values):.3f} "
+                        f"(0.0={sum(1 for f in fitness_values if f == 0.0)}件/{len(fitness_values)}件)"
+                    )
+                    population = search.next_population(scored_population)
             else:
-                search = GeneticSearch(param_space, population_size=args.population)
+                search = GeneticSearch(
+                    param_space, population_size=args.population, mutation_rate=args.mutation_rate
+                )
                 population = search.initial_population()
                 next_id = 1
 
@@ -797,6 +1060,28 @@ def main() -> None:
 
     result_df = pd.DataFrame(results)
 
+    if args.optimizer in ("structure", "structure_genetic"):
+        # Auto-generated candidates commonly include near-degenerate
+        # low-signal structures (rare AND chains, boolean-only conditions
+        # that rarely align) that trade only a handful of times - a 1-3
+        # trade all-winners candidate hits profit_factor's zero-loss cap
+        # (999) and overall_stability_score's cap (100), so it dominates
+        # export_rankings()'s sort ahead of genuinely tested candidates
+        # with hundreds/thousands of trades. This never surfaced before
+        # structure search existed: a human-built or hand-optimized
+        # strategy is never submitted for ranking with only 1-3 trades.
+        before_count = len(result_df)
+        result_df = result_df[result_df["trades"] >= args.min_trades].reset_index(drop=True)
+        print(
+            f"最低トレード数フィルター({args.min_trades}件以上): "
+            f"{len(result_df)}/{before_count} 件が対象"
+        )
+        if result_df.empty:
+            raise ValueError(
+                f"--min-trades {args.min_trades} 件以上のトレードがある候補がありませんでした。"
+                "--n-candidatesを増やすか--min-tradesを下げて再実行してください。"
+            )
+
     ranking_paths = export_rankings(result_df)
 
     ranking_total = pd.read_csv(ranking_paths["total"])
@@ -804,28 +1089,16 @@ def main() -> None:
     best_row = ranking_total.iloc[0].to_dict()
     best_params = reconstruct_params_from_row(best_row)
 
-    _, best_trade_log = run_backtest(
-        df=df,
-        params=best_params,
-        return_trades=True,
-    )
+    analysis = export_single_strategy_analysis(df, best_params, OUTPUT_DIR)
+    best_trade_log = analysis["trade_log"]
+    yearly_df = analysis["yearly_df"]
+    monthly_df = analysis["monthly_df"]
+    stability_df = analysis["stability_df"]
+    equity_df = analysis["equity_df"]
+    monte_carlo_results = analysis["monte_carlo_results"]
+    monte_carlo_summary = analysis["monte_carlo_summary"]
 
     trade_log_path = OUTPUT_DIR / "trade_log.csv"
-    best_trade_log.to_csv(trade_log_path, index=False, encoding="utf-8-sig")
-
-    yearly_df = export_yearly_analysis(best_trade_log)
-    monthly_df = export_monthly_analysis(best_trade_log)
-    stability_df = export_stability_analysis(yearly_df, monthly_df)
-
-    equity_df = export_equity_curve(
-        trade_log=best_trade_log,
-        output_dir=OUTPUT_DIR,
-    )
-
-    monte_carlo_results, monte_carlo_summary = export_monte_carlo(
-        trade_log=best_trade_log,
-        output_dir=OUTPUT_DIR,
-    )
 
     report_path = export_html_report(
         output_dir=OUTPUT_DIR,

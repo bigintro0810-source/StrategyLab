@@ -26,7 +26,12 @@ TEST_YEARS = 1
 START_YEAR = 2004
 END_YEAR = 2026
 TOP_N = 3
-MAX_WORKERS = 8
+# See main.py's identical MAX_WORKERS for why this is //2, not just
+# os.cpu_count() - measured directly (not assumed) that matching this
+# machine's logical processor count exactly made a numba-jitted benchmark
+# slower, not faster, since 2-way hyperthreading doesn't give a real 2x for
+# tight compute-bound work.
+MAX_WORKERS = max((os.cpu_count() or 16) // 2, 1)
 
 _WORKER_DF = None
 _WORKER_IS_INTRADAY = True

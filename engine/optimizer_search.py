@@ -167,13 +167,21 @@ def run_bayesian_search(
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+    # Safe to share ONE cache across every trial here for the same reason
+    # main.py's ProcessPoolExecutor workers do (see
+    # evaluate_condition_tree's docstring): this whole function runs
+    # sequentially in a single process against one fixed `df` for its
+    # entire n_trials loop, so indicator arrays never go stale between
+    # trials.
+    indicator_cache: dict = {}
+
     def objective(trial: "optuna.Trial") -> float:
         params = {
             key: trial.suggest_categorical(key, values) for key, values in param_space.items()
         }
 
         result, trade_log = run_backtest(
-            df=df, params=params, return_trades=True, is_intraday=is_intraday
+            df=df, params=params, return_trades=True, is_intraday=is_intraday, indicator_cache=indicator_cache
         )
         stability = stability_fn(trade_log)
         result["yearly_stability_score"] = stability["yearly_stability_score"]

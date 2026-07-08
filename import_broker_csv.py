@@ -39,10 +39,14 @@ TARGET_TZ = "Asia/Tokyo"
 TIMEFRAME_LABELS = {
     "1m": "1 Min",
     "5m": "5 Mins",
+    "10m": "10 Mins",
     "15m": "15 Mins",
+    "30m": "30 Mins",
     "1h": "Hourly",
     "4h": "4 Hours",
     "1d": "Daily",
+    "1w": "Weekly",
+    "1mo": "Monthly",
 }
 
 

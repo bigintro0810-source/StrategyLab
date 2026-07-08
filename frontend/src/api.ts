@@ -37,6 +37,11 @@ export async function fetchBacktestResults(jobId: string): Promise<BacktestResul
   return res.data
 }
 
+export async function rerunRankingRow(jobId: string, rank: number): Promise<BacktestJob> {
+  const res = await client.post<BacktestJob>(`/backtests/${jobId}/rows/${rank}`)
+  return res.data
+}
+
 export async function fetchStrategies(): Promise<StrategyListEntry[]> {
   const res = await client.get<StrategyListEntry[]>('/strategies')
   return res.data

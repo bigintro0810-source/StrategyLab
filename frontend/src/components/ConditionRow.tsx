@@ -1,4 +1,4 @@
-import type { ConditionNode, IndicatorInfo, Operator } from '../types'
+import type { ConditionNode, ConditionParams, IndicatorInfo, IndicatorParamSpec, Operator } from '../types'
 
 const OPERATORS: { id: Operator; label: string }[] = [
   { id: '>', label: 'より上 (>)' },
@@ -14,7 +14,7 @@ const OPERATORS: { id: Operator; label: string }[] = [
 // for this indicator (e.g. a 15m strategy filtering by a 1h/4h/daily EMA).
 // The empty option means "no override" (undefined - the backtest's own base
 // timeframe, today's existing behavior).
-const TIMEFRAME_OPTIONS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const TIMEFRAME_OPTIONS = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
 
 interface Props {
   node: ConditionNode
@@ -25,6 +25,67 @@ interface Props {
 
 function indicatorInfo(indicators: IndicatorInfo[], id: string): IndicatorInfo | undefined {
   return indicators.find((i) => i.id === id)
+}
+
+export function defaultParamsFor(info: IndicatorInfo | undefined): ConditionParams {
+  if (!info) return {}
+  const params: ConditionParams = {}
+  for (const spec of info.params) {
+    params[spec.name] = spec.default
+  }
+  return params
+}
+
+// One input per declared param (int/float -> number input, choice -> select
+// of the conventional values only, e.g. Fibonacci's ratio) - previously
+// this only ever rendered a single hardcoded "length" field, so indicators
+// with more than one real parameter (bollinger's num_std, macd's
+// fast/slow/signal, stochastic's 3 periods, ichimoku's 3 periods, fib's
+// ratio) silently kept their Python-side default for every param past the
+// first.
+function ParamInputs({
+  info,
+  params,
+  onChange,
+}: {
+  info: IndicatorInfo | undefined
+  params: ConditionParams
+  onChange: (next: ConditionParams) => void
+}) {
+  if (!info || info.params.length === 0) return null
+
+  return (
+    <>
+      {info.params.map((spec: IndicatorParamSpec) =>
+        spec.type === 'choice' ? (
+          <select
+            key={spec.name}
+            title={spec.label}
+            className="glass-input w-20 rounded-lg px-2 py-1 text-xs"
+            value={params[spec.name] ?? spec.default}
+            onChange={(e) => onChange({ ...params, [spec.name]: Number(e.target.value) })}
+          >
+            {(spec.choices ?? []).map((choice) => (
+              <option key={choice} value={choice}>
+                {spec.label}:{choice}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            key={spec.name}
+            type="number"
+            step={spec.type === 'float' ? '0.1' : '1'}
+            title={spec.label}
+            placeholder={spec.label}
+            className="w-16 glass-input rounded-lg px-2 py-1"
+            value={params[spec.name] ?? spec.default}
+            onChange={(e) => onChange({ ...params, [spec.name]: Number(e.target.value) })}
+          />
+        )
+      )}
+    </>
+  )
 }
 
 export default function ConditionRow({ node, indicators, onChange, onRemove }: Props) {
@@ -42,7 +103,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           onChange({
             ...node,
             indicator: e.target.value,
-            params: nextInfo?.needs_period ? { length: node.params.length ?? 14 } : {},
+            params: defaultParamsFor(nextInfo),
           })
         }}
       >
@@ -53,14 +114,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
         ))}
       </select>
 
-      {info?.needs_period && (
-        <input
-          type="number"
-          className="w-16 glass-input rounded-lg px-2 py-1"
-          value={node.params.length ?? 14}
-          onChange={(e) => onChange({ ...node, params: { length: Number(e.target.value) } })}
-        />
-      )}
+      <ParamInputs info={info} params={node.params} onChange={(next) => onChange({ ...node, params: next })} />
 
       <select
         className="glass-input rounded-lg px-1 py-1 text-xs"
@@ -99,7 +153,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
             onChange({
               ...node,
               value: first?.id ?? 'close',
-              value_params: first?.needs_period ? { length: 14 } : {},
+              value_params: defaultParamsFor(first),
             })
           }
         }}
@@ -125,7 +179,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
               onChange({
                 ...node,
                 value: e.target.value,
-                value_params: nextInfo?.needs_period ? { length: 14 } : {},
+                value_params: defaultParamsFor(nextInfo),
               })
             }}
           >
@@ -135,14 +189,11 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
               </option>
             ))}
           </select>
-          {valueIndicatorInfo?.needs_period && (
-            <input
-              type="number"
-              className="w-16 glass-input rounded-lg px-2 py-1"
-              value={node.value_params.length ?? 14}
-              onChange={(e) => onChange({ ...node, value_params: { length: Number(e.target.value) } })}
-            />
-          )}
+          <ParamInputs
+            info={valueIndicatorInfo}
+            params={node.value_params}
+            onChange={(next) => onChange({ ...node, value_params: next })}
+          />
           <select
             className="glass-input rounded-lg px-1 py-1 text-xs"
             title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"

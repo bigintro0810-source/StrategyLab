@@ -1,7 +1,10 @@
 export type Operator = '>' | '<' | '>=' | '<=' | '==' | 'crosses_above' | 'crosses_below'
 
+// Indicator params vary per indicator (ema/rsi/etc use "length", bollinger
+// uses "period"+"num_std", macd uses "fast"+"slow"+"signal", etc - see
+// IndicatorInfo.params for which keys a given indicator actually reads).
 export interface ConditionParams {
-  length?: number
+  [key: string]: number
 }
 
 // Mirrors engine/conditions.py::Condition.to_dict()
@@ -31,10 +34,21 @@ export function isGroup(node: TreeNode): node is GroupNode {
   return 'op' in node
 }
 
+// type="choice" means only the listed `choices` are meaningful (e.g.
+// Fibonacci's ratio) - the UI renders a <select> instead of a free-entry
+// number input for those.
+export interface IndicatorParamSpec {
+  name: string
+  label: string
+  default: number
+  type: 'int' | 'float' | 'choice'
+  choices?: number[]
+}
+
 export interface IndicatorInfo {
   id: string
   label: string
-  needs_period: boolean
+  params: IndicatorParamSpec[]
 }
 
 export type Direction = 'short' | 'long'
@@ -98,9 +112,21 @@ export interface PartialTpLevel {
   fraction: number
 }
 
+// Which number within a Condition node a node-level optimize range targets:
+// the comparison literal itself ('value'), one of the LEFT indicator's own
+// params (e.g. ema's "length"), or - only when the comparison side is also
+// an indicator - one of ITS params (e.g. "close > ema" where ema's own
+// length is the thing being swept, not the comparison literal since there
+// isn't one).
+export type OptimizeField =
+  | { kind: 'value' }
+  | { kind: 'params'; key: string }
+  | { kind: 'value_params'; key: string }
+
 export interface ConditionOptimizeRange {
   enabled: boolean
   path: number[] | null
+  field: OptimizeField | null
   min: number
   max: number
   step: number

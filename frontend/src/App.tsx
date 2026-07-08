@@ -10,6 +10,7 @@ import {
   fetchPriceData,
   fetchStrategies,
   fetchStrategyDetail,
+  rerunRankingRow,
 } from './api'
 import type {
   BacktestResults,
@@ -17,10 +18,12 @@ import type {
   Direction,
   GroupNode,
   OptimizableParam,
+  OptimizeField,
   ParamRangeConfig,
   PartialTpLevel,
+  RankingRow,
 } from './types'
-import { buildConditionTreeVariants, collectOptimizableConditions, pathIsValid } from './conditionTreeUtils'
+import { buildConditionTreeVariants, collectOptimizableConditions, optionIsValid } from './conditionTreeUtils'
 import { buildRangeValues } from './rangeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
 import ChartPanel from './components/ChartPanel'
@@ -154,8 +157,8 @@ const NAV_TARGETS: Record<string, string[] | undefined> = {
   ランキング: ['ranking'],
 }
 
-const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD']
-const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD', 'XAUUSD', 'XAGUSD']
+const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
 
 function defaultTree(): GroupNode {
   return {
@@ -272,6 +275,15 @@ export default function App() {
   const [mode, setMode] = useState('dev')
   const [jobId, setJobId] = useState<string | null>(null)
 
+  // Which ranking_total row (by its `rank` column) the user picked to
+  // inspect - null means "show the overall best row" (rank 1), the
+  // original/default behavior. rowJobId is the separate re-run job that
+  // produces THAT row's own trade_log/equity_curve/etc (see
+  // rerunRankingRow/rerun_ranking_row.py) - both reset whenever a brand new
+  // main backtest starts, since the old ranking they refer to is gone.
+  const [selectedRank, setSelectedRank] = useState<number | null>(null)
+  const [rowJobId, setRowJobId] = useState<string | null>(null)
+
   // Chart display timeframe is independent from the backtest timeframe above -
   // you may want to eyeball a strategy on 1h while backtesting on 15m.
   const [chartTimeframe, setChartTimeframe] = useState('15m')
@@ -304,10 +316,13 @@ export default function App() {
   // single `tree`, not longTree/shortTree) - UI hides it while
   // dualDirectionMode is on, same precedent as entryMethod.
   const [conditionOptimizeRanges, setConditionOptimizeRanges] = useState<ConditionOptimizeRange[]>(() => [
-    { enabled: false, path: null, min: 60, max: 80, step: 5 },
+    { enabled: false, path: null, field: null, min: 60, max: 80, step: 5 },
   ])
   const addConditionOptimizeRange = () =>
-    setConditionOptimizeRanges((prev) => [...prev, { enabled: false, path: null, min: 60, max: 80, step: 5 }])
+    setConditionOptimizeRanges((prev) => [
+      ...prev,
+      { enabled: false, path: null, field: null, min: 60, max: 80, step: 5 },
+    ])
   const removeConditionOptimizeRange = (index: number) =>
     setConditionOptimizeRanges((prev) => prev.filter((_, i) => i !== index))
   const updateConditionOptimizeRange = (index: number, next: ConditionOptimizeRange) =>
@@ -470,13 +485,16 @@ export default function App() {
           : undefined
       const activeConditionRanges = dualDirectionMode
         ? []
-        : conditionOptimizeRanges.filter((r) => r.enabled && r.path && pathIsValid(tree, r.path))
+        : conditionOptimizeRanges.filter(
+            (r) => r.enabled && r.path && r.field && optionIsValid(tree, r.path, r.field),
+          )
       const condition_tree_variants =
         activeConditionRanges.length > 0
           ? buildConditionTreeVariants(
               tree,
               activeConditionRanges.map((r) => ({
                 path: r.path as number[],
+                field: r.field as OptimizeField,
                 values: buildRangeValues(r.min, r.max, r.step),
               })),
             )
@@ -527,7 +545,13 @@ export default function App() {
         save_as: saveAsName.trim() || undefined,
       })
     },
-    onSuccess: (data) => setJobId(data.job_id),
+    onSuccess: (data) => {
+      setJobId(data.job_id)
+      // The old ranking (and whatever row was selected within it) belongs
+      // to a run that no longer exists once a new one starts.
+      setSelectedRank(null)
+      setRowJobId(null)
+    },
   })
 
   const statusQuery = useQuery({
@@ -547,6 +571,39 @@ export default function App() {
     enabled: jobId !== null && statusQuery.data?.status === 'done',
   })
 
+  // Re-running one ranking row the user clicked on (see RankingTable's
+  // onSelectRow) - a separate job/poll/results trio mirroring the main
+  // backtest's own three above, so a row selection never disturbs the
+  // original ranking or the main run's own job state.
+  const selectRowMutation = useMutation({
+    mutationFn: (rank: number) => rerunRankingRow(jobId as string, rank),
+    onSuccess: (data) => setRowJobId(data.job_id),
+  })
+
+  const rowStatusQuery = useQuery({
+    queryKey: ['backtest-status', rowJobId],
+    queryFn: () => fetchBacktestStatus(rowJobId as string),
+    enabled: rowJobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'done' || status === 'error' ? false : 1000
+    },
+    refetchIntervalInBackground: true,
+  })
+
+  const rowResultsQuery = useQuery<BacktestResults>({
+    queryKey: ['backtest-results', rowJobId],
+    queryFn: () => fetchBacktestResults(rowJobId as string),
+    enabled: rowJobId !== null && rowStatusQuery.data?.status === 'done',
+  })
+
+  const handleSelectRankingRow = (row: RankingRow) => {
+    if (jobId === null) return
+    const rank = Number(row.rank)
+    setSelectedRank(rank)
+    selectRowMutation.mutate(rank)
+  }
+
   useEffect(() => {
     if (statusQuery.data?.status === 'done' && saveAsName.trim() !== '') {
       queryClient.invalidateQueries({ queryKey: ['strategies'] })
@@ -562,9 +619,9 @@ export default function App() {
     setConditionOptimizeRanges((prev) => {
       let changed = false
       const next = prev.map((r) => {
-        if (r.path && !pathIsValid(tree, r.path)) {
+        if (r.path && r.field && !optionIsValid(tree, r.path, r.field)) {
           changed = true
-          return { ...r, path: null }
+          return { ...r, path: null, field: null }
         }
         return r
       })
@@ -573,7 +630,21 @@ export default function App() {
   }, [tree])
 
   const results = resultsQuery.data
-  const bestRow = results?.ranking_total?.[0]
+
+  // When a ranking row is selected AND its own re-run has finished, show
+  // THAT row's trade_log/equity_curve/etc (and its own ranking_total entry
+  // for the stats/summary panels) instead of the main run's rank-1 default.
+  // ranking_total itself always comes from the original `results` (the
+  // rerun doesn't recompute a whole new ranking, just one row's own
+  // analysis) - see rerun_ranking_row.py.
+  const selectedRowResults = rowResultsQuery.data
+  const isRowLoading =
+    selectedRank !== null && (rowStatusQuery.data?.status ?? 'queued') !== 'done'
+  const displayResults = selectedRowResults ?? results
+  const bestRow =
+    (selectedRank !== null
+      ? results?.ranking_total?.find((row) => Number(row.rank) === selectedRank)
+      : undefined) ?? results?.ranking_total?.[0]
   const isRunning = statusQuery.data && !['done', 'error'].includes(statusQuery.data.status)
 
   const handleNavClick = (item: string) => {
@@ -1128,9 +1199,7 @@ export default function App() {
                       <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
                         <div className="text-xs font-semibold text-gray-400">条件ツリー内の値を最適化</div>
                         {optimizableConditions.length === 0 ? (
-                          <div className="text-[11px] text-gray-500">
-                            固定値と比較する条件がありません(「固定値」比較の条件を1つ追加してください)
-                          </div>
+                          <div className="text-[11px] text-gray-500">最適化できる条件がありません</div>
                         ) : (
                           <>
                             {conditionOptimizeRanges.map((range, i) => (
@@ -1157,17 +1226,29 @@ export default function App() {
                                   <select
                                     className="glass-input w-full rounded-lg px-1.5 py-1 text-xs"
                                     disabled={!range.enabled}
-                                    value={range.path ? JSON.stringify(range.path) : ''}
-                                    onChange={(e) =>
+                                    value={range.path ? JSON.stringify({ path: range.path, field: range.field }) : ''}
+                                    onChange={(e) => {
+                                      if (!e.target.value) {
+                                        updateConditionOptimizeRange(i, { ...range, path: null, field: null })
+                                        return
+                                      }
+                                      const selected = JSON.parse(e.target.value) as {
+                                        path: number[]
+                                        field: OptimizeField
+                                      }
                                       updateConditionOptimizeRange(i, {
                                         ...range,
-                                        path: e.target.value ? JSON.parse(e.target.value) : null,
+                                        path: selected.path,
+                                        field: selected.field,
                                       })
-                                    }
+                                    }}
                                   >
                                     <option value="">対象の条件を選択</option>
                                     {optimizableConditions.map((c) => (
-                                      <option key={JSON.stringify(c.path)} value={JSON.stringify(c.path)}>
+                                      <option
+                                        key={JSON.stringify({ path: c.path, field: c.field })}
+                                        value={JSON.stringify({ path: c.path, field: c.field })}
+                                      >
                                         {c.label}
                                       </option>
                                     ))}
@@ -1285,20 +1366,40 @@ export default function App() {
                 </label>
               </div>
               {priceQuery.data && (
-                <ChartPanel bars={priceQuery.data} trades={results?.trade_log ?? []} emaLength={emaLength} symbol={symbol} />
+                <ChartPanel bars={priceQuery.data} trades={displayResults?.trade_log ?? []} emaLength={emaLength} symbol={symbol} />
               )}
             </Panel>
 
             <Panel key="equity" title="⑩ エクイティカーブ">
-              <EquityCurveChart points={results?.equity_curve ?? []} />
+              {selectedRank !== null && (
+                <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
+                  <span>{isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}</span>
+                  {!isRowLoading && (
+                    <button
+                      onClick={() => {
+                        setSelectedRank(null)
+                        setRowJobId(null)
+                      }}
+                      className="text-emerald-400 hover:underline"
+                    >
+                      全体ベストに戻す
+                    </button>
+                  )}
+                </div>
+              )}
+              <EquityCurveChart points={displayResults?.equity_curve ?? []} />
             </Panel>
 
             <Panel key="drawdown" title="⑨ ドローダウン推移">
-              <DrawdownChart points={results?.equity_curve ?? []} />
+              <DrawdownChart points={displayResults?.equity_curve ?? []} />
             </Panel>
 
             <Panel key="ranking" id="panel-ranking" title="③ ランキング一覧">
-              <RankingTable rows={results?.ranking_total ?? []} />
+              <RankingTable
+                rows={results?.ranking_total ?? []}
+                selectedRank={selectedRank}
+                onSelectRow={handleSelectRankingRow}
+              />
             </Panel>
 
             <Panel key="summary" title="④ 戦略サマリー">
@@ -1314,11 +1415,11 @@ export default function App() {
             </Panel>
 
             <Panel key="heatmap" id="panel-heatmap" title="⑦ 月別収益ヒートマップ">
-              <MonthlyHeatmap rows={results?.monthly_analysis ?? []} />
+              <MonthlyHeatmap rows={displayResults?.monthly_analysis ?? []} />
             </Panel>
 
             <Panel key="yearly" id="panel-yearly" title="⑥ 年別成績">
-              <YearlyPerformanceChart rows={results?.yearly_analysis ?? []} />
+              <YearlyPerformanceChart rows={displayResults?.yearly_analysis ?? []} />
             </Panel>
 
             <Panel key="stats" id="panel-stats" title="⑪ 統計情報">
@@ -1377,7 +1478,7 @@ export default function App() {
             </Panel>
 
             <Panel key="trades" title="⑤ 取引履歴">
-              <TradeHistoryTable rows={results?.trade_log ?? []} />
+              <TradeHistoryTable rows={displayResults?.trade_log ?? []} />
             </Panel>
 
             <Panel key="saved" id="panel-saved" title="保存済み戦略">
