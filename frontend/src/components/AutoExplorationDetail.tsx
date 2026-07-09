@@ -13,6 +13,7 @@ interface Props {
   bestRow: RankingRow | undefined
   selectedRank: number | null
   isRowLoading: boolean
+  rowError: string | null
   onResetSelection: () => void
 }
 
@@ -53,7 +54,14 @@ function formatParamValue(v: unknown): string {
   return String(v)
 }
 
-export default function AutoExplorationDetail({ displayResults, bestRow, selectedRank, isRowLoading, onResetSelection }: Props) {
+export default function AutoExplorationDetail({
+  displayResults,
+  bestRow,
+  selectedRank,
+  isRowLoading,
+  rowError,
+  onResetSelection,
+}: Props) {
   const [tab, setTab] = useState<TabId>('cond')
 
   const mc = displayResults?.monte_carlo_summary?.[0] as Record<string, unknown> | undefined
@@ -63,7 +71,9 @@ export default function AutoExplorationDetail({ displayResults, bestRow, selecte
     <div className="flex h-full flex-col">
       {selectedRank !== null && (
         <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-          <span>{isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}</span>
+          <span className={rowError ? 'text-red-400' : undefined}>
+            {rowError ? `エラー: ${rowError}` : isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}
+          </span>
           {!isRowLoading && (
             <button onClick={onResetSelection} className="text-emerald-400 hover:underline">
               全体ベストに戻す

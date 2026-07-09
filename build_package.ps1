@@ -103,7 +103,7 @@ $FilesToCopy = @(
     "analyze_monthly.py", "analyze_yearly.py", "analyze_stability.py",
     "analyze_sensitivity.py", "analyze_confidence.py", "compare_signals.py",
     "compare_tradingview.py", "equity_curve.py", "monte_carlo.py",
-    "rerank_results.py", "strategy_manager.py", "requirements.txt",
+    "rerank_results.py", "rerun_ranking_row.py", "strategy_manager.py", "requirements.txt",
     "generate_pinescript.py", "import_broker_csv.py", "resample_timeframes.py"
 )
 

@@ -684,7 +684,18 @@ export default function App() {
   // analysis) - see rerun_ranking_row.py.
   const selectedRowResults = rowResultsQuery.data
   const isRowLoading =
-    selectedRank !== null && (rowStatusQuery.data?.status ?? 'queued') !== 'done'
+    selectedRank !== null && !['done', 'error'].includes(rowStatusQuery.data?.status ?? 'queued')
+  // Without this, a failed row-rerun (rowStatusQuery.data.status === 'error')
+  // left isRowLoading permanently true forever - 'error' isn't 'done', so the
+  // old check above never stopped waiting, and the UI showed "再計算中..."
+  // indefinitely instead of the actual error (found via a real packaging bug:
+  // rerun_ranking_row.py was missing from build_package.ps1's file list, so
+  // every row click in a packaged build failed immediately - but the failure
+  // was invisible, it just looked like a permanent loading spinner).
+  const rowError =
+    selectedRank !== null && rowStatusQuery.data?.status === 'error'
+      ? (rowStatusQuery.data.error_summary ?? '再計算中にエラーが発生しました。')
+      : null
   const displayResults = selectedRowResults ?? results
   const bestRow =
     (selectedRank !== null
@@ -1450,7 +1461,9 @@ export default function App() {
               <Panel key="equity" title="⑩ エクイティカーブ">
                 {selectedRank !== null && (
                   <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
-                    <span>{isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}</span>
+                    <span className={rowError ? 'text-red-400' : undefined}>
+                      {rowError ? `エラー: ${rowError}` : isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}
+                    </span>
                     {!isRowLoading && (
                       <button
                         onClick={() => {
@@ -1648,6 +1661,7 @@ export default function App() {
                     bestRow={bestRow}
                     selectedRank={selectedRank}
                     isRowLoading={isRowLoading}
+                    rowError={rowError}
                     onResetSelection={() => {
                       setSelectedRank(null)
                       setRowJobId(null)

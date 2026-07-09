@@ -33,6 +33,31 @@ const COLUMNS: {
   },
 ]
 
+// A genetic search that's converged (many generations, small population)
+// legitimately produces many literal clones near the top - elitism carries
+// the same winner forward unchanged, and mutation/crossover of a converged
+// population often regenerates it. Showing the same strategy 10 times in
+// the ranking isn't useful information, so rows whose entire result
+// (metrics + condition tree) matches an earlier row are collapsed to the
+// first (best-ranked) occurrence. Keyed on results, not on rank/param_id -
+// two DIFFERENT structures that happen to trade identically are just as
+// redundant to show twice as two copies of the same structure.
+const DEDUP_METRIC_FIELDS: (keyof RankingRow)[] = [
+  'net_profit',
+  'profit_factor',
+  'max_dd',
+  'win_rate',
+  'trades',
+  'expected_value',
+  'sharpe_ratio',
+]
+
+function resultKey(row: RankingRow): string {
+  const metricPart = DEDUP_METRIC_FIELDS.map((f) => row[f]).join('|')
+  const treePart = row.condition_tree ? JSON.stringify(row.condition_tree) : ''
+  return `${metricPart}::${treePart}`
+}
+
 export default function RankingTable({ rows, selectedRank, onSelectRow }: Props) {
   const [sortKey, setSortKey] = useState<keyof RankingRow>('rank')
   const [sortAsc, setSortAsc] = useState(true)
@@ -50,7 +75,20 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
     }
   }
 
-  const sorted = rows.slice().sort((a, b) => {
+  const deduped = (() => {
+    const seen = new Set<string>()
+    const out: RankingRow[] = []
+    for (const row of rows) {
+      const key = resultKey(row)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(row)
+    }
+    return out
+  })()
+  const duplicateCount = rows.length - deduped.length
+
+  const sorted = deduped.slice().sort((a, b) => {
     const av = Number(a[sortKey])
     const bv = Number(b[sortKey])
     if (Number.isNaN(av) || Number.isNaN(bv)) return 0
@@ -80,12 +118,18 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
     })
 
   return (
-    // Ranking rows can run into the thousands (a real auto-exploration batch),
-    // so this scrolls internally with a sticky header/footer instead of the
-    // old top-20-only cap - the selected row (tfoot) stays visible even when
-    // scrolled away from it, lined up under the exact same columns since
-    // it's a row of the SAME <table>, not a separately-positioned element.
-    <div className="max-h-80 overflow-auto">
+    <div>
+      {duplicateCount > 0 && (
+        <div className="mb-1 px-1 text-[11px] text-gray-500">
+          {`同一の結果が${duplicateCount}件あったため非表示にしています(${deduped.length}件を表示)`}
+        </div>
+      )}
+      {/* Ranking rows can run into the thousands (a real auto-exploration batch),
+          so this scrolls internally with a sticky header/footer instead of the
+          old top-20-only cap - the selected row (tfoot) stays visible even when
+          scrolled away from it, lined up under the exact same columns since
+          it is a row of the SAME table element, not a separately-positioned one. */}
+      <div className="max-h-80 overflow-auto">
       <table className="w-full text-left text-sm">
         <thead className="sticky top-0 z-10 bg-[#0c0d17]">
           <tr className="border-b border-white/10 text-gray-400">
@@ -120,6 +164,7 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
           </tfoot>
         )}
       </table>
+      </div>
     </div>
   )
 }
