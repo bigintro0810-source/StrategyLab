@@ -36,6 +36,7 @@ import TradeHistoryTable from './components/TradeHistoryTable'
 import YearlyPerformanceChart from './components/YearlyPerformanceChart'
 import StatsPanel from './components/StatsPanel'
 import StrategySummaryPanel from './components/StrategySummaryPanel'
+import AutoExplorationDetail from './components/AutoExplorationDetail'
 import SavedStrategiesPanel from './components/SavedStrategiesPanel'
 
 const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
@@ -268,6 +269,10 @@ export default function App() {
   // api_server.py::BacktestRequest's n_candidates/max_depth/etc comment for
   // why rr/exit-rule/position-sizing settings don't apply in these modes.
   const [explorationMode, setExplorationMode] = useState<'manual' | 'structure' | 'structure_genetic'>('manual')
+  // Detail settings (n-candidates/max-depth/.../mutation-rate) start collapsed -
+  // a first-time user shouldn't have to parse 8 unfamiliar fields just to
+  // click "run"; only someone who opens this should see them.
+  const [explorationAdvOpen, setExplorationAdvOpen] = useState(false)
   const [nCandidates, setNCandidates] = useState(500)
   const [maxDepth, setMaxDepth] = useState(2)
   const [maxLeaves, setMaxLeaves] = useState(4)
@@ -738,26 +743,28 @@ export default function App() {
             <Panel key="builder" id="panel-builder" title="① ストラテジービルダー">
               <div className="space-y-3">
                 <div className="flex overflow-hidden rounded-lg border border-white/10 text-xs">
-                  {(
-                    [
-                      { id: 'manual', label: '手動ビルダー' },
-                      { id: 'structure', label: '自動探索(ランダム生成)' },
-                      { id: 'structure_genetic', label: '自動探索(遺伝的進化)' },
-                    ] as const
-                  ).map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => setExplorationMode(m.id)}
-                      className={
-                        m.id === explorationMode
-                          ? 'flex-1 bg-blue-500/30 px-2 py-1.5 font-semibold text-blue-100'
-                          : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                      }
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setExplorationMode('manual')}
+                    className={
+                      explorationMode === 'manual'
+                        ? 'flex-1 bg-blue-500/30 px-2 py-1.5 font-semibold text-blue-100'
+                        : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                    }
+                  >
+                    手動ビルダー
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExplorationMode((m) => (m === 'manual' ? 'structure_genetic' : m))}
+                    className={
+                      explorationMode !== 'manual'
+                        ? 'flex-1 bg-purple-500/30 px-2 py-1.5 font-semibold text-purple-100'
+                        : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                    }
+                  >
+                    自動探索
+                  </button>
                 </div>
 
                 {explorationMode === 'manual' && (
@@ -843,115 +850,169 @@ export default function App() {
                 )}
 
                 {explorationMode !== 'manual' && (
-                  <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2 text-xs text-gray-300">
-                    <div className="font-semibold text-gray-400">
-                      自動探索エンジンの設定(engine/structure_generator.py)
-                    </div>
+                  <div className="space-y-2 text-xs text-gray-300">
                     <p className="text-[11px] text-gray-500">
                       条件はエンジンが自動生成します(Long/Shortも両方試されます)。決済ルール・コスト・ポジションサイジングは
                       下の設定は使われず、{mode === 'dev' ? 'devモードの' : 'fullモードの'}既定値で実行されます。
                     </p>
-                    <label className="flex items-center justify-between gap-2">
-                      候補数(n-candidates)
-                      <input
-                        type="number"
-                        min={1}
-                        className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                        value={nCandidates}
-                        onChange={(e) => setNCandidates(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2">
-                      条件ツリーの最大深さ(max-depth)
-                      <input
-                        type="number"
-                        min={0}
-                        className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                        value={maxDepth}
-                        onChange={(e) => setMaxDepth(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2">
-                      条件数の目安上限(max-leaves)
-                      <input
-                        type="number"
-                        min={1}
-                        className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                        value={maxLeaves}
-                        onChange={(e) => setMaxLeaves(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2">
-                      最低トレード数(min-trades)
-                      <input
-                        type="number"
-                        min={0}
-                        className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                        value={minTrades}
-                        onChange={(e) => setMinTrades(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2">
-                      MTF条件の生成確率(mtf-probability)
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                        value={mtfProbability}
-                        onChange={(e) => setMtfProbability(Number(e.target.value))}
-                      />
-                    </label>
-                    {mtfProbability > 0 && (
-                      <label className="flex items-center justify-between gap-2">
-                        参照する時間足(カンマ区切り・空欄で自動)
-                        <input
-                          type="text"
-                          placeholder="例: 1h,4h,1d"
-                          className="glass-input w-32 rounded-lg px-1.5 py-1 text-xs"
-                          value={mtfTimeframes}
-                          onChange={(e) => setMtfTimeframes(e.target.value)}
-                        />
-                      </label>
-                    )}
 
-                    {explorationMode === 'structure_genetic' && (
-                      <>
-                        <div className="pt-1 font-semibold text-gray-400">遺伝的アルゴリズム設定</div>
+                    <button
+                      type="button"
+                      onClick={() => setExplorationMode('structure')}
+                      className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left ${
+                        explorationMode === 'structure'
+                          ? 'border-purple-500/50 bg-purple-500/[0.08]'
+                          : 'border-white/10 hover:bg-white/5'
+                      }`}
+                    >
+                      <span
+                        className={`mt-0.5 h-3.5 w-3.5 flex-none rounded-full border ${
+                          explorationMode === 'structure' ? 'border-purple-400 bg-purple-400' : 'border-white/30'
+                        }`}
+                      />
+                      <span>
+                        <span className="text-[11.5px] font-semibold text-gray-100">ランダム探索</span>
+                        <p className="mt-0.5 text-[10px] text-gray-500">条件を無作為に大量生成して片っ端から検証する</p>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExplorationMode('structure_genetic')}
+                      className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left ${
+                        explorationMode === 'structure_genetic'
+                          ? 'border-purple-500/50 bg-purple-500/[0.08]'
+                          : 'border-white/10 hover:bg-white/5'
+                      }`}
+                    >
+                      <span
+                        className={`mt-0.5 h-3.5 w-3.5 flex-none rounded-full border ${
+                          explorationMode === 'structure_genetic' ? 'border-purple-400 bg-purple-400' : 'border-white/30'
+                        }`}
+                      />
+                      <span>
+                        <span className="text-[11.5px] font-semibold text-gray-100">
+                          AI進化探索
+                          <span className="ml-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 align-middle text-[9px] text-emerald-300">
+                            推奨
+                          </span>
+                        </span>
+                        <p className="mt-0.5 text-[10px] text-gray-500">良い条件同士を掛け合わせながら世代を重ねて改良する</p>
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setExplorationAdvOpen((v) => !v)}
+                      className="flex items-center gap-1.5 pt-1 text-[10.5px] text-gray-400 hover:text-gray-200"
+                    >
+                      <span className={`text-[9px] transition-transform ${explorationAdvOpen ? 'rotate-90' : ''}`}>▸</span>
+                      詳細設定(条件生成・AI進化)
+                    </button>
+                    {explorationAdvOpen && (
+                      <div className="space-y-1.5 rounded-lg border border-white/10 bg-white/[0.02] p-2">
                         <label className="flex items-center justify-between gap-2">
-                          個体数(population)
+                          候補数(n-candidates)
                           <input
                             type="number"
                             min={1}
                             className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={population}
-                            onChange={(e) => setPopulation(Number(e.target.value))}
+                            value={nCandidates}
+                            onChange={(e) => setNCandidates(Number(e.target.value))}
                           />
                         </label>
                         <label className="flex items-center justify-between gap-2">
-                          世代数(generations)
+                          条件ツリーの最大深さ(max-depth)
+                          <input
+                            type="number"
+                            min={0}
+                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
+                            value={maxDepth}
+                            onChange={(e) => setMaxDepth(Number(e.target.value))}
+                          />
+                        </label>
+                        <label className="flex items-center justify-between gap-2">
+                          条件数の目安上限(max-leaves)
                           <input
                             type="number"
                             min={1}
                             className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={generations}
-                            onChange={(e) => setGenerations(Number(e.target.value))}
+                            value={maxLeaves}
+                            onChange={(e) => setMaxLeaves(Number(e.target.value))}
                           />
                         </label>
                         <label className="flex items-center justify-between gap-2">
-                          突然変異率(mutation-rate)
+                          最低トレード数(min-trades)
+                          <input
+                            type="number"
+                            min={0}
+                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
+                            value={minTrades}
+                            onChange={(e) => setMinTrades(Number(e.target.value))}
+                          />
+                        </label>
+                        <label className="flex items-center justify-between gap-2">
+                          MTF条件の生成確率(mtf-probability)
                           <input
                             type="number"
                             min={0}
                             max={1}
                             step={0.05}
                             className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={mutationRate}
-                            onChange={(e) => setMutationRate(Number(e.target.value))}
+                            value={mtfProbability}
+                            onChange={(e) => setMtfProbability(Number(e.target.value))}
                           />
                         </label>
-                      </>
+                        {mtfProbability > 0 && (
+                          <label className="flex items-center justify-between gap-2">
+                            参照する時間足(カンマ区切り・空欄で自動)
+                            <input
+                              type="text"
+                              placeholder="例: 1h,4h,1d"
+                              className="glass-input w-32 rounded-lg px-1.5 py-1 text-xs"
+                              value={mtfTimeframes}
+                              onChange={(e) => setMtfTimeframes(e.target.value)}
+                            />
+                          </label>
+                        )}
+
+                        {explorationMode === 'structure_genetic' && (
+                          <>
+                            <div className="pt-1 font-semibold text-gray-400">遺伝的アルゴリズム設定</div>
+                            <label className="flex items-center justify-between gap-2">
+                              個体数(population)
+                              <input
+                                type="number"
+                                min={1}
+                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
+                                value={population}
+                                onChange={(e) => setPopulation(Number(e.target.value))}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2">
+                              世代数(generations)
+                              <input
+                                type="number"
+                                min={1}
+                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
+                                value={generations}
+                                onChange={(e) => setGenerations(Number(e.target.value))}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2">
+                              突然変異率(mutation-rate)
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.05}
+                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
+                                value={mutationRate}
+                                onChange={(e) => setMutationRate(Number(e.target.value))}
+                              />
+                            </label>
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1555,29 +1616,33 @@ export default function App() {
               )}
             </Panel>
 
-            <Panel key="equity" title="⑩ エクイティカーブ">
-              {selectedRank !== null && (
-                <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
-                  <span>{isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}</span>
-                  {!isRowLoading && (
-                    <button
-                      onClick={() => {
-                        setSelectedRank(null)
-                        setRowJobId(null)
-                      }}
-                      className="text-emerald-400 hover:underline"
-                    >
-                      全体ベストに戻す
-                    </button>
-                  )}
-                </div>
-              )}
-              <EquityCurveChart points={displayResults?.equity_curve ?? []} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="equity" title="⑩ エクイティカーブ">
+                {selectedRank !== null && (
+                  <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
+                    <span>{isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}</span>
+                    {!isRowLoading && (
+                      <button
+                        onClick={() => {
+                          setSelectedRank(null)
+                          setRowJobId(null)
+                        }}
+                        className="text-emerald-400 hover:underline"
+                      >
+                        全体ベストに戻す
+                      </button>
+                    )}
+                  </div>
+                )}
+                <EquityCurveChart points={displayResults?.equity_curve ?? []} />
+              </Panel>
+            )}
 
-            <Panel key="drawdown" title="⑨ ドローダウン推移">
-              <DrawdownChart points={displayResults?.equity_curve ?? []} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="drawdown" title="⑨ ドローダウン推移">
+                <DrawdownChart points={displayResults?.equity_curve ?? []} />
+              </Panel>
+            )}
 
             <Panel key="ranking" id="panel-ranking" title="③ ランキング一覧">
               <RankingTable
@@ -1587,84 +1652,111 @@ export default function App() {
               />
             </Panel>
 
-            <Panel key="summary" title="④ 戦略サマリー">
-              <StrategySummaryPanel
-                symbol={symbol}
-                timeframe={timeframe}
-                mode={mode}
-                direction={direction}
-                dualDirectionMode={dualDirectionMode}
-                testCount={results?.ranking_total?.length ?? 0}
-                row={bestRow}
-              />
-            </Panel>
+            {explorationMode !== 'manual' && (
+              <Panel key="auto-detail" title="④ 選択中ストラテジーの詳細">
+                <AutoExplorationDetail
+                  displayResults={displayResults}
+                  bestRow={bestRow}
+                  selectedRank={selectedRank}
+                  isRowLoading={isRowLoading}
+                  onResetSelection={() => {
+                    setSelectedRank(null)
+                    setRowJobId(null)
+                  }}
+                />
+              </Panel>
+            )}
 
-            <Panel key="heatmap" id="panel-heatmap" title="⑦ 月別収益ヒートマップ">
-              <MonthlyHeatmap rows={displayResults?.monthly_analysis ?? []} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="summary" title="④ 戦略サマリー">
+                <StrategySummaryPanel
+                  symbol={symbol}
+                  timeframe={timeframe}
+                  mode={mode}
+                  direction={direction}
+                  dualDirectionMode={dualDirectionMode}
+                  testCount={results?.ranking_total?.length ?? 0}
+                  row={bestRow}
+                />
+              </Panel>
+            )}
 
-            <Panel key="yearly" id="panel-yearly" title="⑥ 年別成績">
-              <YearlyPerformanceChart rows={displayResults?.yearly_analysis ?? []} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="heatmap" id="panel-heatmap" title="⑦ 月別収益ヒートマップ">
+                <MonthlyHeatmap rows={displayResults?.monthly_analysis ?? []} />
+              </Panel>
+            )}
 
-            <Panel key="stats" id="panel-stats" title="⑪ 統計情報">
-              <StatsPanel row={bestRow} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="yearly" id="panel-yearly" title="⑥ 年別成績">
+                <YearlyPerformanceChart rows={displayResults?.yearly_analysis ?? []} />
+              </Panel>
+            )}
 
-            <Panel key="surface" id="panel-surface" title="⑧ 最適化サーフェス(3D)">
-              {(() => {
-                const enabledParams = paramRanges.filter((r) => r.enabled).map((r) => r.param)
-                const effectiveX = enabledParams.includes(surfaceParamX) ? surfaceParamX : (enabledParams[0] ?? surfaceParamX)
-                const effectiveY = enabledParams.includes(surfaceParamY) ? surfaceParamY : (enabledParams[1] ?? surfaceParamY)
-                return (
-                  <>
-                    {enabledParams.length > 2 && (
-                      <div className="mb-2 flex gap-2 text-xs text-gray-300">
-                        <label className="flex flex-1 items-center gap-1">
-                          X軸
-                          <select
-                            className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
-                            value={effectiveX}
-                            onChange={(e) => setSurfaceParamX(e.target.value)}
-                          >
-                            {enabledParams.map((param) => (
-                              <option key={param} value={param}>
-                                {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="flex flex-1 items-center gap-1">
-                          Y軸
-                          <select
-                            className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
-                            value={effectiveY}
-                            onChange={(e) => setSurfaceParamY(e.target.value)}
-                          >
-                            {enabledParams.map((param) => (
-                              <option key={param} value={param}>
-                                {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                    )}
-                    <OptimizationSurface
-                      rows={results?.ranking_total ?? []}
-                      paramX={effectiveX}
-                      paramY={effectiveY}
-                      metric={optimizationMetric}
-                      metricLabel={OPTIMIZATION_METRICS.find((m) => m.id === optimizationMetric)?.label ?? optimizationMetric}
-                    />
-                  </>
-                )
-              })()}
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="stats" id="panel-stats" title="⑪ 統計情報">
+                <StatsPanel row={bestRow} />
+              </Panel>
+            )}
 
-            <Panel key="trades" title="⑤ 取引履歴">
-              <TradeHistoryTable rows={displayResults?.trade_log ?? []} />
-            </Panel>
+            {explorationMode === 'manual' && (
+              <Panel key="surface" id="panel-surface" title="⑧ 最適化サーフェス(3D)">
+                {(() => {
+                  const enabledParams = paramRanges.filter((r) => r.enabled).map((r) => r.param)
+                  const effectiveX = enabledParams.includes(surfaceParamX) ? surfaceParamX : (enabledParams[0] ?? surfaceParamX)
+                  const effectiveY = enabledParams.includes(surfaceParamY) ? surfaceParamY : (enabledParams[1] ?? surfaceParamY)
+                  return (
+                    <>
+                      {enabledParams.length > 2 && (
+                        <div className="mb-2 flex gap-2 text-xs text-gray-300">
+                          <label className="flex flex-1 items-center gap-1">
+                            X軸
+                            <select
+                              className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
+                              value={effectiveX}
+                              onChange={(e) => setSurfaceParamX(e.target.value)}
+                            >
+                              {enabledParams.map((param) => (
+                                <option key={param} value={param}>
+                                  {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="flex flex-1 items-center gap-1">
+                            Y軸
+                            <select
+                              className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
+                              value={effectiveY}
+                              onChange={(e) => setSurfaceParamY(e.target.value)}
+                            >
+                              {enabledParams.map((param) => (
+                                <option key={param} value={param}>
+                                  {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                      <OptimizationSurface
+                        rows={results?.ranking_total ?? []}
+                        paramX={effectiveX}
+                        paramY={effectiveY}
+                        metric={optimizationMetric}
+                        metricLabel={OPTIMIZATION_METRICS.find((m) => m.id === optimizationMetric)?.label ?? optimizationMetric}
+                      />
+                    </>
+                  )
+                })()}
+              </Panel>
+            )}
+
+            {explorationMode === 'manual' && (
+              <Panel key="trades" title="⑤ 取引履歴">
+                <TradeHistoryTable rows={displayResults?.trade_log ?? []} />
+              </Panel>
+            )}
 
             <Panel key="saved" id="panel-saved" title="保存済み戦略">
               <SavedStrategiesPanel

@@ -8,18 +8,24 @@ interface Props {
   onSelectRow?: (row: RankingRow) => void
 }
 
-const COLUMNS: { key: keyof RankingRow; label: string; format?: (v: unknown) => string }[] = [
+const COLUMNS: {
+  key: keyof RankingRow
+  label: string
+  format?: (v: unknown) => string
+  colorClass?: (v: unknown) => string
+}[] = [
   { key: 'rank', label: 'Rank' },
-  { key: 'profit_factor', label: 'PF', format: (v) => Number(v).toFixed(2) },
-  { key: 'net_profit', label: '総利益', format: (v) => Number(v).toFixed(1) },
+  { key: 'net_profit', label: '純利益', format: (v) => Number(v).toFixed(1), colorClass: (v) => (Number(v) >= 0 ? 'text-emerald-400' : 'text-red-400') },
+  { key: 'profit_factor', label: 'PF', format: (v) => Number(v).toFixed(2), colorClass: (v) => (Number(v) >= 1 ? 'text-emerald-400' : 'text-red-400') },
+  { key: 'expected_value', label: '期待値', format: (v) => Number(v).toFixed(3), colorClass: (v) => (Number(v) >= 0 ? 'text-emerald-400' : 'text-red-400') },
   { key: 'max_dd', label: 'DD', format: (v) => Number(v).toFixed(1) },
   { key: 'win_rate', label: '勝率%', format: (v) => Number(v).toFixed(1) },
-  { key: 'recovery_factor', label: 'Recovery', format: (v) => Number(v).toFixed(2) },
+  { key: 'trades', label: '取引数' },
   { key: 'sharpe_ratio', label: 'Sharpe', format: (v) => Number(v).toFixed(2) },
+  { key: 'recovery_factor', label: 'Recovery', format: (v) => Number(v).toFixed(2) },
   { key: 'sortino_ratio', label: 'Sortino', format: (v) => Number(v).toFixed(2) },
   { key: 'calmar_ratio', label: 'Calmar', format: (v) => Number(v).toFixed(2) },
   { key: 'cagr', label: 'CAGR%', format: (v) => (Number(v) * 100).toFixed(1) },
-  { key: 'trades', label: '取引数' },
   {
     key: 'condition_tree',
     label: '条件(自動探索)',
@@ -44,20 +50,44 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
     }
   }
 
-  const sorted = rows
-    .slice()
-    .sort((a, b) => {
-      const av = Number(a[sortKey])
-      const bv = Number(b[sortKey])
-      if (Number.isNaN(av) || Number.isNaN(bv)) return 0
-      return sortAsc ? av - bv : bv - av
+  const sorted = rows.slice().sort((a, b) => {
+    const av = Number(a[sortKey])
+    const bv = Number(b[sortKey])
+    if (Number.isNaN(av) || Number.isNaN(bv)) return 0
+    return sortAsc ? av - bv : bv - av
+  })
+
+  const selectedRow = selectedRank != null ? rows.find((r) => Number(r.rank) === selectedRank) : undefined
+
+  const renderCells = (row: RankingRow) =>
+    COLUMNS.map((col) => {
+      const raw = row[col.key]
+      const text = col.format ? col.format(raw) : String(raw ?? '')
+      const colorClass = col.colorClass ? col.colorClass(raw) : ''
+      return (
+        <td
+          key={String(col.key)}
+          title={col.key === 'condition_tree' ? text : undefined}
+          className={
+            col.key === 'condition_tree'
+              ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
+              : `px-2 py-1 ${colorClass}`
+          }
+        >
+          {text}
+        </td>
+      )
     })
-    .slice(0, 20)
 
   return (
-    <div className="overflow-auto">
+    // Ranking rows can run into the thousands (a real auto-exploration batch),
+    // so this scrolls internally with a sticky header/footer instead of the
+    // old top-20-only cap - the selected row (tfoot) stays visible even when
+    // scrolled away from it, lined up under the exact same columns since
+    // it's a row of the SAME <table>, not a separately-positioned element.
+    <div className="max-h-80 overflow-auto">
       <table className="w-full text-left text-sm">
-        <thead>
+        <thead className="sticky top-0 z-10 bg-[#0c0d17]">
           <tr className="border-b border-white/10 text-gray-400">
             {COLUMNS.map((col) => (
               <th
@@ -80,25 +110,15 @@ export default function RankingTable({ rows, selectedRank, onSelectRow }: Props)
                 selectedRank != null && Number(row.rank) === selectedRank ? 'bg-emerald-500/10' : ''
               }`}
             >
-              {COLUMNS.map((col) => {
-                const text = col.format ? col.format(row[col.key]) : String(row[col.key] ?? '')
-                return (
-                  <td
-                    key={String(col.key)}
-                    title={col.key === 'condition_tree' ? text : undefined}
-                    className={
-                      col.key === 'condition_tree'
-                        ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
-                        : 'px-2 py-1'
-                    }
-                  >
-                    {text}
-                  </td>
-                )
-              })}
+              {renderCells(row)}
             </tr>
           ))}
         </tbody>
+        {selectedRow && (
+          <tfoot className="sticky bottom-0 z-10 bg-[#0c0d17]">
+            <tr className="border-t-2 border-emerald-500/40 bg-emerald-500/[0.06]">{renderCells(selectedRow)}</tr>
+          </tfoot>
+        )}
       </table>
     </div>
   )
