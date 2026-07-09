@@ -37,6 +37,7 @@ import YearlyPerformanceChart from './components/YearlyPerformanceChart'
 import StatsPanel from './components/StatsPanel'
 import StrategySummaryPanel from './components/StrategySummaryPanel'
 import AutoExplorationDetail from './components/AutoExplorationDetail'
+import AutoExplorationRail from './components/AutoExplorationRail'
 import SavedStrategiesPanel from './components/SavedStrategiesPanel'
 
 const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
@@ -732,7 +733,32 @@ export default function App() {
       </nav>
 
       <div ref={gridContainerRef} className="p-4">
-        {gridMounted && (
+        <div className="mb-4 flex w-64 overflow-hidden rounded-lg border border-white/10 text-xs">
+          <button
+            type="button"
+            onClick={() => setExplorationMode('manual')}
+            className={
+              explorationMode === 'manual'
+                ? 'flex-1 bg-blue-500/30 px-2 py-1.5 font-semibold text-blue-100'
+                : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
+            }
+          >
+            手動ビルダー
+          </button>
+          <button
+            type="button"
+            onClick={() => setExplorationMode((m) => (m === 'manual' ? 'structure_genetic' : m))}
+            className={
+              explorationMode !== 'manual'
+                ? 'flex-1 bg-purple-500/30 px-2 py-1.5 font-semibold text-purple-100'
+                : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
+            }
+          >
+            自動探索
+          </button>
+        </div>
+
+        {gridMounted && explorationMode === 'manual' && (
           <GridLayout
             width={gridWidth}
             layout={layout}
@@ -742,278 +768,81 @@ export default function App() {
           >
             <Panel key="builder" id="panel-builder" title="① ストラテジービルダー">
               <div className="space-y-3">
-                <div className="flex overflow-hidden rounded-lg border border-white/10 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setExplorationMode('manual')}
-                    className={
-                      explorationMode === 'manual'
-                        ? 'flex-1 bg-blue-500/30 px-2 py-1.5 font-semibold text-blue-100'
-                        : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                    }
-                  >
-                    手動ビルダー
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExplorationMode((m) => (m === 'manual' ? 'structure_genetic' : m))}
-                    className={
-                      explorationMode !== 'manual'
-                        ? 'flex-1 bg-purple-500/30 px-2 py-1.5 font-semibold text-purple-100'
-                        : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                    }
-                  >
-                    自動探索
-                  </button>
-                </div>
+                <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={dualDirectionMode}
+                    onChange={(e) => setDualDirectionMode(e.target.checked)}
+                  />
+                  Long+Shortを同時に評価(同じ足で両方成立したらスキップ)
+                </label>
 
-                {explorationMode === 'manual' && (
-                  <>
-                    <label className="flex items-center gap-1.5 text-xs text-gray-300">
+                {!dualDirectionMode && (
+                  <div className="flex gap-4 text-sm">
+                    <label className="flex items-center gap-1.5">
                       <input
-                        type="checkbox"
-                        checked={dualDirectionMode}
-                        onChange={(e) => setDualDirectionMode(e.target.checked)}
+                        type="radio"
+                        className="accent-blue-500"
+                        checked={direction === 'short'}
+                        onChange={() => setDirection('short')}
                       />
-                      Long+Shortを同時に評価(同じ足で両方成立したらスキップ)
+                      Short(売り)
                     </label>
-
-                    {!dualDirectionMode && (
-                      <div className="flex gap-4 text-sm">
-                        <label className="flex items-center gap-1.5">
-                          <input
-                            type="radio"
-                            className="accent-blue-500"
-                            checked={direction === 'short'}
-                            onChange={() => setDirection('short')}
-                          />
-                          Short(売り)
-                        </label>
-                        <label className="flex items-center gap-1.5">
-                          <input
-                            type="radio"
-                            className="accent-purple-500"
-                            checked={direction === 'long'}
-                            onChange={() => setDirection('long')}
-                          />
-                          Long(買い)
-                        </label>
-                      </div>
-                    )}
-
-                    {!dualDirectionMode && (
-                      <div className="flex items-center gap-2 text-xs text-gray-300">
-                        <span className="text-gray-400">エントリー方式</span>
-                        <select
-                          className="glass-input rounded-lg px-2 py-1"
-                          value={entryMethod}
-                          onChange={(e) => setEntryMethod(e.target.value as 'market' | 'limit' | 'stop')}
-                        >
-                          <option value="market">成行(条件確定の次の足で即エントリー)</option>
-                          <option value="limit">指値(有利な価格まで戻ったら約定)</option>
-                          <option value="stop">逆指値(さらにブレイクしたら約定)</option>
-                        </select>
-                        {entryMethod !== 'market' && (
-                          <label className="ml-auto flex items-center gap-1">
-                            オフセット
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.5}
-                              className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
-                              value={entryOffsetPips}
-                              onChange={(e) => setEntryOffsetPips(Number(e.target.value))}
-                            />
-                            pips
-                          </label>
-                        )}
-                      </div>
-                    )}
-
-                    {indicatorsQuery.data && !dualDirectionMode && (
-                      <ConditionTreeEditor node={tree} indicators={indicatorsQuery.data} onChange={setTree} />
-                    )}
-
-                    {indicatorsQuery.data && dualDirectionMode && (
-                      <div className="space-y-3">
-                        <div>
-                          <div className="mb-1 text-xs font-semibold text-blue-300">Long条件</div>
-                          <ConditionTreeEditor node={longTree} indicators={indicatorsQuery.data} onChange={setLongTree} />
-                        </div>
-                        <div>
-                          <div className="mb-1 text-xs font-semibold text-purple-300">Short条件</div>
-                          <ConditionTreeEditor node={shortTree} indicators={indicatorsQuery.data} onChange={setShortTree} />
-                        </div>
-                      </div>
-                    )}
-                  </>
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        className="accent-purple-500"
+                        checked={direction === 'long'}
+                        onChange={() => setDirection('long')}
+                      />
+                      Long(買い)
+                    </label>
+                  </div>
                 )}
 
-                {explorationMode !== 'manual' && (
-                  <div className="space-y-2 text-xs text-gray-300">
-                    <p className="text-[11px] text-gray-500">
-                      条件はエンジンが自動生成します(Long/Shortも両方試されます)。決済ルール・コスト・ポジションサイジングは
-                      下の設定は使われず、{mode === 'dev' ? 'devモードの' : 'fullモードの'}既定値で実行されます。
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => setExplorationMode('structure')}
-                      className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left ${
-                        explorationMode === 'structure'
-                          ? 'border-purple-500/50 bg-purple-500/[0.08]'
-                          : 'border-white/10 hover:bg-white/5'
-                      }`}
+                {!dualDirectionMode && (
+                  <div className="flex items-center gap-2 text-xs text-gray-300">
+                    <span className="text-gray-400">エントリー方式</span>
+                    <select
+                      className="glass-input rounded-lg px-2 py-1"
+                      value={entryMethod}
+                      onChange={(e) => setEntryMethod(e.target.value as 'market' | 'limit' | 'stop')}
                     >
-                      <span
-                        className={`mt-0.5 h-3.5 w-3.5 flex-none rounded-full border ${
-                          explorationMode === 'structure' ? 'border-purple-400 bg-purple-400' : 'border-white/30'
-                        }`}
-                      />
-                      <span>
-                        <span className="text-[11.5px] font-semibold text-gray-100">ランダム探索</span>
-                        <p className="mt-0.5 text-[10px] text-gray-500">条件を無作為に大量生成して片っ端から検証する</p>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setExplorationMode('structure_genetic')}
-                      className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left ${
-                        explorationMode === 'structure_genetic'
-                          ? 'border-purple-500/50 bg-purple-500/[0.08]'
-                          : 'border-white/10 hover:bg-white/5'
-                      }`}
-                    >
-                      <span
-                        className={`mt-0.5 h-3.5 w-3.5 flex-none rounded-full border ${
-                          explorationMode === 'structure_genetic' ? 'border-purple-400 bg-purple-400' : 'border-white/30'
-                        }`}
-                      />
-                      <span>
-                        <span className="text-[11.5px] font-semibold text-gray-100">
-                          AI進化探索
-                          <span className="ml-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 align-middle text-[9px] text-emerald-300">
-                            推奨
-                          </span>
-                        </span>
-                        <p className="mt-0.5 text-[10px] text-gray-500">良い条件同士を掛け合わせながら世代を重ねて改良する</p>
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setExplorationAdvOpen((v) => !v)}
-                      className="flex items-center gap-1.5 pt-1 text-[10.5px] text-gray-400 hover:text-gray-200"
-                    >
-                      <span className={`text-[9px] transition-transform ${explorationAdvOpen ? 'rotate-90' : ''}`}>▸</span>
-                      詳細設定(条件生成・AI進化)
-                    </button>
-                    {explorationAdvOpen && (
-                      <div className="space-y-1.5 rounded-lg border border-white/10 bg-white/[0.02] p-2">
-                        <label className="flex items-center justify-between gap-2">
-                          候補数(n-candidates)
-                          <input
-                            type="number"
-                            min={1}
-                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={nCandidates}
-                            onChange={(e) => setNCandidates(Number(e.target.value))}
-                          />
-                        </label>
-                        <label className="flex items-center justify-between gap-2">
-                          条件ツリーの最大深さ(max-depth)
-                          <input
-                            type="number"
-                            min={0}
-                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={maxDepth}
-                            onChange={(e) => setMaxDepth(Number(e.target.value))}
-                          />
-                        </label>
-                        <label className="flex items-center justify-between gap-2">
-                          条件数の目安上限(max-leaves)
-                          <input
-                            type="number"
-                            min={1}
-                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={maxLeaves}
-                            onChange={(e) => setMaxLeaves(Number(e.target.value))}
-                          />
-                        </label>
-                        <label className="flex items-center justify-between gap-2">
-                          最低トレード数(min-trades)
-                          <input
-                            type="number"
-                            min={0}
-                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={minTrades}
-                            onChange={(e) => setMinTrades(Number(e.target.value))}
-                          />
-                        </label>
-                        <label className="flex items-center justify-between gap-2">
-                          MTF条件の生成確率(mtf-probability)
-                          <input
-                            type="number"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                            value={mtfProbability}
-                            onChange={(e) => setMtfProbability(Number(e.target.value))}
-                          />
-                        </label>
-                        {mtfProbability > 0 && (
-                          <label className="flex items-center justify-between gap-2">
-                            参照する時間足(カンマ区切り・空欄で自動)
-                            <input
-                              type="text"
-                              placeholder="例: 1h,4h,1d"
-                              className="glass-input w-32 rounded-lg px-1.5 py-1 text-xs"
-                              value={mtfTimeframes}
-                              onChange={(e) => setMtfTimeframes(e.target.value)}
-                            />
-                          </label>
-                        )}
-
-                        {explorationMode === 'structure_genetic' && (
-                          <>
-                            <div className="pt-1 font-semibold text-gray-400">遺伝的アルゴリズム設定</div>
-                            <label className="flex items-center justify-between gap-2">
-                              個体数(population)
-                              <input
-                                type="number"
-                                min={1}
-                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                                value={population}
-                                onChange={(e) => setPopulation(Number(e.target.value))}
-                              />
-                            </label>
-                            <label className="flex items-center justify-between gap-2">
-                              世代数(generations)
-                              <input
-                                type="number"
-                                min={1}
-                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                                value={generations}
-                                onChange={(e) => setGenerations(Number(e.target.value))}
-                              />
-                            </label>
-                            <label className="flex items-center justify-between gap-2">
-                              突然変異率(mutation-rate)
-                              <input
-                                type="number"
-                                min={0}
-                                max={1}
-                                step={0.05}
-                                className="glass-input w-24 rounded-lg px-1.5 py-1 text-xs"
-                                value={mutationRate}
-                                onChange={(e) => setMutationRate(Number(e.target.value))}
-                              />
-                            </label>
-                          </>
-                        )}
-                      </div>
+                      <option value="market">成行(条件確定の次の足で即エントリー)</option>
+                      <option value="limit">指値(有利な価格まで戻ったら約定)</option>
+                      <option value="stop">逆指値(さらにブレイクしたら約定)</option>
+                    </select>
+                    {entryMethod !== 'market' && (
+                      <label className="ml-auto flex items-center gap-1">
+                        オフセット
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
+                          value={entryOffsetPips}
+                          onChange={(e) => setEntryOffsetPips(Number(e.target.value))}
+                        />
+                        pips
+                      </label>
                     )}
+                  </div>
+                )}
+
+                {indicatorsQuery.data && !dualDirectionMode && (
+                  <ConditionTreeEditor node={tree} indicators={indicatorsQuery.data} onChange={setTree} />
+                )}
+
+                {indicatorsQuery.data && dualDirectionMode && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="mb-1 text-xs font-semibold text-blue-300">Long条件</div>
+                      <ConditionTreeEditor node={longTree} indicators={indicatorsQuery.data} onChange={setLongTree} />
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs font-semibold text-purple-300">Short条件</div>
+                      <ConditionTreeEditor node={shortTree} indicators={indicatorsQuery.data} onChange={setShortTree} />
+                    </div>
                   </div>
                 )}
 
@@ -1652,20 +1481,6 @@ export default function App() {
               />
             </Panel>
 
-            {explorationMode !== 'manual' && (
-              <Panel key="auto-detail" title="④ 選択中ストラテジーの詳細">
-                <AutoExplorationDetail
-                  displayResults={displayResults}
-                  bestRow={bestRow}
-                  selectedRank={selectedRank}
-                  isRowLoading={isRowLoading}
-                  onResetSelection={() => {
-                    setSelectedRank(null)
-                    setRowJobId(null)
-                  }}
-                />
-              </Panel>
-            )}
 
             {explorationMode === 'manual' && (
               <Panel key="summary" title="④ 戦略サマリー">
@@ -1766,6 +1581,79 @@ export default function App() {
               />
             </Panel>
           </GridLayout>
+        )}
+
+        {explorationMode !== 'manual' && (
+          <div className="grid grid-cols-[280px_1fr] items-start gap-4">
+            <AutoExplorationRail
+              explorationMode={explorationMode}
+              setExplorationMode={setExplorationMode}
+              explorationAdvOpen={explorationAdvOpen}
+              setExplorationAdvOpen={setExplorationAdvOpen}
+              nCandidates={nCandidates}
+              setNCandidates={setNCandidates}
+              maxDepth={maxDepth}
+              setMaxDepth={setMaxDepth}
+              maxLeaves={maxLeaves}
+              setMaxLeaves={setMaxLeaves}
+              minTrades={minTrades}
+              setMinTrades={setMinTrades}
+              mtfProbability={mtfProbability}
+              setMtfProbability={setMtfProbability}
+              mtfTimeframes={mtfTimeframes}
+              setMtfTimeframes={setMtfTimeframes}
+              population={population}
+              setPopulation={setPopulation}
+              generations={generations}
+              setGenerations={setGenerations}
+              mutationRate={mutationRate}
+              setMutationRate={setMutationRate}
+              symbol={symbol}
+              setSymbol={setSymbol}
+              timeframe={timeframe}
+              setTimeframe={setTimeframe}
+              mode={mode}
+              setMode={setMode}
+              saveAsName={saveAsName}
+              setSaveAsName={setSaveAsName}
+              symbols={SYMBOLS}
+              timeframes={TIMEFRAMES}
+              runMutation={runMutation}
+              isRunning={isRunning}
+              statusData={statusQuery.data}
+            />
+            <div className="flex flex-col gap-4">
+              <div className="glass-panel rounded-2xl">
+                <div className="glass-panel-header rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
+                  ③ ランキング一覧
+                </div>
+                <div className="p-3">
+                  <RankingTable
+                    rows={results?.ranking_total ?? []}
+                    selectedRank={selectedRank}
+                    onSelectRow={handleSelectRankingRow}
+                  />
+                </div>
+              </div>
+              <div className="glass-panel rounded-2xl">
+                <div className="glass-panel-header rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
+                  ④ 選択中ストラテジーの詳細
+                </div>
+                <div className="p-3">
+                  <AutoExplorationDetail
+                    displayResults={displayResults}
+                    bestRow={bestRow}
+                    selectedRank={selectedRank}
+                    isRowLoading={isRowLoading}
+                    onResetSelection={() => {
+                      setSelectedRank(null)
+                      setRowJobId(null)
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>
