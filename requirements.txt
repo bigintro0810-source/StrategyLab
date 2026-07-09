@@ -5,3 +5,4 @@ fpdf2>=2.8.7
 optuna>=4.9.0
 fastapi>=0.118.0
 uvicorn>=0.38.0
+numba>=0.60.0
