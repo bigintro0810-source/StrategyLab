@@ -366,6 +366,24 @@ async def rerun_ranking_row(job_id: str, rank: int) -> dict:
     return {"job_id": new_job_id}
 
 
+def _read_progress(symbol: str, timeframe: str) -> dict | None:
+    """main.py's structure/structure_genetic optimizers write progress.json
+    into their own output dir as they run (see main.py::write_progress_file) -
+    this is the only live-progress channel available, since main.py runs as
+    a subprocess whose stdout/stderr api_server.py only reads once the whole
+    process has already exited (see _run_job's process.communicate()).
+    Missing file (not written yet) or a mid-write partial read (main.py
+    doesn't write atomically) are both just "no progress to show yet", not
+    errors."""
+    path = resolve_output_dir(symbol, timeframe) / "progress.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 @app.get("/api/backtests/{job_id}")
 async def get_backtest_status(job_id: str) -> dict:
     job = JOBS.get(job_id)
@@ -378,6 +396,7 @@ async def get_backtest_status(job_id: str) -> dict:
         "stdout_tail": job["stdout"][-2000:],
         "error": error,
         "error_summary": _extract_friendly_error(error) if error else None,
+        "progress": _read_progress(job["symbol"], job["timeframe"]) if job["status"] == "running" else None,
     }
 
 

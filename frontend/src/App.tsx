@@ -38,6 +38,7 @@ import StatsPanel from './components/StatsPanel'
 import StrategySummaryPanel from './components/StrategySummaryPanel'
 import AutoExplorationDetail from './components/AutoExplorationDetail'
 import AutoExplorationRail from './components/AutoExplorationRail'
+import AutoExplorationHero from './components/AutoExplorationHero'
 import SavedStrategiesPanel from './components/SavedStrategiesPanel'
 
 const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
@@ -1584,7 +1585,9 @@ export default function App() {
         )}
 
         {explorationMode !== 'manual' && (
-          <div className="grid grid-cols-[280px_1fr] items-start gap-4">
+          <>
+            <AutoExplorationHero progress={statusQuery.data?.progress} isRunning={isRunning} />
+            <div className="grid grid-cols-[280px_1fr] items-start gap-4">
             <AutoExplorationRail
               explorationMode={explorationMode}
               setExplorationMode={setExplorationMode}
@@ -1653,7 +1656,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>

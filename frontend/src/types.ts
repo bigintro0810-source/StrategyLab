@@ -164,6 +164,16 @@ export interface BacktestJob {
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 
+export interface BacktestProgress {
+  completed: number
+  total: number
+  elapsed_seconds: number
+  // Only present for --optimizer structure_genetic - null for a plain
+  // structure (random) run, which has no generation concept.
+  generation: number | null
+  generations_total: number | null
+}
+
 export interface BacktestStatus {
   status: JobStatus
   stdout_tail: string
@@ -173,6 +183,10 @@ export interface BacktestStatus {
   // Short, Japanese, non-scary summary extracted from `error` - what the
   // UI should show by default.
   error_summary: string | null
+  // Only populated while status is "running", and only for
+  // structure/structure_genetic runs (main.py writes progress.json for
+  // those two optimizers only - see main.py::write_progress_file).
+  progress: BacktestProgress | null
 }
 
 export interface RankingRow {

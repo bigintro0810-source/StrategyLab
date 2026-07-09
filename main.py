@@ -1,6 +1,7 @@
 from pathlib import Path
 import argparse
 import itertools
+import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -524,6 +525,31 @@ def format_seconds(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def write_progress_file(
+    completed: int,
+    total: int,
+    elapsed: float,
+    generation: int | None = None,
+    generations_total: int | None = None,
+) -> None:
+    """Lets api_server.py's job-status polling show live progress for a
+    structure/structure_genetic run - this is the only channel available for
+    that, since main.py runs as a fire-and-forget subprocess (api_server.py
+    only reads its stdout/stderr once the whole process exits, not as it
+    runs) and stdout's own progress prints are Japanese prose, not meant to
+    be machine-parsed. Overwritten on every progress tick (same cadence as
+    the existing print statements) rather than appended, so a crashed run
+    just leaves the last-known state instead of a growing log."""
+    payload = {
+        "completed": completed,
+        "total": total,
+        "elapsed_seconds": round(elapsed, 1),
+        "generation": generation,
+        "generations_total": generations_total,
+    }
+    (OUTPUT_DIR / "progress.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def calc_profit_factor(profits: pd.Series) -> float:
     gross_profit = profits[profits > 0].sum()
     gross_loss = profits[profits < 0].sum()
@@ -950,7 +976,15 @@ def main() -> None:
             print(f"検証パターン数: {total_tasks}")
         print(f"並列数: {workers}")
 
-        def run_batch(executor: ProcessPoolExecutor, param_dicts: list[dict], id_offset: int) -> list[dict]:
+        def run_batch(
+            executor: ProcessPoolExecutor,
+            param_dicts: list[dict],
+            id_offset: int,
+            progress_base: int = 0,
+            progress_total: int | None = None,
+            generation: int | None = None,
+            generations_total: int | None = None,
+        ) -> list[dict]:
             tasks = list(enumerate(param_dicts, start=id_offset))
             futures = [executor.submit(run_one_backtest, task) for task in tasks]
 
@@ -962,10 +996,35 @@ def main() -> None:
                 if completed % 10 == 0 or completed == len(tasks):
                     elapsed = time.time() - start_time
                     print(f"{completed}/{len(tasks)} 完了 経過 {format_seconds(elapsed)}")
+                    # Only structure/structure_genetic runs actually have a UI
+                    # polling for this (see api_server.py's job-status
+                    # endpoint) - written unconditionally anyway since it's
+                    # cheap and harmless for grid/random/genetic too.
+                    write_progress_file(
+                        completed=progress_base + completed,
+                        total=progress_total if progress_total is not None else len(tasks),
+                        elapsed=elapsed,
+                        generation=generation,
+                        generations_total=generations_total,
+                    )
 
             return batch_results
 
         results = []
+
+        if args.optimizer in ("structure", "structure_genetic"):
+            # Written once up front so a job-status poll landing before the
+            # first in-loop checkpoint (run_batch only writes every 10
+            # completions) sees this run's own 0/total, not a stale
+            # progress.json left over from a previous run that used the same
+            # --symbol/--timeframe output directory.
+            write_progress_file(
+                completed=0,
+                total=total_tasks if args.optimizer == "structure" else args.population * args.generations,
+                elapsed=0.0,
+                generation=1 if args.optimizer == "structure_genetic" else None,
+                generations_total=args.generations if args.optimizer == "structure_genetic" else None,
+            )
 
         with ProcessPoolExecutor(
             max_workers=workers,
@@ -973,7 +1032,7 @@ def main() -> None:
             initargs=(df,),
         ) as executor:
             if args.optimizer in ("grid", "random", "structure"):
-                results = run_batch(executor, parameter_list, id_offset=1)
+                results = run_batch(executor, parameter_list, id_offset=1, progress_total=total_tasks)
             elif args.optimizer == "structure_genetic":
                 # base_defaults supplies every non-tree field (rr/session/
                 # exit rules/etc) as plain scalars, extracted once from the
@@ -999,7 +1058,15 @@ def main() -> None:
                         {**base_defaults, "condition_tree": ind["condition_tree"], "direction": ind["direction"]}
                         for ind in population
                     ]
-                    generation_results = run_batch(executor, task_params, id_offset=next_id)
+                    generation_results = run_batch(
+                        executor,
+                        task_params,
+                        id_offset=next_id,
+                        progress_base=(generation - 1) * args.population,
+                        progress_total=args.population * args.generations,
+                        generation=generation,
+                        generations_total=args.generations,
+                    )
                     next_id += len(population)
                     results.extend(generation_results)
 
