@@ -16,7 +16,7 @@ export default function EquityCurveChart({ points, symbol }: Props) {
 
   return (
     <div>
-      <div className="mb-1 text-xs font-semibold text-gray-300">累積Pips</div>
+      <div className="mb-1 text-center text-lg font-semibold text-gray-300">累積Pips</div>
       <Plot
         data={[
           {

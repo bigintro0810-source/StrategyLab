@@ -102,7 +102,7 @@ export default function CompareView({ entries, emptyMessage, indicators }: Props
       </div>
 
       <div className="glass-panel rounded-2xl p-4">
-        <div className="mb-1 text-xs font-semibold text-gray-300">累積Pips</div>
+        <div className="mb-1 text-center text-lg font-semibold text-gray-300">累積Pips</div>
         <Plot
           data={entries.map((entry, i) => ({
             x: entry.equity_curve.map((p) => p.exit_time),

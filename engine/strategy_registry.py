@@ -25,6 +25,12 @@ SNAPSHOT_FILES = [
     "trade_log.csv",
     "equity_curve.csv",
     "ranking_total.csv",
+    # 年別成績/月別成績/安定度タブ(api_server.pyの
+    # GET /api/strategies/{id}/resultsが読む)用 - 以前はここに無く、
+    # 保存済みストラテジーのそれらのタブが常に空になっていた。
+    "yearly_analysis.csv",
+    "monthly_analysis.csv",
+    "stability_analysis.csv",
 ]
 
 

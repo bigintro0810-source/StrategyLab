@@ -70,7 +70,7 @@ export default function CompositeDetail({ inputs, pendingCount }: Props) {
           <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
         ) : (
           <>
-            <div className="mb-1 text-xs font-semibold text-gray-300">累積Pips</div>
+            <div className="mb-1 text-center text-lg font-semibold text-gray-300">累積Pips</div>
             <Plot
               data={[
                 {

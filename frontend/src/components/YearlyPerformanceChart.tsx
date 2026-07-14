@@ -14,7 +14,7 @@ export default function YearlyPerformanceChart({ rows }: Props) {
 
   return (
     <div>
-      <div className="mb-1 text-xs font-semibold text-gray-300">年別損益(pips)</div>
+      <div className="mb-1 text-center text-lg font-semibold text-gray-300">年別Pips</div>
       <Plot
         data={[
           {
