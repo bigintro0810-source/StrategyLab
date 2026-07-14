@@ -5,6 +5,8 @@ import type { IndicatorInfo, RankingRow } from '../types'
 
 interface RowMeta {
   isChecked: boolean
+  isCompareChecked: boolean
+  isCompositeChecked: boolean
   isSaved: boolean
   isFavorite: boolean
   isPending: boolean
@@ -18,6 +20,8 @@ interface Props {
   rowMeta: Record<number, RowMeta>
   onRenameRow: (rank: number, name: string) => void
   onToggleChecked: (rank: number) => void
+  onToggleCompare: (rank: number) => void
+  onToggleComposite: (rank: number) => void
   onBookmark: (rank: number) => void
   onFavorite: (rank: number) => void
   indicators: IndicatorInfo[]
@@ -38,9 +42,8 @@ interface Props {
 // なので数値ソートが効かない)ため、この2列だけクリックでの並び替えを禁止する。
 const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['rank', 'symbol', 'condition_tree']
 
-// '名称'・'通貨/時間足'列(どちらもNameCell/専用セルで描画)だけこの画面
-// 固有 - 残りの指標列はライブラリ画面と共通のbuildMetricColumns
-// (rankingColumns.ts)から取る。
+// 名称・通貨/時間足列(専用セルで描画)だけこの画面固有 - 残りの指標列は
+// ライブラリ画面と共通のbuildMetricColumns(rankingColumns.ts)から取る。
 function buildColumns(indicators: IndicatorInfo[]): MetricColumn[] {
   return [
     { key: 'rank', label: '名称' },
@@ -74,26 +77,16 @@ function resultKey(row: RankingRow): string {
   return `${metricPart}::${treePart}`
 }
 
-// 名称セル: チェックボックス(ストラテジー詳細タブに表示)+クリックで
-// インライン編集できる名称+🔖(保存済みストラテジー)+⭐(お気に入り)。
-function NameCell({
+// 名称セル: クリックでインライン編集できる名称のみ(詳細/比較/合成の
+// チェックボックスと🔖/⭐は専用の列に分離済み - renderCells参照)。
+function NameText({
   rank,
   name,
-  meta,
-  disabled,
   onRename,
-  onToggleChecked,
-  onBookmark,
-  onFavorite,
 }: {
   rank: number
   name: string
-  meta: RowMeta
-  disabled: boolean
   onRename: (rank: number, name: string) => void
-  onToggleChecked: (rank: number) => void
-  onBookmark: (rank: number) => void
-  onFavorite: (rank: number) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
@@ -104,72 +97,39 @@ function NameCell({
     if (trimmed && trimmed !== name) onRename(rank, trimmed)
   }
 
-  return (
-    <div className="flex items-center gap-1.5">
+  if (editing) {
+    return (
       <input
-        type="checkbox"
-        checked={meta.isChecked}
-        disabled={disabled}
-        onChange={() => onToggleChecked(rank)}
-      />
-      {editing ? (
-        <input
-          autoFocus
-          className="glass-input w-32 rounded px-1 py-0.5 text-xs"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            // IME変換確定のEnter(isComposing)はリネームの確定に使わない -
-            // 日本語入力中に変換確定のEnterを押しただけで未完成の文字列が
-            // 送信されてしまうのを防ぐ。
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit()
-            if (e.key === 'Escape') {
-              setDraft(name)
-              setEditing(false)
-            }
-          }}
-        />
-      ) : (
-        <span
-          className="cursor-pointer whitespace-nowrap hover:underline"
-          title="クリックして名称を変更"
-          onClick={() => {
+        autoFocus
+        className="glass-input w-32 rounded px-1 py-0.5 text-xs"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          // IME変換確定のEnter(isComposing)はリネームの確定に使わない -
+          // 日本語入力中に変換確定のEnterを押しただけで未完成の文字列が
+          // 送信されてしまうのを防ぐ。
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit()
+          if (e.key === 'Escape') {
             setDraft(name)
-            setEditing(true)
-          }}
-        >
-          {name}
-        </span>
-      )}
-      {/* 🔖はカラー絵文字グリフなのでCSSのtext-colorでは色が変わらない(常に
-          その絵文字本来の色で描画される) - Tailwindのtext-amber-400/
-          text-gray-600切り替えでは未保存/保存済みの見分けが一切つかなかった
-          実害があったため、ピクセル単位で効くgrayscaleフィルター+opacityで
-          未保存=グレーアウト、保存済み=フルカラーを表現する(⭐側は
-          FavoriteButton.tsxに切り出し済み)。 */}
-      <button
-        type="button"
-        disabled={disabled || meta.isPending}
-        onClick={() => onBookmark(rank)}
-        title={meta.isPending ? '保存中…' : meta.isSaved ? 'クリックしてライブラリから削除' : '保存済みストラテジーに追加'}
-        className={`disabled:opacity-40 transition-all ${
-          meta.isPending
-            ? 'grayscale animate-pulse opacity-60'
-            : meta.isSaved
-              ? 'grayscale-0 opacity-100'
-              : 'grayscale opacity-40 hover:opacity-70'
-        }`}
-      >
-        🔖
-      </button>
-      <FavoriteButton
-        isFavorite={meta.isFavorite}
-        isPending={meta.isPending}
-        disabled={disabled}
-        onClick={() => onFavorite(rank)}
+            setEditing(false)
+          }
+        }}
       />
-    </div>
+    )
+  }
+
+  return (
+    <span
+      className="cursor-pointer whitespace-nowrap hover:underline"
+      title="クリックして名称を変更"
+      onClick={() => {
+        setDraft(name)
+        setEditing(true)
+      }}
+    >
+      {name}
+    </span>
   )
 }
 
@@ -181,6 +141,8 @@ export default function RankingTable({
   rowMeta,
   onRenameRow,
   onToggleChecked,
+  onToggleCompare,
+  onToggleComposite,
   onBookmark,
   onFavorite,
   indicators,
@@ -227,22 +189,22 @@ export default function RankingTable({
     return sortAsc ? av - bv : bv - av
   })
 
+  const emptyMeta: RowMeta = {
+    isChecked: false,
+    isCompareChecked: false,
+    isCompositeChecked: false,
+    isSaved: false,
+    isFavorite: false,
+    isPending: false,
+  }
+
   const renderCells = (row: RankingRow) => {
     const rank = Number(row.rank)
     return columns.map((col) => {
       if (col.key === 'rank') {
         return (
-          <td key="rank" className="px-2 py-1">
-            <NameCell
-              rank={rank}
-              name={names[rank] ?? `Strat${rank}`}
-              meta={rowMeta[rank] ?? { isChecked: false, isSaved: false, isFavorite: false, isPending: false }}
-              disabled={jobId === null}
-              onRename={onRenameRow}
-              onToggleChecked={onToggleChecked}
-              onBookmark={onBookmark}
-              onFavorite={onFavorite}
-            />
+          <td key="rank" className="whitespace-nowrap px-2 py-1">
+            <NameText rank={rank} name={names[rank] ?? `Strat${rank}`} onRename={onRenameRow} />
           </td>
         )
       }
@@ -263,7 +225,7 @@ export default function RankingTable({
           className={
             col.key === 'condition_tree'
               ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
-              : `px-2 py-1 ${colorClass}`
+              : `whitespace-nowrap px-2 py-1 ${colorClass}`
           }
         >
           {text}
@@ -285,7 +247,8 @@ export default function RankingTable({
           scrollTopを復元し、アンマウント時(ref callbackがnullで呼ばれる
           瞬間)にその時点のscrollTopを同じrefへ書き戻す - DOM要素の
           プロパティは要素がツリーから外れた後も読めるので、scrollイベント
-          の発火有無に頼らず確実に値を拾える。 */}
+          の発火有無に頼らず確実に値を拾える。overflow-autoなので縦だけで
+          なく、列が多くて幅が収まらない時は横にもスクロールできる。 */}
       <div
         ref={(el) => {
           if (el) {
@@ -299,11 +262,16 @@ export default function RankingTable({
         onScroll={(e) => {
           scrollTopRef.current = e.currentTarget.scrollTop
         }}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-auto"
       >
-        <table className="w-full text-left text-sm">
+        <table className="min-w-full text-left text-sm">
           <thead className="sticky top-0 z-10 bg-[#0c0d17]">
             <tr className="border-b border-white/10 text-gray-400">
+              <th className="whitespace-nowrap px-2 py-1 font-medium">詳細</th>
+              <th className="whitespace-nowrap px-2 py-1 font-medium">比較</th>
+              <th className="whitespace-nowrap px-2 py-1 font-medium">合成</th>
+              <th className="px-2 py-1 font-medium" />
+              <th className="px-2 py-1 font-medium" />
               {columns.map((col) => {
                 const sortable = !UNSORTABLE_KEYS.includes(col.key)
                 return (
@@ -323,16 +291,69 @@ export default function RankingTable({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row, i) => (
-              <tr
-                key={i}
-                className={`border-b border-white/5 hover:bg-white/[0.04] ${
-                  selectedRank != null && Number(row.rank) === selectedRank ? 'bg-emerald-500/10' : ''
-                }`}
-              >
-                {renderCells(row)}
-              </tr>
-            ))}
+            {sorted.map((row, i) => {
+              const rank = Number(row.rank)
+              const meta = rowMeta[rank] ?? emptyMeta
+              const disabled = jobId === null
+              return (
+                <tr
+                  key={i}
+                  className={`border-b border-white/5 hover:bg-white/[0.04] ${
+                    selectedRank != null && rank === selectedRank ? 'bg-emerald-500/10' : ''
+                  }`}
+                >
+                  <td className="px-2 py-1">
+                    <input type="checkbox" checked={meta.isChecked} disabled={disabled} onChange={() => onToggleChecked(rank)} />
+                  </td>
+                  <td className="px-2 py-1">
+                    <input
+                      type="checkbox"
+                      checked={meta.isCompareChecked}
+                      disabled={disabled}
+                      onChange={() => onToggleCompare(rank)}
+                    />
+                  </td>
+                  <td className="px-2 py-1">
+                    <input
+                      type="checkbox"
+                      checked={meta.isCompositeChecked}
+                      disabled={disabled}
+                      onChange={() => onToggleComposite(rank)}
+                    />
+                  </td>
+                  <td className="px-2 py-1">
+                    {/* 🔖はカラー絵文字グリフなのでCSSのtext-colorでは色が変わらない
+                        (常にその絵文字本来の色で描画される) - grayscaleフィルター+
+                        opacityで未保存=グレーアウト、保存済み=フルカラーを表現する
+                        (⭐側はFavoriteButton.tsxに切り出し済み)。 */}
+                    <button
+                      type="button"
+                      disabled={disabled || meta.isPending}
+                      onClick={() => onBookmark(rank)}
+                      title={meta.isPending ? '保存中…' : meta.isSaved ? 'クリックしてライブラリから削除' : '保存済みストラテジーに追加'}
+                      className={`disabled:opacity-40 transition-all ${
+                        meta.isPending
+                          ? 'grayscale animate-pulse opacity-60'
+                          : meta.isSaved
+                            ? 'grayscale-0 opacity-100'
+                            : 'grayscale opacity-40 hover:opacity-70'
+                      }`}
+                    >
+                      🔖
+                    </button>
+                  </td>
+                  <td className="px-2 py-1">
+                    <FavoriteButton
+                      isFavorite={meta.isFavorite}
+                      isPending={meta.isPending}
+                      disabled={disabled}
+                      onClick={() => onFavorite(rank)}
+                    />
+                  </td>
+                  {renderCells(row)}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

@@ -23,6 +23,9 @@ interface Props {
   // ストラテジー詳細タブ(App.tsx側のlibraryOpenIds)に開いているid一覧。
   openIds: string[]
   onToggleChecked: (id: string) => void
+  // 合成タブ(App.tsx側のlibraryCompositeIds)でチェックしたid一覧。
+  compositeIds: string[]
+  onToggleComposite: (id: string) => void
 }
 
 // entry.metrics(strategy_registry.pyのMETRIC_COLUMNS)はexpected_valueを
@@ -49,28 +52,17 @@ function toMetricRow(entry: StrategyDetail): MetricRowLike {
 }
 
 // ランキング一覧(RankingTable.tsx)の「名称」セルと同じ見た目・操作:
-// チェックボックス(ストラテジー詳細タブに表示)+クリックで名称をインライン
-// 編集+🔖(常に保存済みなので押すとライブラリから削除)+⭐(お気に入り)。
-function NameCell({
+// クリックで名称をインライン編集。詳細/比較/合成のチェックボックスと
+// 🔖(常に保存済みなので押すとライブラリから削除)/⭐は専用の列に分離済み
+// (renderの各<td>参照)。
+function NameText({
   id,
   name,
-  isChecked,
-  isFavorite,
-  isFavoritePending,
-  onToggleChecked,
   onRename,
-  onDelete,
-  onToggleFavorite,
 }: {
   id: string
   name: string
-  isChecked: boolean
-  isFavorite: boolean
-  isFavoritePending: boolean
-  onToggleChecked: (id: string) => void
   onRename: (id: string, name: string) => void
-  onDelete: (id: string) => void
-  onToggleFavorite: (id: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
@@ -81,46 +73,36 @@ function NameCell({
     if (trimmed && trimmed !== name) onRename(id, trimmed)
   }
 
-  return (
-    <div className="flex items-center gap-1.5">
-      <input type="checkbox" checked={isChecked} onChange={() => onToggleChecked(id)} />
-      {editing ? (
-        <input
-          autoFocus
-          className="glass-input w-32 rounded px-1 py-0.5 text-xs"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit()
-            if (e.key === 'Escape') {
-              setDraft(name)
-              setEditing(false)
-            }
-          }}
-        />
-      ) : (
-        <span
-          className="cursor-pointer whitespace-nowrap hover:underline"
-          title="クリックして名称を変更"
-          onClick={() => {
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="glass-input w-32 rounded px-1 py-0.5 text-xs"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit()
+          if (e.key === 'Escape') {
             setDraft(name)
-            setEditing(true)
-          }}
-        >
-          {name}
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={() => onDelete(id)}
-        title="クリックしてライブラリから削除"
-        className="grayscale-0 opacity-100 transition-all hover:opacity-70"
-      >
-        🔖
-      </button>
-      <FavoriteButton isFavorite={isFavorite} isPending={isFavoritePending} onClick={() => onToggleFavorite(id)} />
-    </div>
+            setEditing(false)
+          }
+        }}
+      />
+    )
+  }
+
+  return (
+    <span
+      className="cursor-pointer whitespace-nowrap hover:underline"
+      title="クリックして名称を変更"
+      onClick={() => {
+        setDraft(name)
+        setEditing(true)
+      }}
+    >
+      {name}
+    </span>
   )
 }
 
@@ -134,6 +116,8 @@ export default function LibraryScreen({
   indicators,
   openIds,
   onToggleChecked,
+  compositeIds,
+  onToggleComposite,
 }: Props) {
   const queryClient = useQueryClient()
   const [tagDraft, setTagDraft] = useState<Record<string, string>>({})
@@ -218,15 +202,19 @@ export default function LibraryScreen({
           {favoritesOnly ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
         </div>
       ) : (
+        // 幅がPF〜CAGR等で収まりきらない時は列を潰さず横スクロールさせる
+        // (min-w-fullで自然幅を確保し、はみ出た分をこの枠のoverflow-autoで)。
         <div className="overflow-auto">
-          <table className="w-full text-left text-sm">
+          <table className="min-w-full text-left text-sm">
             <thead>
               <tr className="border-b border-white/10 text-gray-400">
-                <th className="px-2 py-1 font-medium" title="比較に追加">
-                  比較
-                </th>
-                <th className="px-2 py-1 font-medium">名称</th>
-                <th className="px-2 py-1 font-medium">通貨/時間足</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">詳細</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">比較</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">合成</th>
+                <th className="px-2 py-1 font-medium" />
+                <th className="px-2 py-1 font-medium" />
+                <th className="whitespace-nowrap px-2 py-1 font-medium">名称</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">通貨/時間足</th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
@@ -240,36 +228,50 @@ export default function LibraryScreen({
                     {sortKey === col.key && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
                   </th>
                 ))}
-                <th className="px-2 py-1 font-medium">タグ</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">タグ</th>
                 <th className="px-2 py-1 font-medium" />
               </tr>
             </thead>
             <tbody>
               {sorted.map((s) => {
                 const row = toMetricRow(s)
+                const isFavoritePending = favoriteMutation.isPending && favoriteMutation.variables === s.id
                 return (
                   <tr key={s.id} className="border-b border-white/5 hover:bg-white/[0.04]">
                     <td className="px-2 py-1">
+                      <input type="checkbox" checked={openIds.includes(s.id)} onChange={() => onToggleChecked(s.id)} />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="checkbox" checked={compareIds.includes(s.id)} onChange={() => onToggleCompare(s.id)} />
+                    </td>
+                    <td className="px-2 py-1">
                       <input
                         type="checkbox"
-                        checked={compareIds.includes(s.id)}
-                        onChange={() => onToggleCompare(s.id)}
+                        checked={compositeIds.includes(s.id)}
+                        onChange={() => onToggleComposite(s.id)}
                       />
                     </td>
                     <td className="px-2 py-1">
-                      <NameCell
-                        id={s.id}
-                        name={s.name}
-                        isChecked={openIds.includes(s.id)}
+                      <button
+                        type="button"
+                        onClick={() => deleteMutation.mutate(s.id)}
+                        title="クリックしてライブラリから削除"
+                        className="grayscale-0 opacity-100 transition-all hover:opacity-70"
+                      >
+                        🔖
+                      </button>
+                    </td>
+                    <td className="px-2 py-1">
+                      <FavoriteButton
                         isFavorite={s.favorite}
-                        isFavoritePending={favoriteMutation.isPending && favoriteMutation.variables === s.id}
-                        onToggleChecked={onToggleChecked}
-                        onRename={(id, name) => renameMutation.mutate({ id, name })}
-                        onDelete={(id) => deleteMutation.mutate(id)}
-                        onToggleFavorite={(id) => favoriteMutation.mutate(id)}
+                        isPending={isFavoritePending}
+                        onClick={() => favoriteMutation.mutate(s.id)}
                       />
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="whitespace-nowrap px-2 py-1">
+                      <NameText id={s.id} name={s.name} onRename={(id, name) => renameMutation.mutate({ id, name })} />
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1">
                       {s.symbol}/{s.timeframe}
                     </td>
                     {columns.map((col) => {
@@ -283,7 +285,7 @@ export default function LibraryScreen({
                           className={
                             col.key === 'condition_tree'
                               ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
-                              : `px-2 py-1 ${colorClass}`
+                              : `whitespace-nowrap px-2 py-1 ${colorClass}`
                           }
                         >
                           {text}

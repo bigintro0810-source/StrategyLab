@@ -15,7 +15,9 @@ import {
   saveRankingRow,
   stopBacktest,
   toggleStrategyFavorite,
+  type CompareEntry,
 } from './api'
+import type { CompositeInput } from './compositeUtils'
 import type {
   BacktestResults,
   ConditionNode,
@@ -41,6 +43,8 @@ import type { StrategyTabData } from './components/StrategyDetailTabs'
 import LibraryScreen from './components/LibraryScreen'
 import LibraryDetailTabs, { type LibraryTabData } from './components/LibraryDetailTabs'
 import CompareScreen from './components/CompareScreen'
+import CompareView from './components/CompareView'
+import CompositeDetail from './components/CompositeDetail'
 import CsvImportScreen from './components/CsvImportScreen'
 import DataValidatorScreen from './components/DataValidatorScreen'
 import SettingsScreen from './components/SettingsScreen'
@@ -120,6 +124,8 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
     subTabs: [
       { id: 'ranking', label: 'ランキング' },
       { id: 'detail', label: 'ストラテジー詳細' },
+      { id: 'compare', label: '比較' },
+      { id: 'composite', label: '合成' },
     ],
   },
   {
@@ -140,6 +146,7 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
       { id: 'favorites', label: 'お気に入り' },
       { id: 'detail', label: 'ストラテジー詳細' },
       { id: 'compare', label: '比較' },
+      { id: 'composite', label: '合成' },
       { id: 'export', label: 'エクスポート' },
     ],
   },
@@ -432,6 +439,14 @@ export default function App() {
   const [focusedRank, setFocusedRank] = useState<number | null>(null)
   const [tabJobIds, setTabJobIds] = useState<Record<number, string>>({})
 
+  // 結果>比較・結果>合成でチェックした行(それぞれ独立、詳細タブのチェックとは
+  // 別)。どちらも比較/合成に元データ(equity_curve/trade_log)が要るため、
+  // 詳細タブと同じrerunの仕組み(tabJobIds)を共有して使う - 3つのどれかで
+  // 既にrerun済みのrankなら再送しない(下のtoggleCompareRank/
+  // toggleCompositeRank参照)。
+  const [compareRanks, setCompareRanks] = useState<number[]>([])
+  const [compositeRanks, setCompositeRanks] = useState<number[]>([])
+
   // ライブラリ画面(保存済みストラテジー/お気に入り)版のストラテジー詳細タブ。上の
   // openTabRanks/visibleRanksと同じ仕組みだが、こちらは再計算ジョブが要らない
   // (保存時のスナップショットをそのまま読むだけ - fetchStrategyResults)ため
@@ -439,6 +454,9 @@ export default function App() {
   // なので、新しいバックテストが始まってもリセットしない。
   const [libraryOpenIds, setLibraryOpenIds] = useState<string[]>([])
   const [libraryVisibleIds, setLibraryVisibleIds] = useState<string[]>([])
+  // ライブラリ>合成でチェックしたid(比較は既存のcompareIds/CompareScreenを
+  // そのまま使うので合成専用の状態だけ追加する)。
+  const [libraryCompositeIds, setLibraryCompositeIds] = useState<string[]>([])
 
   // 各行の表示名。リネームした行だけcustomNamesに入り、それ以外はrunDate(この
   // ジョブの実行日時)+rank(6桁連番)から機械的に組み立てる既定名を使う
@@ -827,8 +845,14 @@ export default function App() {
     onSuccess: (data, rank) => setTabJobIds((prev) => ({ ...prev, [rank]: data.job_id })),
   })
 
+  // 詳細タブ・比較・合成のどれかでチェックされた行はすべて同じ「1行だけ
+  // 再計算」ジョブ(tabJobIds)を共有する - 同じrankを複数の用途で使っても
+  // rerunは1回で済む。クエリ配列はこのunion順で構築し、strategyTabs等は
+  // rankをキーにdetailRanksでの位置を引いて参照する。
+  const detailRanks = Array.from(new Set([...openTabRanks, ...compareRanks, ...compositeRanks]))
+
   const tabStatusQueries = useQueries({
-    queries: openTabRanks.map((rank) => ({
+    queries: detailRanks.map((rank) => ({
       queryKey: ['backtest-status', tabJobIds[rank]],
       queryFn: () => fetchBacktestStatus(tabJobIds[rank] as string),
       enabled: tabJobIds[rank] != null,
@@ -841,7 +865,7 @@ export default function App() {
   })
 
   const tabResultsQueries = useQueries({
-    queries: openTabRanks.map((rank, i) => ({
+    queries: detailRanks.map((rank, i) => ({
       queryKey: ['backtest-results', tabJobIds[rank]],
       queryFn: () => fetchBacktestResults(tabJobIds[rank] as string),
       enabled: tabJobIds[rank] != null && tabStatusQueries[i]?.data?.status === 'done',
@@ -895,10 +919,23 @@ export default function App() {
     if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
   }
 
+  const toggleCompareRank = (rank: number) => {
+    setCompareRanks((prev) => (prev.includes(rank) ? prev.filter((r) => r !== rank) : [...prev, rank]))
+    if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+  }
+
+  const toggleCompositeRank = (rank: number) => {
+    setCompositeRanks((prev) => (prev.includes(rank) ? prev.filter((r) => r !== rank) : [...prev, rank]))
+    if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+  }
+
   // ライブラリ版ストラテジー詳細タブ(結果側のtoggleRowChecked等と同じ仕組み
   // をid文字列版で - 詳しくはlibraryOpenIds/libraryVisibleIdsの宣言部参照)。
+  // 合成タブもtrade_logが要るので同じfetchStrategyResultsを共有する
+  // (比較タブは/api/strategies/compareが別途equity_curveを返すので対象外)。
+  const libraryDetailIds = Array.from(new Set([...libraryOpenIds, ...libraryCompositeIds]))
   const libraryResultsQueries = useQueries({
-    queries: libraryOpenIds.map((id) => ({
+    queries: libraryDetailIds.map((id) => ({
       queryKey: ['strategy-results', id],
       queryFn: () => fetchStrategyResults(id),
     })),
@@ -916,6 +953,10 @@ export default function App() {
     }
     setLibraryOpenIds((prev) => (prev.length >= MAX_DETAIL_TABS ? prev : [...prev, id]))
     setLibraryVisibleIds((prev) => (prev.length === 0 ? [id] : prev))
+  }
+
+  const toggleLibraryComposite = (id: string) => {
+    setLibraryCompositeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
   const mergeLibraryTabs = (draggedId: string, targetId: string) => {
@@ -986,9 +1027,9 @@ export default function App() {
 
   // ライブラリ版ストラテジー詳細タブの表示データ(strategyTabs/AutoExploration
   // Detailと同じ形だが、rerunジョブではなく保存済みスナップショットから読む)。
-  const libraryStrategyTabs: LibraryTabData[] = libraryOpenIds.map((id, i) => {
+  const libraryStrategyTabs: LibraryTabData[] = libraryOpenIds.map((id) => {
     const entry = (strategiesQuery.data ?? []).find((s) => s.id === id)
-    const query = libraryResultsQueries[i]
+    const query = libraryResultsQueries[libraryDetailIds.indexOf(id)]
     const trades = Number(entry?.metrics.trades) || 0
     const bestRow: RankingRow | undefined = entry
       ? {
@@ -1021,6 +1062,22 @@ export default function App() {
       isFavorite: entry?.favorite ?? false,
     }
   })
+
+  // ライブラリ>合成の表示データ(結果側のresultsCompositeInputsと同じ考え方)。
+  const libraryCompositeInputs: CompositeInput[] = libraryCompositeIds
+    .map((id): CompositeInput | null => {
+      const entry = (strategiesQuery.data ?? []).find((s) => s.id === id)
+      const query = libraryResultsQueries[libraryDetailIds.indexOf(id)]
+      if (!query?.data) return null
+      return {
+        id,
+        name: entry?.name ?? id,
+        symbol: entry?.symbol,
+        tradeLog: query.data.trade_log ?? [],
+      }
+    })
+    .filter((input): input is CompositeInput => input != null)
+  const libraryCompositePendingCount = libraryCompositeIds.length - libraryCompositeInputs.length
 
   const saveJobEntries = Object.entries(saveJobIds)
 
@@ -1129,7 +1186,8 @@ export default function App() {
   // tabResultsQueries above). ranking_total itself always comes from the
   // original `results` (a rerun doesn't recompute the whole ranking, just
   // one row's own trade_log/equity_curve - see rerun_ranking_row.py).
-  const strategyTabs: StrategyTabData[] = openTabRanks.map((rank, i) => {
+  const strategyTabs: StrategyTabData[] = openTabRanks.map((rank) => {
+    const i = detailRanks.indexOf(rank)
     const status = tabStatusQueries[i]?.data?.status
     const isLoading = tabJobIds[rank] != null && !['done', 'error'].includes(status ?? 'queued')
     // Without this check, a failed row-rerun left isLoading permanently true
@@ -1152,18 +1210,69 @@ export default function App() {
 
   // RankingTableの名称セル/保存状態表示用に、全行分をまとめて解決しておく。
   const rankingNames: Record<number, string> = {}
-  const rankingRowMeta: Record<number, { isChecked: boolean; isSaved: boolean; isFavorite: boolean; isPending: boolean }> = {}
+  const rankingRowMeta: Record<
+    number,
+    { isChecked: boolean; isCompareChecked: boolean; isCompositeChecked: boolean; isSaved: boolean; isFavorite: boolean; isPending: boolean }
+  > = {}
   for (const row of results?.ranking_total ?? []) {
     const rank = Number(row.rank)
     rankingNames[rank] = resolveName(rank)
     const meta = savedMeta[rank]
     rankingRowMeta[rank] = {
       isChecked: openTabRanks.includes(rank),
+      isCompareChecked: compareRanks.includes(rank),
+      isCompositeChecked: compositeRanks.includes(rank),
       isSaved: meta != null,
       isFavorite: meta?.favorite ?? false,
       isPending: isRowSavePending(rank),
     }
   }
+
+  // 結果>比較・結果>合成の表示データ。どちらもdetailRanksの位置からtab
+  // ResultsQueriesを引く(rerunが終わっていない行はequity_curve/trade_logが
+  // 空のまま - CompareView/CompositeDetailはそれぞれ空配列を許容する)。
+  const resultsCompareEntries: CompareEntry[] = compareRanks
+    .map((rank) => results?.ranking_total?.find((row) => Number(row.rank) === rank))
+    .filter((row): row is RankingRow => row != null)
+    .map((row) => {
+      const rank = Number(row.rank)
+      const detail = tabResultsQueries[detailRanks.indexOf(rank)]?.data
+      return {
+        id: String(rank),
+        name: rankingNames[rank] ?? `Strat${rank}`,
+        symbol: (row.symbol as string) ?? symbol,
+        timeframe: statusQuery.data?.timeframe ?? timeframe,
+        favorite: savedMeta[rank]?.favorite ?? false,
+        tags: [],
+        metrics: {
+          net_profit: Number(row.net_profit),
+          profit_factor: Number(row.profit_factor),
+          max_dd: Number(row.max_dd),
+          win_rate: Number(row.win_rate),
+          trades: Number(row.trades),
+          recovery_factor: Number(row.recovery_factor),
+          sharpe_ratio: Number(row.sharpe_ratio),
+          sortino_ratio: Number(row.sortino_ratio),
+          calmar_ratio: Number(row.calmar_ratio),
+        },
+        equity_curve: detail?.equity_curve?.map((p) => p.equity) ?? [],
+      }
+    })
+
+  const resultsCompositeInputs: CompositeInput[] = compositeRanks
+    .map((rank): CompositeInput | null => {
+      const row = results?.ranking_total?.find((r) => Number(r.rank) === rank)
+      const detail = tabResultsQueries[detailRanks.indexOf(rank)]?.data
+      if (!detail) return null
+      return {
+        id: String(rank),
+        name: rankingNames[rank] ?? `Strat${rank}`,
+        symbol: (row?.symbol as string) ?? symbol,
+        tradeLog: detail.trade_log ?? [],
+      }
+    })
+    .filter((input): input is CompositeInput => input != null)
+  const resultsCompositePendingCount = compositeRanks.length - resultsCompositeInputs.length
 
   // Back-compat scalars for ValidationScreen/ReportScreen, which only ever
   // needed "the one currently-relevant rank/row" and know nothing about
@@ -1246,6 +1355,8 @@ export default function App() {
             indicators={indicatorsQuery.data ?? []}
             openIds={libraryOpenIds}
             onToggleChecked={toggleLibraryChecked}
+            compositeIds={libraryCompositeIds}
+            onToggleComposite={toggleLibraryComposite}
           />
         )}
         {mainTab === 'library' && subTab === 'detail' && (
@@ -1262,6 +1373,9 @@ export default function App() {
           />
         )}
         {mainTab === 'library' && subTab === 'compare' && <CompareScreen ids={compareIds} />}
+        {mainTab === 'library' && subTab === 'composite' && (
+          <CompositeDetail inputs={libraryCompositeInputs} pendingCount={libraryCompositePendingCount} />
+        )}
 
         {mainTab === 'validation' && (
           <ValidationScreen
@@ -1272,7 +1386,17 @@ export default function App() {
           />
         )}
 
-        {mainTab === 'results' && (
+        {mainTab === 'results' && subTab === 'compare' && (
+          <CompareView
+            entries={resultsCompareEntries}
+            emptyMessage="比較対象がありません。ランキング一覧で「比較」のチェックを2件以上付けてください。"
+          />
+        )}
+        {mainTab === 'results' && subTab === 'composite' && (
+          <CompositeDetail inputs={resultsCompositeInputs} pendingCount={resultsCompositePendingCount} />
+        )}
+
+        {mainTab === 'results' && (subTab === 'ranking' || subTab === 'detail') && (
           <ResultsScreen
             subTab={subTab}
             results={results}
@@ -1293,6 +1417,8 @@ export default function App() {
             rankingScrollTopRef={rankingScrollTopRef}
             onBookmark={handleBookmark}
             onFavorite={handleFavorite}
+            onToggleCompare={toggleCompareRank}
+            onToggleComposite={toggleCompositeRank}
           />
         )}
 

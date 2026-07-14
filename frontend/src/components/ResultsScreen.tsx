@@ -4,6 +4,8 @@ import type { BacktestResults, IndicatorInfo } from '../types'
 
 interface RowMeta {
   isChecked: boolean
+  isCompareChecked: boolean
+  isCompositeChecked: boolean
   isSaved: boolean
   isFavorite: boolean
   isPending: boolean
@@ -26,6 +28,8 @@ interface Props {
   rowMeta: Record<number, RowMeta>
   focusedRank: number | null
   onToggleChecked: (rank: number) => void
+  onToggleCompare: (rank: number) => void
+  onToggleComposite: (rank: number) => void
   onBookmark: (rank: number) => void
   onFavorite: (rank: number) => void
   rankingScrollTopRef: React.MutableRefObject<number>
@@ -48,6 +52,8 @@ export default function ResultsScreen({
   rowMeta,
   focusedRank,
   onToggleChecked,
+  onToggleCompare,
+  onToggleComposite,
   onBookmark,
   onFavorite,
   rankingScrollTopRef,
@@ -84,6 +90,8 @@ export default function ResultsScreen({
           selectedRank={focusedRank}
           onRenameRow={onRenameRow}
           onToggleChecked={onToggleChecked}
+          onToggleCompare={onToggleCompare}
+          onToggleComposite={onToggleComposite}
           onBookmark={onBookmark}
           onFavorite={onFavorite}
           scrollTopRef={rankingScrollTopRef}
