@@ -9,6 +9,8 @@ import {
   fetchSaveResult,
   fetchStrategies,
   fetchStrategyDetail,
+  fetchStrategyResults,
+  renameStrategy,
   rerunRankingRow,
   saveRankingRow,
   stopBacktest,
@@ -24,6 +26,7 @@ import type {
   OptimizeField,
   ParamRangeConfig,
   PartialTpLevel,
+  RankingRow,
 } from './types'
 import { buildConditionTreeVariants, collectOptimizableConditions, optionIsValid } from './conditionTreeUtils'
 import { buildRangeValues } from './rangeUtils'
@@ -36,6 +39,7 @@ import ValidationScreen from './components/ValidationScreen'
 import ResultsScreen from './components/ResultsScreen'
 import type { StrategyTabData } from './components/StrategyDetailTabs'
 import LibraryScreen from './components/LibraryScreen'
+import LibraryDetailTabs, { type LibraryTabData } from './components/LibraryDetailTabs'
 import CsvImportScreen from './components/CsvImportScreen'
 import DataValidatorScreen from './components/DataValidatorScreen'
 import SettingsScreen from './components/SettingsScreen'
@@ -133,6 +137,7 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
     subTabs: [
       { id: 'saved', label: '保存済み戦略' },
       { id: 'favorites', label: 'お気に入り' },
+      { id: 'detail', label: 'ストラテジー詳細' },
       { id: 'export', label: 'エクスポート' },
     ],
   },
@@ -159,6 +164,14 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
 
 const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD', 'XAUUSD', 'XAGUSD']
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
+
+// api_server.pyのJOBSは常駐プロセスのメモリ上にしかない(run.batが開く
+// コンソールを閉じるまではプロセス自体は生き続ける - README参照)ため、
+// ブラウザのタブ/ウィンドウだけを閉じて開き直した場合はjobIdさえ覚えて
+// おけば結果はそのまま復元できる。バックエンドプロセスごと再起動された
+// 場合はstatusQueryが404を返すので、その時だけ諦めてnullに戻す
+// (下のuseEffect参照)。
+const JOB_ID_STORAGE_KEY = 'strategylab:jobId'
 
 // ランキング行の既定表示名: 探索を実行した日付 + rank(6桁連番)。
 // 例: runDateが2026-07-14、rank=3 なら "2026/07/14-000003"。
@@ -391,8 +404,15 @@ export default function App() {
   const [symbol, setSymbol] = useState('USDJPY')
   const [timeframe, setTimeframe] = useState('15m')
   const [mode, setMode] = useState('dev')
-  const [jobId, setJobId] = useState<string | null>(null)
+  const [jobId, setJobId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(JOB_ID_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  })
   const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [showRunConfirm, setShowRunConfirm] = useState(false)
 
   // ストラテジー詳細タブの状態。openTabRanks=開いているタブ(最大20、rank自体を
   // IDとして使う - RankingRow.rankは列ソートで表示順が変わっても値は変わらない
@@ -409,6 +429,14 @@ export default function App() {
   const [visibleRanks, setVisibleRanks] = useState<number[]>([])
   const [focusedRank, setFocusedRank] = useState<number | null>(null)
   const [tabJobIds, setTabJobIds] = useState<Record<number, string>>({})
+
+  // ライブラリ画面(保存済み戦略/お気に入り)版のストラテジー詳細タブ。上の
+  // openTabRanks/visibleRanksと同じ仕組みだが、こちらは再計算ジョブが要らない
+  // (保存時のスナップショットをそのまま読むだけ - fetchStrategyResults)ため
+  // tabJobIds相当は無い。idはジョブ内limitedなrankと違って永続的な文字列
+  // なので、新しいバックテストが始まってもリセットしない。
+  const [libraryOpenIds, setLibraryOpenIds] = useState<string[]>([])
+  const [libraryVisibleIds, setLibraryVisibleIds] = useState<string[]>([])
 
   // 各行の表示名。リネームした行だけcustomNamesに入り、それ以外はrunDate(この
   // ジョブの実行日時)+rank(6桁連番)から機械的に組み立てる既定名を使う
@@ -754,6 +782,27 @@ export default function App() {
     refetchIntervalInBackground: true,
   })
 
+  useEffect(() => {
+    try {
+      if (jobId) localStorage.setItem(JOB_ID_STORAGE_KEY, jobId)
+      else localStorage.removeItem(JOB_ID_STORAGE_KEY)
+    } catch {
+      // localStorageが使えない環境(プライベートモード等)でも動作自体は
+      // 継続させる - このタブを閉じるまでは通常通り結果を表示できる。
+    }
+  }, [jobId])
+
+  // ブラウザだけ閉じ直した場合は上のlocalStorageからjobIdが復元されるが、
+  // バックエンドのプロセスごと再起動されていた場合はJOBSが空になっている
+  // ため404が返る - その場合だけ諦めて待機状態に戻す(エラー表示のまま
+  // 固まらないように)。
+  useEffect(() => {
+    if (jobId !== null && statusQuery.isError) {
+      const status = (statusQuery.error as { response?: { status?: number } } | null)?.response?.status
+      if (status === 404) setJobId(null)
+    }
+  }, [statusQuery.isError, statusQuery.error, jobId])
+
   const resultsQuery = useQuery<BacktestResults>({
     queryKey: ['backtest-results', jobId],
     queryFn: () => fetchBacktestResults(jobId as string),
@@ -840,6 +889,47 @@ export default function App() {
     if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
   }
 
+  // ライブラリ版ストラテジー詳細タブ(結果側のtoggleRowChecked等と同じ仕組み
+  // をid文字列版で - 詳しくはlibraryOpenIds/libraryVisibleIdsの宣言部参照)。
+  const libraryResultsQueries = useQueries({
+    queries: libraryOpenIds.map((id) => ({
+      queryKey: ['strategy-results', id],
+      queryFn: () => fetchStrategyResults(id),
+    })),
+  })
+
+  const closeLibraryTab = (id: string) => {
+    setLibraryOpenIds((prev) => prev.filter((x) => x !== id))
+    setLibraryVisibleIds((prev) => prev.filter((x) => x !== id))
+  }
+
+  const toggleLibraryChecked = (id: string) => {
+    if (libraryOpenIds.includes(id)) {
+      closeLibraryTab(id)
+      return
+    }
+    setLibraryOpenIds((prev) => (prev.length >= MAX_DETAIL_TABS ? prev : [...prev, id]))
+    setLibraryVisibleIds((prev) => (prev.length === 0 ? [id] : prev))
+  }
+
+  const mergeLibraryTabs = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return
+    setLibraryVisibleIds((prev) => {
+      const base = prev.includes(targetId) ? prev : [targetId]
+      if (base.includes(draggedId) || base.length >= MAX_VISIBLE_TABS) return base
+      return [...base, draggedId]
+    })
+  }
+
+  const removeLibraryFromVisible = (id: string) => {
+    setLibraryVisibleIds((prev) => prev.filter((x) => x !== id))
+  }
+
+  const renameLibraryMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => renameStrategy(id, name),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
+  })
+
   // 🔖/⭐がクリックされた行をrerun_ranking_row.py --save-as経由でライブラリへ
   // 保存する(rerunRowMutationと同じ「rankごとにジョブを1つ持つ」パターン)。
   const saveRowMutation = useMutation({
@@ -887,6 +977,44 @@ export default function App() {
   for (const s of strategiesQuery.data ?? []) {
     favoriteById[s.id] = s.favorite
   }
+
+  // ライブラリ版ストラテジー詳細タブの表示データ(strategyTabs/AutoExploration
+  // Detailと同じ形だが、rerunジョブではなく保存済みスナップショットから読む)。
+  const libraryStrategyTabs: LibraryTabData[] = libraryOpenIds.map((id, i) => {
+    const entry = (strategiesQuery.data ?? []).find((s) => s.id === id)
+    const query = libraryResultsQueries[i]
+    const trades = Number(entry?.metrics.trades) || 0
+    const bestRow: RankingRow | undefined = entry
+      ? {
+          rank: 0,
+          trades: entry.metrics.trades ?? 0,
+          wins: 0,
+          losses: 0,
+          win_rate: entry.metrics.win_rate ?? 0,
+          net_profit: entry.metrics.net_profit ?? 0,
+          profit_factor: entry.metrics.profit_factor ?? 0,
+          max_dd: entry.metrics.max_dd ?? 0,
+          expected_value: trades > 0 ? (entry.metrics.net_profit ?? 0) / trades : 0,
+          recovery_factor: entry.metrics.recovery_factor ?? 0,
+          sharpe_ratio: entry.metrics.sharpe_ratio ?? 0,
+          sortino_ratio: entry.metrics.sortino_ratio ?? 0,
+          cagr: entry.metrics.cagr ?? 0,
+          calmar_ratio: entry.metrics.calmar_ratio ?? 0,
+          rr: 0,
+          condition_tree: entry.params?.condition_tree ?? undefined,
+          symbol: entry.symbol,
+        }
+      : undefined
+    return {
+      id,
+      name: entry?.name ?? id,
+      bestRow,
+      displayResults: query?.data,
+      isLoading: query?.isLoading ?? false,
+      error: query?.isError ? '結果の読み込みに失敗しました。' : null,
+      isFavorite: entry?.favorite ?? false,
+    }
+  })
 
   const saveJobEntries = Object.entries(saveJobIds)
 
@@ -1109,6 +1237,22 @@ export default function App() {
               setMainTab('results')
               setSubTab('ranking')
             }}
+            indicators={indicatorsQuery.data ?? []}
+            openIds={libraryOpenIds}
+            onToggleChecked={toggleLibraryChecked}
+          />
+        )}
+        {mainTab === 'library' && subTab === 'detail' && (
+          <LibraryDetailTabs
+            openTabs={libraryStrategyTabs}
+            visibleIds={libraryVisibleIds}
+            indicators={indicatorsQuery.data ?? []}
+            onSelectTab={(id) => setLibraryVisibleIds([id])}
+            onCloseTab={closeLibraryTab}
+            onMergeTabs={mergeLibraryTabs}
+            onRemoveFromView={removeLibraryFromVisible}
+            onRenameRow={(id, name) => renameLibraryMutation.mutate({ id, name })}
+            onFavorite={(id) => favoriteToggleMutation.mutate(id)}
           />
         )}
 
@@ -1247,7 +1391,7 @@ export default function App() {
             ) : (
               <button
                 type="button"
-                onClick={() => runMutation.mutate()}
+                onClick={() => (jobId !== null ? setShowRunConfirm(true) : runMutation.mutate())}
                 disabled={runMutation.isPending || (subTab === 'auto' && categories.length === 0)}
                 className="run-button h-9 w-[136px] flex-none rounded-lg text-sm font-semibold text-white transition-shadow disabled:opacity-40"
               >
@@ -1255,7 +1399,12 @@ export default function App() {
               </button>
             )}
             <div className="ml-[35px] min-w-0 flex-1">
-              <AutoExplorationHero progress={statusQuery.data?.progress} isRunning={isRunning} compact />
+              <AutoExplorationHero
+                progress={statusQuery.data?.progress}
+                isRunning={isRunning}
+                stopRequested={statusQuery.data?.stop_requested}
+                compact
+              />
             </div>
             {statusQuery.data?.status === 'done' && statusQuery.data.stopped && (
               <div className="flex-none rounded-lg border border-amber-500/20 bg-amber-950/30 px-2.5 py-1 text-xs text-amber-300">
@@ -2005,6 +2154,36 @@ export default function App() {
                   className="stop-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
                 >
                   {stopMutation.isPending ? '停止中...' : '停止する'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showRunConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
+              <h2 className="text-sm font-semibold text-gray-100">バックテストを実行します</h2>
+              <p className="mt-2 text-xs leading-relaxed text-gray-400">
+                未保存の探索結果は破棄されますがよろしいですか?
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRunConfirm(false)}
+                  className="glass-input rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-200"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRunConfirm(false)
+                    runMutation.mutate()
+                  }}
+                  className="run-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  実行する
                 </button>
               </div>
             </div>

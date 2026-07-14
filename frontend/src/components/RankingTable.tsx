@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react'
-import { describeConditionTreeJapanese } from '../conditionTreeUtils'
-import { toPips } from '../pipUtils'
+import { buildMetricColumns, type MetricColumn } from '../rankingColumns'
 import FavoriteButton from './FavoriteButton'
 import type { IndicatorInfo, RankingRow } from '../types'
 
@@ -30,88 +29,14 @@ interface Props {
   scrollTopRef: React.MutableRefObject<number>
 }
 
-// + prefix on positive net_profit/expected_value so a quick scan of the
-// column makes profitable vs unprofitable rows visually obvious without
-// needing the color alone (color-blind friendly, and prints in black&white).
-function signedFixed(v: unknown, digits: number): string {
-  const n = Number(v)
-  const sign = n >= 0 ? '+' : ''
-  return `${sign}${n.toFixed(digits)}`
-}
-
 // 「名称」「条件」はソートしても意味がない(名称は日付+連番、条件は文字列
 // なので数値ソートが効かない)ため、この2列だけクリックでの並び替えを禁止する。
 const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['rank', 'condition_tree']
 
-function buildColumns(
-  indicators: IndicatorInfo[],
-): {
-  key: keyof RankingRow
-  label: string
-  tooltip?: string
-  format?: (v: unknown, row: RankingRow) => string
-  colorClass?: (v: unknown) => string
-}[] {
-  return [
-    { key: 'rank', label: '名称' },
-    {
-      key: 'profit_factor',
-      label: 'PF',
-      tooltip: 'プロフィットファクター(総利益÷総損失。1より大きければ黒字)',
-      format: (v) => Number(v).toFixed(2),
-      colorClass: (v) => (Number(v) >= 1 ? 'text-emerald-400' : 'text-red-400'),
-    },
-    {
-      key: 'net_profit',
-      label: '純利益(pips)',
-      format: (v, row) => signedFixed(toPips(Number(v), row.symbol as string), 1),
-      colorClass: (v) => (Number(v) >= 0 ? 'text-emerald-400' : 'text-red-400'),
-    },
-    {
-      key: 'expected_value',
-      label: '期待値(pips)',
-      format: (v, row) => signedFixed(toPips(Number(v), row.symbol as string), 3),
-      colorClass: (v) => (Number(v) >= 0 ? 'text-emerald-400' : 'text-red-400'),
-    },
-    {
-      key: 'max_dd',
-      label: 'DD(pips)',
-      tooltip: '最大ドローダウン(資金がピークからどれだけ落ち込んだか)',
-      format: (v, row) => toPips(Number(v), row.symbol as string).toFixed(1),
-    },
-    { key: 'win_rate', label: '勝率(%)', format: (v) => Number(v).toFixed(1) },
-    { key: 'trades', label: '取引数(回)' },
-    {
-      key: 'sharpe_ratio',
-      label: 'Sharpe',
-      tooltip: 'シャープレシオ: リターンの大きさを値動きのブレで割った指標。値動きが安定しているほど高い',
-      format: (v) => Number(v).toFixed(2),
-    },
-    {
-      key: 'recovery_factor',
-      label: 'Recovery',
-      tooltip: 'リカバリーファクター: 純利益÷最大ドローダウン。ドローダウンに対してどれだけ稼げたか',
-      format: (v) => Number(v).toFixed(2),
-    },
-    {
-      key: 'sortino_ratio',
-      label: 'Sortino',
-      tooltip: 'ソルティノレシオ: Sharpeに似ているが、下落方向のブレだけを見る指標(上振れは減点しない)',
-      format: (v) => Number(v).toFixed(2),
-    },
-    {
-      key: 'calmar_ratio',
-      label: 'Calmar',
-      tooltip: 'カルマーレシオ: 年率リターン÷最大ドローダウン',
-      format: (v) => Number(v).toFixed(2),
-    },
-    { key: 'cagr', label: 'CAGR(%)', tooltip: '年率換算した成長率', format: (v) => (Number(v) * 100).toFixed(1) },
-    {
-      key: 'condition_tree',
-      label: '条件',
-      format: (v) => (v && typeof v === 'object' ? describeConditionTreeJapanese(v as Parameters<typeof describeConditionTreeJapanese>[0], indicators) : ''),
-    },
-  ]
+// '名称'列(NameCellで描画)だけこの画面固有 - 残りの指標列はライブラリ画面
+// と共通のbuildMetricColumns(rankingColumns.ts)から取る。
+function buildColumns(indicators: IndicatorInfo[]): MetricColumn[] {
+  return [{ key: 'rank', label: '名称' }, ...buildMetricColumns(indicators)]
 }
 
 // A genetic search that's converged (many generations, small population)

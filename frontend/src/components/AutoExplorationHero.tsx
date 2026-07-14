@@ -3,6 +3,10 @@ import type { BacktestProgress } from '../types'
 interface Props {
   progress: BacktestProgress | null | undefined
   isRunning: boolean | undefined
+  // True once a stop has been requested but the subprocess hasn't exited
+  // yet - the pulsing "●実行中" text is hidden during this window so it
+  // doesn't keep glowing after the user has asked for the run to stop.
+  stopRequested?: boolean
   // Inline single-row rendering for the 手動探索 header bar, alongside the
   // 銘柄/時間足/データセット controls - the standalone full-width block
   // below stays for the 自動探索 screen's own layout.
@@ -36,7 +40,7 @@ function CompactStat({ label, value }: { label: string; value: string }) {
 // a run starts/finishes: the ring (with "-%" and an empty track when idle)
 // and its status text always sit in the same fixed-width left slot, so
 // 残りのブロック/検証速度/推定残り時間 always start at the same x position.
-function CompactHero({ progress, isRunning }: Props) {
+function CompactHero({ progress, isRunning, stopRequested }: Props) {
   const active = Boolean(isRunning && progress)
   const pct = active && progress ? (progress.total > 0 ? Math.min(100, Math.round((progress.completed / progress.total) * 1000) / 10) : 0) : 0
   const speed = active && progress && progress.elapsed_seconds > 0 ? progress.completed / progress.elapsed_seconds : 0
@@ -86,7 +90,7 @@ function CompactHero({ progress, isRunning }: Props) {
                 ) : (
                   <b className="font-semibold text-gray-100">候補を検証中</b>
                 )}
-                <span className="running-glow text-emerald-400">●実行中</span>
+                {!stopRequested && <span className="running-glow text-emerald-400">●実行中</span>}
               </>
             ) : (
               <span className="text-gray-400">{isRunning ? '準備中…' : '待機中'}</span>
@@ -106,8 +110,8 @@ function CompactHero({ progress, isRunning }: Props) {
   )
 }
 
-export default function AutoExplorationHero({ progress, isRunning, compact }: Props) {
-  if (compact) return <CompactHero progress={progress} isRunning={isRunning} />
+export default function AutoExplorationHero({ progress, isRunning, stopRequested, compact }: Props) {
+  if (compact) return <CompactHero progress={progress} isRunning={isRunning} stopRequested={stopRequested} />
 
   // main.py only starts writing progress.json once the executor is set up,
   // so there's a short real window (job status "running" but no file yet)
@@ -184,7 +188,7 @@ export default function AutoExplorationHero({ progress, isRunning, compact }: Pr
           ) : (
             <b className="font-semibold text-gray-100">候補を検証中</b>
           )}
-          <span className="running-glow text-emerald-400">● 実行中</span>
+          {!stopRequested && <span className="running-glow text-emerald-400">● 実行中</span>}
         </div>
         <div className="grid grid-cols-4 gap-2">
           <div>

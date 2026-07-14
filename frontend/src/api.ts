@@ -8,7 +8,6 @@ import type {
   IndicatorInfo,
   PriceBar,
   StrategyDetail,
-  StrategyListEntry,
 } from './types'
 
 const client = axios.create({ baseURL: '/api' })
@@ -74,13 +73,18 @@ export async function fetchSaveResult(jobId: string): Promise<SaveRowResult> {
   return res.data
 }
 
-export async function fetchStrategies(): Promise<StrategyListEntry[]> {
-  const res = await client.get<StrategyListEntry[]>('/strategies')
+export async function fetchStrategies(): Promise<StrategyDetail[]> {
+  const res = await client.get<StrategyDetail[]>('/strategies')
   return res.data
 }
 
 export async function fetchStrategyDetail(strategyId: string): Promise<StrategyDetail> {
   const res = await client.get<StrategyDetail>(`/strategies/${strategyId}`)
+  return res.data
+}
+
+export async function fetchStrategyResults(strategyId: string): Promise<BacktestResults> {
+  const res = await client.get<BacktestResults>(`/strategies/${strategyId}/results`)
   return res.data
 }
 
@@ -143,8 +147,8 @@ export async function fetchOosResults(jobId: string): Promise<{ rows: Record<str
   return res.data
 }
 
-export async function fetchStrategiesFiltered(favoriteOnly: boolean): Promise<StrategyListEntry[]> {
-  const res = await client.get<StrategyListEntry[]>('/strategies', { params: { favorite_only: favoriteOnly } })
+export async function fetchStrategiesFiltered(favoriteOnly: boolean): Promise<StrategyDetail[]> {
+  const res = await client.get<StrategyDetail[]>('/strategies', { params: { favorite_only: favoriteOnly } })
   return res.data
 }
 

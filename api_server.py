@@ -1884,6 +1884,34 @@ async def get_strategy_detail(strategy_id: str) -> dict:
         raise HTTPException(status_code=404, detail="strategy not found")
 
 
+@app.get("/api/strategies/{strategy_id}/results")
+async def get_saved_strategy_results(strategy_id: str) -> dict:
+    """Same response shape as GET /api/backtests/{job_id}/results, but reads
+    straight from this strategy's own snapshot_dir (copied at save time - see
+    strategy_registry.py::SNAPSHOT_FILES) instead of a live job's output dir.
+    A saved strategy has no job_id and never needs a rerun to view its
+    equity curve/trade log - the snapshot is the whole point of saving it.
+    monte_carlo_summary/yearly_analysis/monthly_analysis/stability_analysis
+    aren't part of the snapshot, so those always come back empty (same as
+    _read_csv_records for any path that doesn't exist)."""
+    try:
+        entry = get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    snapshot_dir = Path(entry["snapshot_dir"])
+
+    return {
+        "ranking_total": _read_csv_records(snapshot_dir / "ranking_total.csv"),
+        "equity_curve": _read_csv_records(snapshot_dir / "equity_curve.csv"),
+        "trade_log": _read_csv_records(snapshot_dir / "trade_log.csv"),
+        "monte_carlo_summary": _read_csv_records(snapshot_dir / "monte_carlo_summary.csv"),
+        "yearly_analysis": _read_csv_records(snapshot_dir / "yearly_analysis.csv"),
+        "monthly_analysis": _read_csv_records(snapshot_dir / "monthly_analysis.csv"),
+        "stability_analysis": _read_csv_records(snapshot_dir / "stability_analysis.csv"),
+    }
+
+
 @app.delete("/api/strategies/{strategy_id}")
 async def delete_strategy_endpoint(strategy_id: str) -> dict:
     """ランキング一覧の🔖をオフにする操作用 - チェックボックスと同じ

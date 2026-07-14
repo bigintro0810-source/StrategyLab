@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { addStrategyTags, fetchStrategiesFiltered, removeStrategyTag, toggleStrategyFavorite } from '../api'
+import {
+  addStrategyTags,
+  deleteStrategy,
+  fetchStrategiesFiltered,
+  removeStrategyTag,
+  renameStrategy,
+  toggleStrategyFavorite,
+} from '../api'
+import FavoriteButton from './FavoriteButton'
+import { buildMetricColumns, type MetricRowLike } from '../rankingColumns'
+import type { IndicatorInfo, StrategyDetail } from '../types'
 
 interface Props {
   favoritesOnly: boolean
@@ -9,6 +19,109 @@ interface Props {
   compareIds: string[]
   onToggleCompare: (id: string) => void
   onGoToCompare: () => void
+  indicators: IndicatorInfo[]
+  // ストラテジー詳細タブ(App.tsx側のlibraryOpenIds)に開いているid一覧。
+  openIds: string[]
+  onToggleChecked: (id: string) => void
+}
+
+// entry.metrics(strategy_registry.pyのMETRIC_COLUMNS)はexpected_valueを
+// 持たない(保存時点で未計算)ため、ランキング一覧と同じ定義
+// (net_profit÷trades、engine/backtest_engine.py)でここで計算する。
+function toMetricRow(entry: StrategyDetail): MetricRowLike {
+  const m = entry.metrics
+  const trades = Number(m.trades) || 0
+  return {
+    profit_factor: m.profit_factor,
+    net_profit: m.net_profit,
+    expected_value: trades > 0 ? Number(m.net_profit) / trades : 0,
+    max_dd: m.max_dd,
+    win_rate: m.win_rate,
+    trades: m.trades,
+    sharpe_ratio: m.sharpe_ratio,
+    recovery_factor: m.recovery_factor,
+    sortino_ratio: m.sortino_ratio,
+    calmar_ratio: m.calmar_ratio,
+    cagr: m.cagr,
+    condition_tree: entry.params?.condition_tree ?? undefined,
+    symbol: entry.symbol,
+  }
+}
+
+// ランキング一覧(RankingTable.tsx)の「名称」セルと同じ見た目・操作:
+// チェックボックス(ストラテジー詳細タブに表示)+クリックで名称をインライン
+// 編集+🔖(常に保存済みなので押すとライブラリから削除)+⭐(お気に入り)。
+function NameCell({
+  id,
+  name,
+  isChecked,
+  isFavorite,
+  isFavoritePending,
+  onToggleChecked,
+  onRename,
+  onDelete,
+  onToggleFavorite,
+}: {
+  id: string
+  name: string
+  isChecked: boolean
+  isFavorite: boolean
+  isFavoritePending: boolean
+  onToggleChecked: (id: string) => void
+  onRename: (id: string, name: string) => void
+  onDelete: (id: string) => void
+  onToggleFavorite: (id: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(name)
+
+  const commit = () => {
+    setEditing(false)
+    const trimmed = draft.trim()
+    if (trimmed && trimmed !== name) onRename(id, trimmed)
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <input type="checkbox" checked={isChecked} onChange={() => onToggleChecked(id)} />
+      {editing ? (
+        <input
+          autoFocus
+          className="glass-input w-32 rounded px-1 py-0.5 text-xs"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit()
+            if (e.key === 'Escape') {
+              setDraft(name)
+              setEditing(false)
+            }
+          }}
+        />
+      ) : (
+        <span
+          className="cursor-pointer whitespace-nowrap hover:underline"
+          title="クリックして名称を変更"
+          onClick={() => {
+            setDraft(name)
+            setEditing(true)
+          }}
+        >
+          {name}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => onDelete(id)}
+        title="クリックしてライブラリから削除"
+        className="grayscale-0 opacity-100 transition-all hover:opacity-70"
+      >
+        🔖
+      </button>
+      <FavoriteButton isFavorite={isFavorite} isPending={isFavoritePending} onClick={() => onToggleFavorite(id)} />
+    </div>
+  )
 }
 
 export default function LibraryScreen({
@@ -18,31 +131,69 @@ export default function LibraryScreen({
   compareIds,
   onToggleCompare,
   onGoToCompare,
+  indicators,
+  openIds,
+  onToggleChecked,
 }: Props) {
   const queryClient = useQueryClient()
   const [tagDraft, setTagDraft] = useState<Record<string, string>>({})
+  const [sortKey, setSortKey] = useState<string>('profit_factor')
+  const [sortAsc, setSortAsc] = useState(false)
 
   const strategiesQuery = useQuery({
     queryKey: ['strategies', favoritesOnly],
     queryFn: () => fetchStrategiesFiltered(favoritesOnly),
   })
 
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['strategies'] })
+
   const favoriteMutation = useMutation({
     mutationFn: (id: string) => toggleStrategyFavorite(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
+    onSuccess: invalidate,
+  })
+
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => renameStrategy(id, name),
+    onSuccess: invalidate,
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteStrategy(id),
+    onSuccess: invalidate,
   })
 
   const addTagMutation = useMutation({
     mutationFn: ({ id, tag }: { id: string; tag: string }) => addStrategyTags(id, [tag]),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
+    onSuccess: invalidate,
   })
 
   const removeTagMutation = useMutation({
     mutationFn: ({ id, tag }: { id: string; tag: string }) => removeStrategyTag(id, tag),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
+    onSuccess: invalidate,
   })
 
   const strategies = strategiesQuery.data ?? []
+  const columns = buildMetricColumns(indicators)
+
+  const handleSort = (key: string) => {
+    if (key === 'condition_tree') return
+    if (key === sortKey) {
+      setSortAsc(!sortAsc)
+    } else {
+      setSortKey(key)
+      setSortAsc(true)
+    }
+  }
+
+  const sorted = strategies
+    .slice()
+    .reverse()
+    .sort((a, b) => {
+      const av = Number(toMetricRow(a)[sortKey])
+      const bv = Number(toMetricRow(b)[sortKey])
+      if (Number.isNaN(av) || Number.isNaN(bv)) return 0
+      return sortAsc ? av - bv : bv - av
+    })
 
   return (
     <div className="glass-panel rounded-2xl p-4">
@@ -71,22 +222,32 @@ export default function LibraryScreen({
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-white/10 text-gray-400">
-                <th className="px-2 py-1 font-medium" />
-                <th className="px-2 py-1 font-medium" />
-                <th className="px-2 py-1 font-medium">名前</th>
+                <th className="px-2 py-1 font-medium" title="比較に追加">
+                  比較
+                </th>
+                <th className="px-2 py-1 font-medium">名称</th>
                 <th className="px-2 py-1 font-medium">通貨/時間足</th>
-                <th className="px-2 py-1 font-medium">PF</th>
-                <th className="px-2 py-1 font-medium">総利益</th>
-                <th className="px-2 py-1 font-medium">DD</th>
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    onClick={col.key === 'condition_tree' ? undefined : () => handleSort(col.key)}
+                    title={col.tooltip}
+                    className={`select-none whitespace-nowrap px-2 py-1 font-medium ${
+                      col.key === 'condition_tree' ? '' : 'cursor-pointer hover:text-gray-200'
+                    } ${sortKey === col.key ? 'bg-blue-500/30 text-blue-100' : ''}`}
+                  >
+                    {col.label}
+                    {sortKey === col.key && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
+                  </th>
+                ))}
                 <th className="px-2 py-1 font-medium">タグ</th>
                 <th className="px-2 py-1 font-medium" />
               </tr>
             </thead>
             <tbody>
-              {strategies
-                .slice()
-                .reverse()
-                .map((s) => (
+              {sorted.map((s) => {
+                const row = toMetricRow(s)
+                return (
                   <tr key={s.id} className="border-b border-white/5 hover:bg-white/[0.04]">
                     <td className="px-2 py-1">
                       <input
@@ -96,22 +257,39 @@ export default function LibraryScreen({
                       />
                     </td>
                     <td className="px-2 py-1">
-                      <button
-                        type="button"
-                        onClick={() => favoriteMutation.mutate(s.id)}
-                        className={s.favorite ? 'text-amber-400' : 'text-gray-600 hover:text-gray-400'}
-                        title="お気に入り切り替え"
-                      >
-                        ★
-                      </button>
+                      <NameCell
+                        id={s.id}
+                        name={s.name}
+                        isChecked={openIds.includes(s.id)}
+                        isFavorite={s.favorite}
+                        isFavoritePending={favoriteMutation.isPending && favoriteMutation.variables === s.id}
+                        onToggleChecked={onToggleChecked}
+                        onRename={(id, name) => renameMutation.mutate({ id, name })}
+                        onDelete={(id) => deleteMutation.mutate(id)}
+                        onToggleFavorite={(id) => favoriteMutation.mutate(id)}
+                      />
                     </td>
-                    <td className="px-2 py-1">{s.name}</td>
                     <td className="px-2 py-1">
                       {s.symbol}/{s.timeframe}
                     </td>
-                    <td className="px-2 py-1">{s.metrics.profit_factor?.toFixed(2) ?? '-'}</td>
-                    <td className="px-2 py-1">{s.metrics.net_profit?.toFixed(1) ?? '-'}</td>
-                    <td className="px-2 py-1">{s.metrics.max_dd?.toFixed(1) ?? '-'}</td>
+                    {columns.map((col) => {
+                      const raw = row[col.key]
+                      const text = col.format ? col.format(raw, row) : String(raw ?? '')
+                      const colorClass = col.colorClass ? col.colorClass(raw) : ''
+                      return (
+                        <td
+                          key={col.key}
+                          title={col.key === 'condition_tree' ? text : undefined}
+                          className={
+                            col.key === 'condition_tree'
+                              ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
+                              : `px-2 py-1 ${colorClass}`
+                          }
+                        >
+                          {text}
+                        </td>
+                      )
+                    })}
                     <td className="px-2 py-1">
                       <div className="flex flex-wrap items-center gap-1">
                         {s.tags.map((tag) => (
@@ -156,7 +334,8 @@ export default function LibraryScreen({
                       </button>
                     </td>
                   </tr>
-                ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
