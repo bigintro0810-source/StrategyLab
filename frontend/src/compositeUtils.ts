@@ -10,6 +10,8 @@ export interface CompositeInput {
   id: string
   name: string
   symbol: string | undefined
+  // 表示専用(合成計算はsymbolのpip換算だけで完結する)。
+  timeframe: string | undefined
   tradeLog: TradeRow[]
 }
 

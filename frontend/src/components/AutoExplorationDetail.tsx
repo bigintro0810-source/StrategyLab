@@ -15,6 +15,10 @@ interface Props {
   // multiple instances of this component can now be mounted side by side
   // (see StrategyDetailTabs.tsx) and "戻す" has no meaning per-panel anymore.
   title: string
+  // bestRow.symbolはあるがtimeframeは持たない(main.pyが候補ごとにecho-back
+  // していないため - ランキング一覧の「通貨/時間足」列と同じ理由)ので、
+  // この実行/保存ストラテジー全体で共通のtimeframeを別途渡す。
+  timeframe: string | undefined
   displayResults: BacktestResults | undefined
   bestRow: RankingRow | undefined
   isRowLoading: boolean
@@ -72,6 +76,7 @@ function fmtPips(v: unknown, symbol: string | undefined): string {
 
 export default function AutoExplorationDetail({
   title,
+  timeframe,
   displayResults,
   bestRow,
   isRowLoading,
@@ -92,6 +97,7 @@ export default function AutoExplorationDetail({
       <div className="mb-2 flex items-center justify-between text-xs">
         <span className="flex items-center gap-1.5 font-semibold text-gray-200">
           {title}
+          {symbol && timeframe && <span className="font-normal text-gray-400">{symbol}/{timeframe}</span>}
           <FavoriteButton isFavorite={isFavorite} isPending={isPending} onClick={onFavorite} />
         </span>
         {(isRowLoading || rowError) && (

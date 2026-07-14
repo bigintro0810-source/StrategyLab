@@ -8,6 +8,7 @@ import type {
   IndicatorInfo,
   PriceBar,
   StrategyDetail,
+  TreeNode,
 } from './types'
 
 const client = axios.create({ baseURL: '/api' })
@@ -189,6 +190,7 @@ export interface CompareEntry {
   favorite: boolean
   tags: string[]
   metrics: Record<string, number>
+  condition_tree?: TreeNode
   equity_curve: number[]
 }
 

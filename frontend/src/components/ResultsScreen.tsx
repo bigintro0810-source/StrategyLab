@@ -64,6 +64,7 @@ export default function ResultsScreen({
         openTabs={strategyTabs}
         visibleRanks={visibleRanks}
         indicators={indicators}
+        timeframe={timeframe}
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         onMergeTabs={onMergeTabs}

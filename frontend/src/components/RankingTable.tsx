@@ -203,14 +203,14 @@ export default function RankingTable({
     return columns.map((col) => {
       if (col.key === 'rank') {
         return (
-          <td key="rank" className="whitespace-nowrap px-2 py-1">
+          <td key="rank" className="whitespace-nowrap px-1 py-1">
             <NameText rank={rank} name={names[rank] ?? `Strat${rank}`} onRename={onRenameRow} />
           </td>
         )
       }
       if (col.key === 'symbol') {
         return (
-          <td key="symbol" className="whitespace-nowrap px-2 py-1 text-gray-300">
+          <td key="symbol" className="whitespace-nowrap px-1 py-1 text-gray-300">
             {row.symbol as string}/{timeframe}
           </td>
         )
@@ -224,8 +224,8 @@ export default function RankingTable({
           title={col.key === 'condition_tree' ? text : undefined}
           className={
             col.key === 'condition_tree'
-              ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
-              : `whitespace-nowrap px-2 py-1 ${colorClass}`
+              ? 'max-w-[220px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
+              : `whitespace-nowrap px-1 py-1 ${colorClass}`
           }
         >
           {text}
@@ -247,8 +247,7 @@ export default function RankingTable({
           scrollTopを復元し、アンマウント時(ref callbackがnullで呼ばれる
           瞬間)にその時点のscrollTopを同じrefへ書き戻す - DOM要素の
           プロパティは要素がツリーから外れた後も読めるので、scrollイベント
-          の発火有無に頼らず確実に値を拾える。overflow-autoなので縦だけで
-          なく、列が多くて幅が収まらない時は横にもスクロールできる。 */}
+          の発火有無に頼らず確実に値を拾える。 */}
       <div
         ref={(el) => {
           if (el) {
@@ -262,16 +261,16 @@ export default function RankingTable({
         onScroll={(e) => {
           scrollTopRef.current = e.currentTarget.scrollTop
         }}
-        className="min-h-0 flex-1 overflow-auto"
+        className="min-h-0 flex-1 overflow-y-auto"
       >
-        <table className="min-w-full text-left text-sm">
+        <table className="w-full text-left text-xs">
           <thead className="sticky top-0 z-10 bg-[#0c0d17]">
             <tr className="border-b border-white/10 text-gray-400">
-              <th className="whitespace-nowrap px-2 py-1 font-medium">詳細</th>
-              <th className="whitespace-nowrap px-2 py-1 font-medium">比較</th>
-              <th className="whitespace-nowrap px-2 py-1 font-medium">合成</th>
-              <th className="px-2 py-1 font-medium" />
-              <th className="px-2 py-1 font-medium" />
+              <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
+              <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
+              <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
+              <th className="px-1 py-1 font-medium" />
+              <th className="px-1 py-1 font-medium" />
               {columns.map((col) => {
                 const sortable = !UNSORTABLE_KEYS.includes(col.key)
                 return (
@@ -279,7 +278,7 @@ export default function RankingTable({
                     key={String(col.key)}
                     onClick={sortable ? () => handleSort(col.key) : undefined}
                     title={col.tooltip}
-                    className={`select-none whitespace-nowrap px-2 py-1 font-medium ${
+                    className={`select-none whitespace-nowrap px-1 py-1 font-medium ${
                       sortable ? 'cursor-pointer hover:text-gray-200' : ''
                     } ${sortKey === col.key ? 'bg-blue-500/30 text-blue-100' : ''}`}
                   >
@@ -302,10 +301,10 @@ export default function RankingTable({
                     selectedRank != null && rank === selectedRank ? 'bg-emerald-500/10' : ''
                   }`}
                 >
-                  <td className="px-2 py-1">
+                  <td className="px-1 py-1">
                     <input type="checkbox" checked={meta.isChecked} disabled={disabled} onChange={() => onToggleChecked(rank)} />
                   </td>
-                  <td className="px-2 py-1">
+                  <td className="px-1 py-1">
                     <input
                       type="checkbox"
                       checked={meta.isCompareChecked}
@@ -313,7 +312,7 @@ export default function RankingTable({
                       onChange={() => onToggleCompare(rank)}
                     />
                   </td>
-                  <td className="px-2 py-1">
+                  <td className="px-1 py-1">
                     <input
                       type="checkbox"
                       checked={meta.isCompositeChecked}
@@ -321,7 +320,7 @@ export default function RankingTable({
                       onChange={() => onToggleComposite(rank)}
                     />
                   </td>
-                  <td className="px-2 py-1">
+                  <td className="px-1 py-1">
                     {/* 🔖はカラー絵文字グリフなのでCSSのtext-colorでは色が変わらない
                         (常にその絵文字本来の色で描画される) - grayscaleフィルター+
                         opacityで未保存=グレーアウト、保存済み=フルカラーを表現する
@@ -342,7 +341,7 @@ export default function RankingTable({
                       🔖
                     </button>
                   </td>
-                  <td className="px-2 py-1">
+                  <td className="px-1 py-1">
                     <FavoriteButton
                       isFavorite={meta.isFavorite}
                       isPending={meta.isPending}

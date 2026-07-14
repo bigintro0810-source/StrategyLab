@@ -17,6 +17,8 @@ interface Props {
   openTabs: StrategyTabData[]
   visibleRanks: number[]
   indicators: IndicatorInfo[]
+  // 全タブ、この結果セット(1回のバックテスト実行=1つの通貨/時間足)で共通。
+  timeframe: string
   onSelectTab: (rank: number) => void
   onCloseTab: (rank: number) => void
   onMergeTabs: (draggedRank: number, targetRank: number) => void
@@ -96,6 +98,7 @@ export default function StrategyDetailTabs({
   openTabs,
   visibleRanks,
   indicators,
+  timeframe,
   onSelectTab,
   onCloseTab,
   onMergeTabs,
@@ -179,6 +182,7 @@ export default function StrategyDetailTabs({
             )}
             <AutoExplorationDetail
               title={t.name}
+              timeframe={timeframe}
               bestRow={t.bestRow}
               displayResults={t.displayResults}
               isRowLoading={t.isLoading}

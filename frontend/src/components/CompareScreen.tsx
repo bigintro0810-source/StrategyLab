@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { compareStrategies } from '../api'
 import CompareView from './CompareView'
+import type { IndicatorInfo } from '../types'
 
 interface Props {
   ids: string[]
+  indicators: IndicatorInfo[]
 }
 
-export default function CompareScreen({ ids }: Props) {
+export default function CompareScreen({ ids, indicators }: Props) {
   const compareQuery = useQuery({
     queryKey: ['compare-strategies', ids],
     queryFn: () => compareStrategies(ids),
@@ -25,6 +27,7 @@ export default function CompareScreen({ ids }: Props) {
     <CompareView
       entries={compareQuery.data?.entries ?? []}
       emptyMessage="比較対象がありません。ライブラリ画面で戦略を2件以上選んでください。"
+      indicators={indicators}
     />
   )
 }

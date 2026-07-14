@@ -147,7 +147,8 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
       { id: 'detail', label: 'ストラテジー詳細' },
       { id: 'compare', label: '比較' },
       { id: 'composite', label: '合成' },
-      { id: 'export', label: 'エクスポート' },
+      // 'export'(エクスポート)は一旦非表示 - ReportScreenの描画自体は
+      // 下に残してあるので、この行を戻すだけで再表示できる。
     ],
   },
   {
@@ -1055,6 +1056,7 @@ export default function App() {
     return {
       id,
       name: entry?.name ?? id,
+      timeframe: entry?.timeframe ?? '',
       bestRow,
       displayResults: query?.data,
       isLoading: query?.isLoading ?? false,
@@ -1073,6 +1075,7 @@ export default function App() {
         id,
         name: entry?.name ?? id,
         symbol: entry?.symbol,
+        timeframe: entry?.timeframe,
         tradeLog: query.data.trade_log ?? [],
       }
     })
@@ -1254,7 +1257,9 @@ export default function App() {
           sharpe_ratio: Number(row.sharpe_ratio),
           sortino_ratio: Number(row.sortino_ratio),
           calmar_ratio: Number(row.calmar_ratio),
+          cagr: Number(row.cagr),
         },
+        condition_tree: row.condition_tree,
         equity_curve: detail?.equity_curve?.map((p) => p.equity) ?? [],
       }
     })
@@ -1268,6 +1273,7 @@ export default function App() {
         id: String(rank),
         name: rankingNames[rank] ?? `Strat${rank}`,
         symbol: (row?.symbol as string) ?? symbol,
+        timeframe: statusQuery.data?.timeframe ?? timeframe,
         tradeLog: detail.trade_log ?? [],
       }
     })
@@ -1372,7 +1378,9 @@ export default function App() {
             onFavorite={(id) => favoriteToggleMutation.mutate(id)}
           />
         )}
-        {mainTab === 'library' && subTab === 'compare' && <CompareScreen ids={compareIds} />}
+        {mainTab === 'library' && subTab === 'compare' && (
+          <CompareScreen ids={compareIds} indicators={indicatorsQuery.data ?? []} />
+        )}
         {mainTab === 'library' && subTab === 'composite' && (
           <CompositeDetail inputs={libraryCompositeInputs} pendingCount={libraryCompositePendingCount} />
         )}
@@ -1390,6 +1398,7 @@ export default function App() {
           <CompareView
             entries={resultsCompareEntries}
             emptyMessage="比較対象がありません。ランキング一覧で「比較」のチェックを2件以上付けてください。"
+            indicators={indicatorsQuery.data ?? []}
           />
         )}
         {mainTab === 'results' && subTab === 'composite' && (

@@ -1875,6 +1875,7 @@ async def compare_strategies(ids: str) -> dict:
                 "favorite": entry["favorite"],
                 "tags": entry["tags"],
                 "metrics": entry["metrics"],
+                "condition_tree": entry.get("params", {}).get("condition_tree"),
                 "equity_curve": load_equity_series(entry),
             }
             for entry in entries

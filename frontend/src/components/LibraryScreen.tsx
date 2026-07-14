@@ -202,25 +202,23 @@ export default function LibraryScreen({
           {favoritesOnly ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
         </div>
       ) : (
-        // 幅がPF〜CAGR等で収まりきらない時は列を潰さず横スクロールさせる
-        // (min-w-fullで自然幅を確保し、はみ出た分をこの枠のoverflow-autoで)。
         <div className="overflow-auto">
-          <table className="min-w-full text-left text-sm">
+          <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-white/10 text-gray-400">
-                <th className="whitespace-nowrap px-2 py-1 font-medium">詳細</th>
-                <th className="whitespace-nowrap px-2 py-1 font-medium">比較</th>
-                <th className="whitespace-nowrap px-2 py-1 font-medium">合成</th>
-                <th className="px-2 py-1 font-medium" />
-                <th className="px-2 py-1 font-medium" />
-                <th className="whitespace-nowrap px-2 py-1 font-medium">名称</th>
-                <th className="whitespace-nowrap px-2 py-1 font-medium">通貨/時間足</th>
+                <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
+                <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
+                <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
+                <th className="px-1 py-1 font-medium" />
+                <th className="px-1 py-1 font-medium" />
+                <th className="whitespace-nowrap px-1 py-1 font-medium">名称</th>
+                <th className="whitespace-nowrap px-1 py-1 font-medium">通貨/時間足</th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
                     onClick={col.key === 'condition_tree' ? undefined : () => handleSort(col.key)}
                     title={col.tooltip}
-                    className={`select-none whitespace-nowrap px-2 py-1 font-medium ${
+                    className={`select-none whitespace-nowrap px-1 py-1 font-medium ${
                       col.key === 'condition_tree' ? '' : 'cursor-pointer hover:text-gray-200'
                     } ${sortKey === col.key ? 'bg-blue-500/30 text-blue-100' : ''}`}
                   >
@@ -228,8 +226,8 @@ export default function LibraryScreen({
                     {sortKey === col.key && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
                   </th>
                 ))}
-                <th className="whitespace-nowrap px-2 py-1 font-medium">タグ</th>
-                <th className="px-2 py-1 font-medium" />
+                <th className="whitespace-nowrap px-1 py-1 font-medium">タグ</th>
+                <th className="px-1 py-1 font-medium" />
               </tr>
             </thead>
             <tbody>
@@ -238,20 +236,20 @@ export default function LibraryScreen({
                 const isFavoritePending = favoriteMutation.isPending && favoriteMutation.variables === s.id
                 return (
                   <tr key={s.id} className="border-b border-white/5 hover:bg-white/[0.04]">
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <input type="checkbox" checked={openIds.includes(s.id)} onChange={() => onToggleChecked(s.id)} />
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <input type="checkbox" checked={compareIds.includes(s.id)} onChange={() => onToggleCompare(s.id)} />
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <input
                         type="checkbox"
                         checked={compositeIds.includes(s.id)}
                         onChange={() => onToggleComposite(s.id)}
                       />
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <button
                         type="button"
                         onClick={() => deleteMutation.mutate(s.id)}
@@ -261,17 +259,17 @@ export default function LibraryScreen({
                         🔖
                       </button>
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <FavoriteButton
                         isFavorite={s.favorite}
                         isPending={isFavoritePending}
                         onClick={() => favoriteMutation.mutate(s.id)}
                       />
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1">
+                    <td className="whitespace-nowrap px-1 py-1">
                       <NameText id={s.id} name={s.name} onRename={(id, name) => renameMutation.mutate({ id, name })} />
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1">
+                    <td className="whitespace-nowrap px-1 py-1">
                       {s.symbol}/{s.timeframe}
                     </td>
                     {columns.map((col) => {
@@ -284,19 +282,19 @@ export default function LibraryScreen({
                           title={col.key === 'condition_tree' ? text : undefined}
                           className={
                             col.key === 'condition_tree'
-                              ? 'max-w-xs truncate px-2 py-1 font-mono text-[11px] text-gray-400'
-                              : `whitespace-nowrap px-2 py-1 ${colorClass}`
+                              ? 'max-w-[120px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
+                              : `whitespace-nowrap px-1 py-1 ${colorClass}`
                           }
                         >
                           {text}
                         </td>
                       )
                     })}
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       {/* 結果のランキング一覧と行の高さを揃えるため折り返させない
                           (タグが多い行だけ縦に伸びると表全体の行高が揃わなくなる) -
                           収まりきらない分はこのセル内だけ横スクロール。 */}
-                      <div className="flex max-w-[220px] flex-nowrap items-center gap-1 overflow-x-auto">
+                      <div className="flex max-w-[70px] flex-nowrap items-center gap-1 overflow-x-auto">
                         {s.tags.map((tag) => (
                           <span
                             key={tag}
@@ -328,7 +326,7 @@ export default function LibraryScreen({
                         />
                       </div>
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-1 py-1">
                       <button
                         type="button"
                         disabled={isLoading}

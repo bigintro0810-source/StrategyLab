@@ -46,6 +46,9 @@ export default function CompositeDetail({ inputs, pendingCount }: Props) {
           {inputs.map((input) => (
             <span key={input.id} className="rounded-full bg-white/5 px-2 py-0.5">
               {input.name}
+              {input.symbol && input.timeframe && (
+                <span className="text-gray-500"> ({input.symbol}/{input.timeframe})</span>
+              )}
             </span>
           ))}
           {pendingCount > 0 && (

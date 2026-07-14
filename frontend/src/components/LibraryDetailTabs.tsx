@@ -11,6 +11,7 @@ import type { BacktestResults, IndicatorInfo, RankingRow } from '../types'
 export interface LibraryTabData {
   id: string
   name: string
+  timeframe: string
   bestRow: RankingRow | undefined
   displayResults: BacktestResults | undefined
   isLoading: boolean
@@ -171,6 +172,7 @@ export default function LibraryDetailTabs({
             )}
             <AutoExplorationDetail
               title={t.name}
+              timeframe={t.timeframe}
               bestRow={t.bestRow}
               displayResults={t.displayResults}
               isRowLoading={t.isLoading}
