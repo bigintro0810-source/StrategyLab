@@ -123,6 +123,18 @@ export default function LibraryScreen({
   const [tagDraft, setTagDraft] = useState<Record<string, string>>({})
   const [sortKey, setSortKey] = useState<string>('profit_factor')
   const [sortAsc, setSortAsc] = useState(false)
+  // 一括削除用のチェック(詳細/比較/合成とは別、削除専用)。
+  const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set())
+  const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[]; names: string[] } | null>(null)
+
+  const toggleSelectedForDelete = (id: string) => {
+    setSelectedForDelete((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const strategiesQuery = useQuery({
     queryKey: ['strategies', favoritesOnly],
@@ -141,9 +153,16 @@ export default function LibraryScreen({
     onSuccess: invalidate,
   })
 
+  // 単体削除(🔖クリック)も一括削除(下のチェック+「選択した◯件を削除」)も
+  // 同じミューテーションを使う - 単体はids=[id]で呼ぶだけ。専用の一括削除
+  // APIは無いので、対象数分のDELETEを並列に投げる。
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteStrategy(id),
-    onSuccess: invalidate,
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => deleteStrategy(id))),
+    onSuccess: () => {
+      invalidate()
+      setSelectedForDelete(new Set())
+      setDeleteConfirm(null)
+    },
   })
 
   const addTagMutation = useMutation({
@@ -185,16 +204,32 @@ export default function LibraryScreen({
         <div className="text-sm font-semibold text-gray-200">
           {favoritesOnly ? 'お気に入りの戦略' : '保存済みストラテジー'}
         </div>
-        {compareIds.length > 0 && (
-          <button
-            type="button"
-            onClick={onGoToCompare}
-            disabled={compareIds.length < 2}
-            className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-          >
-            選択した{compareIds.length}件を比較
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {compareIds.length > 0 && (
+            <button
+              type="button"
+              onClick={onGoToCompare}
+              disabled={compareIds.length < 2}
+              className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+            >
+              選択した{compareIds.length}件を比較
+            </button>
+          )}
+          {selectedForDelete.size > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setDeleteConfirm({
+                  ids: Array.from(selectedForDelete),
+                  names: strategies.filter((s) => selectedForDelete.has(s.id)).map((s) => s.name),
+                })
+              }
+              className="rounded-lg bg-red-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500"
+            >
+              選択した{selectedForDelete.size}件を削除
+            </button>
+          )}
+        </div>
       </div>
 
       {strategies.length === 0 ? (
@@ -209,6 +244,7 @@ export default function LibraryScreen({
                 <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
+                <th className="whitespace-nowrap px-1 py-1 font-medium">削除</th>
                 <th className="px-1 py-1 font-medium" />
                 <th className="px-1 py-1 font-medium" />
                 <th className="whitespace-nowrap px-1 py-1 font-medium">名称</th>
@@ -250,9 +286,17 @@ export default function LibraryScreen({
                       />
                     </td>
                     <td className="px-1 py-1">
+                      <input
+                        type="checkbox"
+                        checked={selectedForDelete.has(s.id)}
+                        onChange={() => toggleSelectedForDelete(s.id)}
+                        title="一括削除の対象に含める"
+                      />
+                    </td>
+                    <td className="px-1 py-1">
                       <button
                         type="button"
-                        onClick={() => deleteMutation.mutate(s.id)}
+                        onClick={() => setDeleteConfirm({ ids: [s.id], names: [s.name] })}
                         title="クリックしてライブラリから削除"
                         className="grayscale-0 opacity-100 transition-all hover:opacity-70"
                       >
@@ -341,6 +385,40 @@ export default function LibraryScreen({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
+            <h2 className="text-sm font-semibold text-gray-100">
+              {deleteConfirm.ids.length === 1
+                ? '本当に削除しますか?'
+                : `選択した${deleteConfirm.ids.length}件を本当に削除しますか?`}
+            </h2>
+            <p className="mt-2 max-h-32 overflow-y-auto text-xs leading-relaxed text-gray-400">
+              {deleteConfirm.names.join('、')}
+            </p>
+            <p className="mt-2 text-xs text-red-300">この操作は取り消せません。</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleteMutation.isPending}
+                className="glass-input rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-200 disabled:opacity-40"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteMutation.mutate(deleteConfirm.ids)}
+                disabled={deleteMutation.isPending}
+                className="rounded-lg bg-red-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+              >
+                {deleteMutation.isPending ? '削除中...' : '削除する'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
