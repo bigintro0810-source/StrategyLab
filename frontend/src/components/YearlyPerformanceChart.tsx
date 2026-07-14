@@ -33,7 +33,7 @@ export default function YearlyPerformanceChart({ rows }: Props) {
           paper_bgcolor: 'transparent',
           plot_bgcolor: 'transparent',
           font: { color: '#d1d5db' },
-          xaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '年' } },
+          xaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
           yaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
         }}
         config={{ displayModeBar: false, responsive: true }}

@@ -76,7 +76,7 @@ function CompactHero({ progress, isRunning, stopRequested }: Props) {
             </defs>
           </svg>
           <div className="absolute inset-0 flex items-center justify-center font-mono text-[10px] tabular-nums text-gray-100">
-            {active ? `${pct}%` : '-%'}
+            {active ? `${pct.toFixed(1)}%` : '-%'}
           </div>
         </div>
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
@@ -176,7 +176,7 @@ export default function AutoExplorationHero({ progress, isRunning, stopRequested
           </defs>
         </svg>
         <div className="absolute inset-0 flex items-center justify-center font-mono text-[13px] tabular-nums text-gray-100">
-          {pct}%
+          {pct.toFixed(1)}%
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
