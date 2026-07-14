@@ -21,6 +21,11 @@ interface Props {
   onBookmark: (rank: number) => void
   onFavorite: (rank: number) => void
   indicators: IndicatorInfo[]
+  // ランキング全体が1回のバックテスト実行(=1つの通貨/時間足)分なので、行
+  // 毎ではなくこの結果セット全体で共通の値としてApp.tsxから渡す(行データ
+  // 自体は自分のsymbolしか持たない - main.pyがtimeframeを候補ごとに
+  // echo-backしていないため)。ライブラリ画面の「通貨/時間足」列と揃える。
+  timeframe: string
   // 画面に収まる固定高さの枠内で自分だけスクロールする(親のResultsScreen
   // が高さを決める)。ストラテジー詳細タブと行き来するとこのコンポーネント
   // 自体がアンマウント/再マウントされ、DOM自身のscrollTopは失われるため、
@@ -31,12 +36,17 @@ interface Props {
 
 // 「名称」「条件」はソートしても意味がない(名称は日付+連番、条件は文字列
 // なので数値ソートが効かない)ため、この2列だけクリックでの並び替えを禁止する。
-const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['rank', 'condition_tree']
+const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['rank', 'symbol', 'condition_tree']
 
-// '名称'列(NameCellで描画)だけこの画面固有 - 残りの指標列はライブラリ画面
-// と共通のbuildMetricColumns(rankingColumns.ts)から取る。
+// '名称'・'通貨/時間足'列(どちらもNameCell/専用セルで描画)だけこの画面
+// 固有 - 残りの指標列はライブラリ画面と共通のbuildMetricColumns
+// (rankingColumns.ts)から取る。
 function buildColumns(indicators: IndicatorInfo[]): MetricColumn[] {
-  return [{ key: 'rank', label: '名称' }, ...buildMetricColumns(indicators)]
+  return [
+    { key: 'rank', label: '名称' },
+    { key: 'symbol', label: '通貨/時間足' },
+    ...buildMetricColumns(indicators),
+  ]
 }
 
 // A genetic search that's converged (many generations, small population)
@@ -175,6 +185,7 @@ export default function RankingTable({
   onFavorite,
   indicators,
   scrollTopRef,
+  timeframe,
 }: Props) {
   const [sortKey, setSortKey] = useState<keyof RankingRow>('profit_factor')
   const [sortAsc, setSortAsc] = useState(false)
@@ -232,6 +243,13 @@ export default function RankingTable({
               onBookmark={onBookmark}
               onFavorite={onFavorite}
             />
+          </td>
+        )
+      }
+      if (col.key === 'symbol') {
+        return (
+          <td key="symbol" className="whitespace-nowrap px-2 py-1 text-gray-300">
+            {row.symbol as string}/{timeframe}
           </td>
         )
       }

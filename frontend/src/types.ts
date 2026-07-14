@@ -242,6 +242,11 @@ export interface BacktestStatus {
   // by a stop request, so /results reflects only the candidates that had
   // completed at that point rather than a full run.
   stopped: boolean
+  // This job's own timeframe (not necessarily today's toolbar selection -
+  // see api_server.py::get_backtest_status). Used for the ランキング一覧の
+  // 「通貨/時間足」列 so it doesn't drift if the toolbar is changed after
+  // the run finishes.
+  timeframe: string
 }
 
 export interface RankingRow {

@@ -40,6 +40,7 @@ import ResultsScreen from './components/ResultsScreen'
 import type { StrategyTabData } from './components/StrategyDetailTabs'
 import LibraryScreen from './components/LibraryScreen'
 import LibraryDetailTabs, { type LibraryTabData } from './components/LibraryDetailTabs'
+import CompareScreen from './components/CompareScreen'
 import CsvImportScreen from './components/CsvImportScreen'
 import DataValidatorScreen from './components/DataValidatorScreen'
 import SettingsScreen from './components/SettingsScreen'
@@ -135,9 +136,10 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
     id: 'library',
     label: 'ライブラリ',
     subTabs: [
-      { id: 'saved', label: '保存済み戦略' },
+      { id: 'saved', label: '保存済みストラテジー' },
       { id: 'favorites', label: 'お気に入り' },
       { id: 'detail', label: 'ストラテジー詳細' },
+      { id: 'compare', label: '比較' },
       { id: 'export', label: 'エクスポート' },
     ],
   },
@@ -300,8 +302,8 @@ export default function App() {
   }
 
   // Strategies checked in ライブラリ for cross-comparison - lifted here (not
-  // local to LibraryScreen) since 結果>比較 is a separate tab that needs to
-  // read the same selection.
+  // local to LibraryScreen) since ライブラリ>比較 is a separate subTab
+  // (CompareScreen) that needs to read the same selection.
   const [compareIds, setCompareIds] = useState<string[]>([])
   const toggleCompareId = (id: string) => {
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]))
@@ -430,7 +432,7 @@ export default function App() {
   const [focusedRank, setFocusedRank] = useState<number | null>(null)
   const [tabJobIds, setTabJobIds] = useState<Record<number, string>>({})
 
-  // ライブラリ画面(保存済み戦略/お気に入り)版のストラテジー詳細タブ。上の
+  // ライブラリ画面(保存済みストラテジー/お気に入り)版のストラテジー詳細タブ。上の
   // openTabRanks/visibleRanksと同じ仕組みだが、こちらは再計算ジョブが要らない
   // (保存時のスナップショットをそのまま読むだけ - fetchStrategyResults)ため
   // tabJobIds相当は無い。idはジョブ内limitedなrankと違って永続的な文字列
@@ -795,13 +797,17 @@ export default function App() {
   // ブラウザだけ閉じ直した場合は上のlocalStorageからjobIdが復元されるが、
   // バックエンドのプロセスごと再起動されていた場合はJOBSが空になっている
   // ため404が返る - その場合だけ諦めて待機状態に戻す(エラー表示のまま
-  // 固まらないように)。
+  // 固まらないように)。マウント時に1回だけ直接fetchして確かめる
+  // (statusQuery自体のリトライ/バックオフに任せると反映までに数秒〜かかる
+  // ため、起動直後の一撃判定はここで済ませる)。
   useEffect(() => {
-    if (jobId !== null && statusQuery.isError) {
-      const status = (statusQuery.error as { response?: { status?: number } } | null)?.response?.status
+    if (jobId === null) return
+    fetchBacktestStatus(jobId).catch((err: unknown) => {
+      const status = (err as { response?: { status?: number } } | null)?.response?.status
       if (status === 404) setJobId(null)
-    }
-  }, [statusQuery.isError, statusQuery.error, jobId])
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const resultsQuery = useQuery<BacktestResults>({
     queryKey: ['backtest-results', jobId],
@@ -1234,8 +1240,8 @@ export default function App() {
             compareIds={compareIds}
             onToggleCompare={toggleCompareId}
             onGoToCompare={() => {
-              setMainTab('results')
-              setSubTab('ranking')
+              setMainTab('library')
+              setSubTab('compare')
             }}
             indicators={indicatorsQuery.data ?? []}
             openIds={libraryOpenIds}
@@ -1255,6 +1261,7 @@ export default function App() {
             onFavorite={(id) => favoriteToggleMutation.mutate(id)}
           />
         )}
+        {mainTab === 'library' && subTab === 'compare' && <CompareScreen ids={compareIds} />}
 
         {mainTab === 'validation' && (
           <ValidationScreen
@@ -1272,6 +1279,7 @@ export default function App() {
             strategyTabs={strategyTabs}
             visibleRanks={visibleRanks}
             indicators={indicatorsQuery.data ?? []}
+            timeframe={statusQuery.data?.timeframe ?? timeframe}
             onSelectTab={openStrategyTab}
             onCloseTab={closeStrategyTab}
             onMergeTabs={mergeStrategyTabs}

@@ -591,6 +591,12 @@ async def get_backtest_status(job_id: str) -> dict:
         "progress": _read_progress(job["symbol"], job["timeframe"]) if job["status"] == "running" else None,
         "stop_requested": job.get("stop_requested", False),
         "stopped": stopped,
+        # ランキング一覧の「通貨/時間足」列用 - 現在のツールバー選択(symbol/
+        # timeframe)ではなく、このジョブ自体が実行された時のtimeframeを返す
+        # (ジョブ完了後にツールバーで別の時間足へ切り替えても、既に表示中の
+        # 結果の表記がズレないように)。symbolは各候補行が自分で持っている
+        # (main.pyが結果行にparamsをecho-backするため)のでここでは不要。
+        "timeframe": job["timeframe"],
     }
 
 

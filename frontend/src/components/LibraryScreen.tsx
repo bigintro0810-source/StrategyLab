@@ -199,7 +199,7 @@ export default function LibraryScreen({
     <div className="glass-panel rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-sm font-semibold text-gray-200">
-          {favoritesOnly ? 'お気に入りの戦略' : '保存済み戦略'}
+          {favoritesOnly ? 'お気に入りの戦略' : '保存済みストラテジー'}
         </div>
         {compareIds.length > 0 && (
           <button
@@ -291,7 +291,10 @@ export default function LibraryScreen({
                       )
                     })}
                     <td className="px-2 py-1">
-                      <div className="flex flex-wrap items-center gap-1">
+                      {/* 結果のランキング一覧と行の高さを揃えるため折り返させない
+                          (タグが多い行だけ縦に伸びると表全体の行高が揃わなくなる) -
+                          収まりきらない分はこのセル内だけ横スクロール。 */}
+                      <div className="flex max-w-[220px] flex-nowrap items-center gap-1 overflow-x-auto">
                         {s.tags.map((tag) => (
                           <span
                             key={tag}
@@ -328,7 +331,7 @@ export default function LibraryScreen({
                         type="button"
                         disabled={isLoading}
                         onClick={() => onLoad(s.id)}
-                        className="rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300 hover:bg-white/10 disabled:opacity-40"
+                        className="whitespace-nowrap rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300 hover:bg-white/10 disabled:opacity-40"
                       >
                         読み込む
                       </button>

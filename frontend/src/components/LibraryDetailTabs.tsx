@@ -101,7 +101,7 @@ export default function LibraryDetailTabs({
   if (openTabs.length === 0) {
     return (
       <div className="glass-panel rounded-2xl p-8 text-center text-sm text-gray-500">
-        保存済み戦略/お気に入りの行のチェックボックスを付けると、ここにストラテジー詳細タブが開きます(最大{MAX_TABS}個)。
+        保存済みストラテジー/お気に入りの行のチェックボックスを付けると、ここにストラテジー詳細タブが開きます(最大{MAX_TABS}個)。
       </div>
     )
   }

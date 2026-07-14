@@ -15,6 +15,7 @@ interface Props {
   strategyTabs: StrategyTabData[]
   visibleRanks: number[]
   indicators: IndicatorInfo[]
+  timeframe: string
   onSelectTab: (rank: number) => void
   onCloseTab: (rank: number) => void
   onMergeTabs: (draggedRank: number, targetRank: number) => void
@@ -36,6 +37,7 @@ export default function ResultsScreen({
   strategyTabs,
   visibleRanks,
   indicators,
+  timeframe,
   onSelectTab,
   onCloseTab,
   onMergeTabs,
@@ -85,6 +87,7 @@ export default function ResultsScreen({
           onBookmark={onBookmark}
           onFavorite={onFavorite}
           scrollTopRef={rankingScrollTopRef}
+          timeframe={timeframe}
         />
       </div>
     </div>
