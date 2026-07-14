@@ -69,31 +69,34 @@ export default function CompositeDetail({ inputs, pendingCount }: Props) {
         {composite.equityCurve.length === 0 ? (
           <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
         ) : (
-          <Plot
-            data={[
-              {
-                x: composite.equityCurve.map((p) => p.exit_time),
-                y: composite.equityCurve.map((p) => p.equity),
-                type: 'scatter',
-                mode: 'lines+markers',
-                name: '合成エクイティ',
-                line: { color: '#22c55e', width: 1.5 },
-                marker: { color: '#22c55e', size: 4, line: { width: 0 } },
-              },
-            ]}
-            layout={{
-              autosize: true,
-              height: 260,
-              margin: { l: 40, r: 10, t: 10, b: 30 },
-              paper_bgcolor: 'transparent',
-              plot_bgcolor: 'transparent',
-              font: { color: '#d1d5db' },
-              xaxis: { type: 'date', gridcolor: 'rgba(255,255,255,0.08)' },
-              yaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '合成損益(pips)' } },
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
+          <>
+            <div className="mb-1 text-xs font-semibold text-gray-300">累積Pips</div>
+            <Plot
+              data={[
+                {
+                  x: composite.equityCurve.map((p) => p.exit_time),
+                  y: composite.equityCurve.map((p) => p.equity),
+                  type: 'scatter',
+                  mode: 'lines+markers',
+                  name: '合成エクイティ',
+                  line: { color: '#22c55e', width: 1.5 },
+                  marker: { color: '#22c55e', size: 4, line: { width: 0 } },
+                },
+              ]}
+              layout={{
+                autosize: true,
+                height: 260,
+                margin: { l: 40, r: 10, t: 10, b: 30 },
+                paper_bgcolor: 'transparent',
+                plot_bgcolor: 'transparent',
+                font: { color: '#d1d5db' },
+                xaxis: { type: 'date', gridcolor: 'rgba(255,255,255,0.08)' },
+                yaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+            />
+          </>
         )}
       </div>
     </div>

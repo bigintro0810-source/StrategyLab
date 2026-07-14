@@ -13,29 +13,32 @@ export default function YearlyPerformanceChart({ rows }: Props) {
   const sorted = rows.slice().sort((a, b) => a.year - b.year)
 
   return (
-    <Plot
-      data={[
-        {
-          x: sorted.map((r) => String(r.year)),
-          y: sorted.map((r) => r.net_profit),
-          type: 'bar',
-          marker: {
-            color: sorted.map((r) => (r.net_profit >= 0 ? '#22c55e' : '#ef4444')),
+    <div>
+      <div className="mb-1 text-xs font-semibold text-gray-300">年別損益(pips)</div>
+      <Plot
+        data={[
+          {
+            x: sorted.map((r) => String(r.year)),
+            y: sorted.map((r) => r.net_profit),
+            type: 'bar',
+            marker: {
+              color: sorted.map((r) => (r.net_profit >= 0 ? '#22c55e' : '#ef4444')),
+            },
           },
-        },
-      ]}
-      layout={{
-        autosize: true,
-        height: 260,
-        margin: { l: 40, r: 10, t: 10, b: 30 },
-        paper_bgcolor: 'transparent',
-        plot_bgcolor: 'transparent',
-        font: { color: '#d1d5db' },
-        xaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '年' } },
-        yaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '損益(pips)' } },
-      }}
-      config={{ displayModeBar: false, responsive: true }}
-      style={{ width: '100%' }}
-    />
+        ]}
+        layout={{
+          autosize: true,
+          height: 260,
+          margin: { l: 40, r: 10, t: 10, b: 30 },
+          paper_bgcolor: 'transparent',
+          plot_bgcolor: 'transparent',
+          font: { color: '#d1d5db' },
+          xaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '年' } },
+          yaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
+        }}
+        config={{ displayModeBar: false, responsive: true }}
+        style={{ width: '100%' }}
+      />
+    </div>
   )
 }

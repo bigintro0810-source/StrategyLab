@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { renameStrategy, toggleStrategyFavorite } from '../api'
 import FavoriteButton from './FavoriteButton'
-import { buildMetricColumns, type MetricRowLike } from '../rankingColumns'
+import { ascendingIsBetter, buildMetricColumns, type MetricRowLike } from '../rankingColumns'
 import type { IndicatorInfo, StrategyDetail } from '../types'
 
 interface Props {
@@ -174,7 +174,9 @@ export default function LibraryScreen({
       setSortAsc(!sortAsc)
     } else {
       setSortKey(key)
-      setSortAsc(true)
+      // 初回クリックは「良い順」で表示する - ほとんどの指標は大きい方が
+      // 良い(降順)が、DDだけ小さい方が良い(昇順)。
+      setSortAsc(ascendingIsBetter(key))
     }
   }
 
@@ -242,7 +244,6 @@ export default function LibraryScreen({
                 <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
-                <th className="whitespace-nowrap px-1 py-1 font-medium">{deleteColumnLabel}</th>
                 <th className="px-1 py-1 font-medium" />
                 <th className="whitespace-nowrap px-1 py-1 font-medium">名称</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">通貨/時間足</th>
@@ -259,6 +260,7 @@ export default function LibraryScreen({
                     {sortKey === col.key && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
                   </th>
                 ))}
+                <th className="whitespace-nowrap px-1 py-1 font-medium">{deleteColumnLabel}</th>
               </tr>
             </thead>
             <tbody>
@@ -278,14 +280,6 @@ export default function LibraryScreen({
                         type="checkbox"
                         checked={compositeIds.includes(s.id)}
                         onChange={() => onToggleComposite(s.id)}
-                      />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        type="checkbox"
-                        checked={selectedForDelete.has(s.id)}
-                        onChange={() => toggleSelectedForDelete(s.id)}
-                        title={`一括${deleteActionLabel}の対象に含める`}
                       />
                     </td>
                     <td className="px-1 py-1">
@@ -319,6 +313,14 @@ export default function LibraryScreen({
                         </td>
                       )
                     })}
+                    <td className="px-1 py-1">
+                      <input
+                        type="checkbox"
+                        checked={selectedForDelete.has(s.id)}
+                        onChange={() => toggleSelectedForDelete(s.id)}
+                        title={`一括${deleteActionLabel}の対象に含める`}
+                      />
+                    </td>
                   </tr>
                 )
               })}

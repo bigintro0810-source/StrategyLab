@@ -1,3 +1,4 @@
+import Plot from 'react-plotly.js'
 import { toPips } from '../pipUtils'
 import { buildMetricColumns, type MetricRowLike } from '../rankingColumns'
 import type { CompareEntry } from '../api'
@@ -35,58 +36,15 @@ function toMetricRow(entry: CompareEntry): MetricRowLike {
   }
 }
 
-function buildPath(series: number[], width: number, height: number): string {
-  if (series.length === 0) return ''
-  const min = Math.min(...series, 0)
-  const max = Math.max(...series, 0)
-  const range = max - min || 1
-  return series
-    .map((v, i) => {
-      const x = (i / Math.max(series.length - 1, 1)) * width
-      const y = height - ((v - min) / range) * height
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-}
-
 export default function CompareView({ entries, emptyMessage, indicators }: Props) {
   if (entries.length === 0) {
     return <div className="glass-panel rounded-2xl p-4 text-sm text-gray-500">{emptyMessage}</div>
   }
 
-  const width = 640
-  const height = 220
   const columns = buildMetricColumns(indicators)
 
   return (
     <div className="space-y-4">
-      <div className="glass-panel rounded-2xl p-4">
-        <div className="mb-3 text-sm font-semibold text-gray-200">Equity Curve比較(トレード進捗率で正規化)</div>
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-          {entries.map((entry, i) => (
-            <path
-              key={entry.id}
-              d={buildPath(
-                entry.equity_curve.map((v) => toPips(v, entry.symbol)),
-                width,
-                height,
-              )}
-              fill="none"
-              stroke={LINE_COLORS[i % LINE_COLORS.length]}
-              strokeWidth={1.5}
-            />
-          ))}
-        </svg>
-        <div className="mt-2 flex flex-wrap gap-3 text-xs">
-          {entries.map((entry, i) => (
-            <span key={entry.id} className="flex items-center gap-1.5 text-gray-300">
-              <span className="h-2 w-2 rounded-full" style={{ background: LINE_COLORS[i % LINE_COLORS.length] }} />
-              {entry.name}
-            </span>
-          ))}
-        </div>
-      </div>
-
       {/* ランキング一覧/ライブラリ画面と同じ並び(お気に入り〜条件)の指標
           テーブル - 1行=1ストラテジー。ここの⭐は状態表示のみで、切り替えは
           元の画面(ランキング一覧/ライブラリ)から行う。 */}
@@ -141,6 +99,39 @@ export default function CompareView({ entries, emptyMessage, indicators }: Props
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="glass-panel rounded-2xl p-4">
+        <div className="mb-1 text-xs font-semibold text-gray-300">累積Pips</div>
+        <Plot
+          data={entries.map((entry, i) => ({
+            x: entry.equity_curve.map((p) => p.exit_time),
+            y: entry.equity_curve.map((p) => toPips(p.equity, entry.symbol)),
+            type: 'scatter',
+            mode: 'lines',
+            name: entry.name,
+            line: { color: LINE_COLORS[i % LINE_COLORS.length], width: 1.5 },
+          }))}
+          layout={{
+            autosize: true,
+            height: 280,
+            margin: { l: 40, r: 10, t: 10, b: 30 },
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            font: { color: '#d1d5db' },
+            showlegend: true,
+            legend: { orientation: 'h', font: { size: 10 } },
+            xaxis: {
+              type: 'date',
+              dtick: 'M12',
+              tickformat: '%Y',
+              gridcolor: 'rgba(255,255,255,0.08)',
+            },
+            yaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
+          }}
+          config={{ displayModeBar: false, responsive: true }}
+          style={{ width: '100%' }}
+        />
       </div>
     </div>
   )

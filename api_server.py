@@ -35,7 +35,6 @@ from engine.conditions import INDICATOR_REGISTRY
 from engine.indicator_pool import CATEGORIES, INDICATOR_POOL, LEVEL_PRESETS
 from engine.params import reconstruct_params_from_row
 from engine.pdf_report import export_pdf_report
-from engine.comparison_report import load_equity_series
 from engine.strategy_registry import (
     add_tags,
     delete_strategy,
@@ -1884,7 +1883,10 @@ async def compare_strategies(ids: str) -> dict:
                 "tags": entry["tags"],
                 "metrics": entry["metrics"],
                 "condition_tree": entry.get("params", {}).get("condition_tree"),
-                "equity_curve": load_equity_series(entry),
+                # フル行(exit_time等含む)を返す - 比較タブの資金曲線を
+                # ストラテジー詳細と同じ日付軸のグラフで描けるようにするため
+                # (load_equity_seriesはequity列だけの旧HTML比較レポート用)。
+                "equity_curve": _read_csv_records(Path(entry["snapshot_dir"]) / "equity_curve.csv"),
             }
             for entry in entries
         ]

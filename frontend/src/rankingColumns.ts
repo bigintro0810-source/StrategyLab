@@ -34,6 +34,17 @@ export function signedFixed(v: unknown, digits: number): string {
   return `${sign}${n.toFixed(digits)}`
 }
 
+// 指標見出しを最初にクリックした時、「良い順」で並ぶようにするための方向
+// 指定 - ほとんどの指標は大きいほど良い(降順が良い順)が、DDだけは小さい
+// ほど良い(昇順が良い順)。RankingTable.tsx/LibraryScreen.tsxのhandleSort
+// が新しい列に切り替える際、ここでtrueが返る列だけ昇順スタート、それ以外は
+// 降順スタートにする。
+const LOWER_IS_BETTER = new Set(['max_dd'])
+
+export function ascendingIsBetter(key: string): boolean {
+  return LOWER_IS_BETTER.has(key)
+}
+
 export interface MetricColumn {
   key: string
   label: string

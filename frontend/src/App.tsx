@@ -1281,7 +1281,7 @@ export default function App() {
           cagr: Number(row.cagr),
         },
         condition_tree: row.condition_tree,
-        equity_curve: detail?.equity_curve?.map((p) => p.equity) ?? [],
+        equity_curve: detail?.equity_curve ?? [],
       }
     })
 

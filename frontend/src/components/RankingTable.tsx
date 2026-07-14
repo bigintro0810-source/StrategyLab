@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { buildMetricColumns, type MetricColumn } from '../rankingColumns'
+import { ascendingIsBetter, buildMetricColumns, type MetricColumn } from '../rankingColumns'
 import FavoriteButton from './FavoriteButton'
 import type { IndicatorInfo, RankingRow } from '../types'
 
@@ -165,7 +165,9 @@ export default function RankingTable({
       setSortAsc(!sortAsc)
     } else {
       setSortKey(key)
-      setSortAsc(true)
+      // 初回クリックは「良い順」で表示する - ほとんどの指標は大きい方が
+      // 良い(降順)が、DDだけ小さい方が良い(昇順)。
+      setSortAsc(ascendingIsBetter(String(key)))
     }
   }
 

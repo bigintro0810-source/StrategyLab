@@ -4,6 +4,7 @@ import type {
   BacktestRequest,
   BacktestResults,
   BacktestStatus,
+  EquityPoint,
   ExplorationCategoriesResponse,
   IndicatorInfo,
   PriceBar,
@@ -229,7 +230,7 @@ export interface CompareEntry {
   tags: string[]
   metrics: Record<string, number>
   condition_tree?: TreeNode
-  equity_curve: number[]
+  equity_curve: EquityPoint[]
 }
 
 export async function compareStrategies(ids: string[]): Promise<{ entries: CompareEntry[] }> {
