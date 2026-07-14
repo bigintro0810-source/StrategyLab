@@ -19,6 +19,7 @@ from engine.pdf_report import export_pdf_report
 from engine.strategy_registry import save_strategy
 from engine.optimizer_search import GeneticSearch, run_bayesian_search, sample_random_combos
 from engine.strategy_config_loader import load_strategy_config
+from engine.indicator_pool import LEVEL_PRESETS, build_filtered_pool
 from engine.structure_generator import StructureGeneticSearch, coarser_timeframes, generate_candidate_trees
 from engine.params import reconstruct_params_from_row
 
@@ -150,6 +151,31 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--categories",
+        default=None,
+        help="--optimizer structure/structure_genetic で生成対象にする条件カテゴリをカンマ区切りで指定 "
+        "(indicator,price_action,time_filter,ict,chart_patternのいずれか)。未指定なら全カテゴリ対象",
+    )
+
+    parser.add_argument(
+        "--explore-level",
+        choices=["light", "standard", "advanced"],
+        default=None,
+        help="--optimizer structure/structure_genetic で使う指標を絞り込むプリセット "
+        "(light=EMA/RSI/ATR等の少数精鋭 / standard=light+FVG等ICTの基本シグナル / "
+        "advanced=standard+Order Block+チャートパターン)。--categoriesと併用時は両方の絞り込みが重なる "
+        "(未指定なら--categoriesのみで絞り込み、どちらも未指定なら全指標対象)",
+    )
+
+    parser.add_argument(
+        "--custom-indicator-names",
+        default=None,
+        help="--explore-level を使わず、カテゴリ内の個別指標名をカンマ区切りで直接指定して絞り込む "
+        "(例: rsi,macd_line)。--explore-levelと同時指定はできない(併用時は--explore-levelを優先)。"
+        "--categoriesと併用時は両方の絞り込みが重なる",
+    )
+
+    parser.add_argument(
         "--n-samples",
         type=int,
         default=50,
@@ -185,6 +211,14 @@ def parse_args() -> argparse.Namespace:
         "--strategy-config",
         default=None,
         help="strategy_configs/*.json のパスを指定すると、--mode のグリッドの代わりにこの設定を使う",
+    )
+
+    parser.add_argument(
+        "--exploration-config",
+        default=None,
+        help="--optimizer structure/structure_genetic 用の追加設定JSON(rr_choices/direction/"
+        "start_date/end_date/min_leaves/selected_param_values/selected_literal_values/"
+        "mandatory_conditions)へのパス。api_server.pyが自動探索画面の入力から生成する。",
     )
 
     return parser.parse_args()
@@ -395,7 +429,9 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
     return result
 
 
-def export_single_strategy_analysis(df: pd.DataFrame, params: dict, output_dir: Path) -> dict:
+def export_single_strategy_analysis(
+    df: pd.DataFrame, params: dict, output_dir: Path, mc_simulations: int | None = None
+) -> dict:
     """Runs one backtest for `params` and writes every per-strategy analysis
     artifact (trade_log/equity_curve/yearly/monthly/stability/monte_carlo)
     to output_dir - exactly what main()'s own end-of-run "best row" export
@@ -425,8 +461,9 @@ def export_single_strategy_analysis(df: pd.DataFrame, params: dict, output_dir: 
 
     equity_df = export_equity_curve(trade_log=trade_log, output_dir=output_dir)
 
+    monte_carlo_kwargs = {"simulations": mc_simulations} if mc_simulations else {}
     monte_carlo_results, monte_carlo_summary = export_monte_carlo(
-        trade_log=trade_log, output_dir=output_dir
+        trade_log=trade_log, output_dir=output_dir, **monte_carlo_kwargs
     )
 
     return {
@@ -879,6 +916,25 @@ def main() -> None:
     OUTPUT_DIR = resolve_output_dir(args.symbol, args.timeframe)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # --optimizer structure/structure_genetic用の追加設定(自動探索画面から
+    # api_server.pyが生成するJSON)。個別CLIフラグを増やしすぎない設計として
+    # 1ファイルにまとめている(--exploration-config)。指定が無ければ全項目が
+    # 従来通りのデフォルト(制限なし)になる。
+    exploration_config: dict = {}
+    if args.exploration_config:
+        exploration_config = json.loads(Path(args.exploration_config).read_text(encoding="utf-8"))
+    exploration_rr_choices = exploration_config.get("rr_choices") or None
+    exploration_direction = exploration_config.get("direction") or "both"
+    exploration_directions = {
+        "long": ["long"], "short": ["short"], "both": ["long", "short"],
+    }[exploration_direction]
+    exploration_min_leaves = exploration_config.get("min_leaves") or 1
+    exploration_param_values = exploration_config.get("selected_param_values") or None
+    exploration_literal_values = exploration_config.get("selected_literal_values") or None
+    exploration_mandatory_conditions = exploration_config.get("mandatory_conditions") or None
+    exploration_start_date = exploration_config.get("start_date")
+    exploration_end_date = exploration_config.get("end_date")
+
     data_path = find_data_file(args.timeframe, args.symbol)
     print(f"モード: {args.mode}")
     print(f"通貨ペア: {args.symbol}")
@@ -886,6 +942,19 @@ def main() -> None:
     print(f"読み込み: {data_path}")
 
     df = load_price_data(data_path)
+
+    if exploration_start_date or exploration_end_date:
+        if exploration_start_date:
+            df = df[df["datetime"] >= pd.Timestamp(exploration_start_date)]
+        if exploration_end_date:
+            df = df[df["datetime"] <= pd.Timestamp(exploration_end_date)]
+        df = df.reset_index(drop=True)
+        if df.empty:
+            raise ValueError(
+                f"指定した期間({exploration_start_date}〜{exploration_end_date})に"
+                "該当するデータがありません。期間を見直してください。"
+            )
+        print(f"期間指定: {exploration_start_date or '(下限なし)'} ～ {exploration_end_date or '(上限なし)'}")
 
     print(f"データ数: {len(df):,}")
     print(f"期間: {df['datetime'].min()} ～ {df['datetime'].max()}")
@@ -903,6 +972,24 @@ def main() -> None:
     else:
         mtf_timeframes = None
 
+    # Also shared by both structure modes: which indicators are eligible for
+    # generation. --categories narrows to whole trading-taxonomy categories
+    # (indicator/price_action/time_filter/ict/chart_pattern); --explore-level
+    # further narrows to a small hand-picked allowlist on top of that (see
+    # engine/indicator_pool.py::build_filtered_pool/LEVEL_PRESETS). Both
+    # default to None, reproducing today's unfiltered "every indicator
+    # eligible" behavior for any caller that doesn't pass either flag.
+    explore_categories = (
+        [c.strip() for c in args.categories.split(",") if c.strip()] if args.categories else None
+    )
+    if args.explore_level:
+        explore_allowed_names = LEVEL_PRESETS[args.explore_level]
+    elif args.custom_indicator_names:
+        explore_allowed_names = [n.strip() for n in args.custom_indicator_names.split(",") if n.strip()]
+    else:
+        explore_allowed_names = None
+    indicator_pool = build_filtered_pool(categories=explore_categories, allowed_names=explore_allowed_names)
+
     if args.optimizer == "structure":
         # Phase 1 of the auto-exploration engine (see
         # project_auto_exploration_core_goal.md): base_space supplies every
@@ -914,14 +1001,26 @@ def main() -> None:
         # against both directions - no change needed to the grid/backtest/
         # ranking machinery below.
         param_space = build_parameter_space(args.mode, args.symbol)
+        if exploration_rr_choices:
+            param_space["rr"] = exploration_rr_choices
+        # mandatory_conditions is a single-element list (the same constant
+        # value cross-multiplied against every generated tree/direction by
+        # build_grid_from_space below) - AND-ed onto condition_tree only at
+        # evaluation time (engine/backtest_engine.py), never stored inside
+        # condition_tree itself.
+        param_space["mandatory_conditions"] = [exploration_mandatory_conditions]
         param_space["condition_tree"] = generate_candidate_trees(
             n=args.n_candidates,
             max_depth=args.max_depth,
+            min_leaves=exploration_min_leaves,
             max_leaves=args.max_leaves,
             mtf_timeframes=mtf_timeframes,
             mtf_probability=args.mtf_probability,
+            pool=indicator_pool,
+            allowed_param_values=exploration_param_values,
+            allowed_literal_values=exploration_literal_values,
         )
-        param_space["direction"] = ["long", "short"]
+        param_space["direction"] = exploration_directions
         print(f"構造生成candidate数: {len(param_space['condition_tree'])} (要求: {args.n_candidates})")
     elif args.optimizer == "structure_genetic":
         # base_space's non-tree fields (rr/session/exit rules/etc) stay
@@ -929,6 +1028,9 @@ def main() -> None:
         # condition_tree/direction evolve here, driven per-generation below
         # (StructureGeneticSearch), not by build_grid_from_space.
         param_space = build_parameter_space(args.mode, args.symbol)
+        if exploration_rr_choices:
+            param_space["rr"] = exploration_rr_choices
+        param_space["mandatory_conditions"] = [exploration_mandatory_conditions]
     elif args.strategy_config:
         param_space = load_strategy_config(Path(args.strategy_config))
         print(f"ストラテジー設定ファイル: {args.strategy_config}")
@@ -1036,28 +1138,34 @@ def main() -> None:
             elif args.optimizer == "structure_genetic":
                 # base_defaults supplies every non-tree field (rr/session/
                 # exit rules/etc) as plain scalars, extracted once from the
-                # dev/full-mode single-value lists - each generation's
-                # individuals ({"condition_tree","direction"} only) get
-                # merged with this into a full run_one_backtest()-ready
-                # params dict.
+                # dev/full-mode single-value lists. In dev mode (each list
+                # has exactly 1 value) every individual just inherits rr from
+                # here unchanged, byte-for-byte the old behavior. In full
+                # mode, param_space["rr"] has multiple values, so rr also
+                # becomes part of each individual's genes (see
+                # StructureGeneticSearch's rr_choices) and overrides
+                # base_defaults's rr below via the ** merge order.
                 base_defaults = {key: values[0] for key, values in param_space.items()}
                 search = StructureGeneticSearch(
                     population_size=args.population,
                     mutation_rate=args.mutation_rate,
                     max_depth=args.max_depth,
                     max_leaves=args.max_leaves,
+                    min_leaves=exploration_min_leaves,
                     mtf_timeframes=mtf_timeframes,
                     mtf_probability=args.mtf_probability,
+                    pool=indicator_pool,
+                    rr_choices=param_space.get("rr"),
+                    allowed_param_values=exploration_param_values,
+                    allowed_literal_values=exploration_literal_values,
+                    allowed_directions=exploration_directions,
                 )
                 population = search.initial_population()
                 next_id = 1
 
                 for generation in range(1, args.generations + 1):
                     print(f"[構造遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
-                    task_params = [
-                        {**base_defaults, "condition_tree": ind["condition_tree"], "direction": ind["direction"]}
-                        for ind in population
-                    ]
+                    task_params = [{**base_defaults, **ind} for ind in population]
                     generation_results = run_batch(
                         executor,
                         task_params,

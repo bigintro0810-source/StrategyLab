@@ -275,3 +275,41 @@ def breaker_block_bearish(
     broken_so_far = broke_below.groupby(epoch_id).cummax().fillna(False)
 
     return (broken_so_far & (high >= tracked_low)).fillna(False).to_numpy()
+
+
+def mitigation_block_bullish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> np.ndarray:
+    """A shallower cousin of breaker_block_bullish, on the same bearish
+    order block setup (a bullish candle overwhelmed by a larger bearish
+    one - see bearish_order_block). A breaker requires price to return to
+    the block's full body extreme (max(open, close)); a mitigation block
+    only requires price to return to the origin candle's OPEN - the level
+    ICT traders commonly describe as where the order that created the
+    imbalance would merely break even, not the full zone a breaker needs.
+    Fires on every bar the retest condition holds, same as breaker_block_*."""
+    ob_flags = pd.Series(bearish_order_block(open_, close), index=close.index)
+    mitigation_level = open_
+
+    tracked_level, epoch_id = _tracked_zone_level(ob_flags, mitigation_level)
+    broke_above = close > tracked_level
+    broken_so_far = broke_above.groupby(epoch_id).cummax().fillna(False)
+
+    return (broken_so_far & (low <= tracked_level)).fillna(False).to_numpy()
+
+
+def mitigation_block_bearish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
+) -> np.ndarray:
+    """Mirror image of mitigation_block_bullish, on the bullish order block
+    setup (see breaker_block_bearish) - uses the origin candle's OPEN as
+    the shallower retest level instead of breaker_block_bearish's full
+    min(open, close) zone."""
+    ob_flags = pd.Series(bullish_order_block(open_, close), index=close.index)
+    mitigation_level = open_
+
+    tracked_level, epoch_id = _tracked_zone_level(ob_flags, mitigation_level)
+    broke_below = close < tracked_level
+    broken_so_far = broke_below.groupby(epoch_id).cummax().fillna(False)
+
+    return (broken_so_far & (high >= tracked_level)).fillna(False).to_numpy()

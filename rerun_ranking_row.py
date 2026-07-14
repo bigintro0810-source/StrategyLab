@@ -20,11 +20,13 @@ no changes to serve a re-run row's data.
 """
 
 import argparse
+import json
 
 import pandas as pd
 
 from engine.data_loader import find_data_file, load_price_data
 from engine.params import reconstruct_params_from_row
+from engine.strategy_registry import save_strategy
 from main import (
     AVAILABLE_TIMEFRAMES,
     SUPPORTED_SYMBOLS,
@@ -39,6 +41,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol", choices=SUPPORTED_SYMBOLS, default="USDJPY")
     parser.add_argument("--timeframe", choices=AVAILABLE_TIMEFRAMES, default="15m")
     parser.add_argument("--rank", type=int, required=True, help="ranking_total.csv内のrank列の値")
+    parser.add_argument(
+        "--simulations",
+        type=int,
+        default=None,
+        help="モンテカルロのシミュレーション回数を上書き(未指定ならengine/monte_carlo.pyの既定値)",
+    )
+    parser.add_argument("--mode", default="dev", help="保存エントリに記録するmode(--save-asと併用)")
+    parser.add_argument("--save-as", default=None, help="指定するとこの行をライブラリ(saved_strategies)に保存する")
+    parser.add_argument("--favorite", action="store_true", help="保存時にお気に入りとして登録する")
 
     return parser.parse_args()
 
@@ -64,9 +75,23 @@ def main() -> None:
     data_path = find_data_file(args.timeframe, args.symbol)
     df = load_price_data(data_path)
 
-    export_single_strategy_analysis(df, params, output_dir)
+    export_single_strategy_analysis(df, params, output_dir, mc_simulations=args.simulations)
 
     print(f"rank={args.rank} の再実行が完了しました。")
+
+    if args.save_as:
+        saved_entry = save_strategy(
+            output_dir=output_dir,
+            mode=args.mode,
+            timeframe=args.timeframe,
+            best_row=row,
+            params=params,
+            name=args.save_as,
+            favorite=args.favorite,
+            symbol=args.symbol,
+        )
+        print(f"戦略を保存しました: {saved_entry['id']} ({saved_entry['name']})")
+        print(f"SAVE_RESULT_JSON:{json.dumps(saved_entry, ensure_ascii=False)}")
 
 
 if __name__ == "__main__":

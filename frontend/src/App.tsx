@@ -1,19 +1,21 @@
-import { forwardRef, useEffect, useState, type HTMLAttributes, type ReactNode } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GridLayout, useContainerWidth, type Layout } from 'react-grid-layout'
-import 'react-resizable/css/styles.css'
+import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createBacktest,
+  deleteStrategy,
   fetchBacktestResults,
   fetchBacktestStatus,
   fetchIndicators,
-  fetchPriceData,
+  fetchSaveResult,
   fetchStrategies,
   fetchStrategyDetail,
   rerunRankingRow,
+  saveRankingRow,
+  toggleStrategyFavorite,
 } from './api'
 import type {
   BacktestResults,
+  ConditionNode,
   ConditionOptimizeRange,
   Direction,
   GroupNode,
@@ -21,42 +23,24 @@ import type {
   OptimizeField,
   ParamRangeConfig,
   PartialTpLevel,
-  RankingRow,
 } from './types'
 import { buildConditionTreeVariants, collectOptimizableConditions, optionIsValid } from './conditionTreeUtils'
 import { buildRangeValues } from './rangeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
-import ChartPanel from './components/ChartPanel'
-import RankingTable from './components/RankingTable'
-import EquityCurveChart from './components/EquityCurveChart'
-import DrawdownChart from './components/DrawdownChart'
-import MonthlyHeatmap from './components/MonthlyHeatmap'
-import OptimizationSurface from './components/OptimizationSurface'
-import TradeHistoryTable from './components/TradeHistoryTable'
-import YearlyPerformanceChart from './components/YearlyPerformanceChart'
-import StatsPanel from './components/StatsPanel'
-import StrategySummaryPanel from './components/StrategySummaryPanel'
-import AutoExplorationDetail from './components/AutoExplorationDetail'
-import AutoExplorationRail from './components/AutoExplorationRail'
+import AutoExplorationScreen from './components/AutoExplorationScreen'
 import AutoExplorationHero from './components/AutoExplorationHero'
-import SavedStrategiesPanel from './components/SavedStrategiesPanel'
+import DataScreen from './components/DataScreen'
+import ReportScreen from './components/ReportScreen'
+import ValidationScreen from './components/ValidationScreen'
+import ResultsScreen from './components/ResultsScreen'
+import type { StrategyTabData } from './components/StrategyDetailTabs'
+import LibraryScreen from './components/LibraryScreen'
+import CsvImportScreen from './components/CsvImportScreen'
+import DataValidatorScreen from './components/DataValidatorScreen'
+import SettingsScreen from './components/SettingsScreen'
+import { loadDefaultSettings } from './defaultSettings'
 
-const LAYOUT_STORAGE_KEY = 'strategylab-dashboard-layout-v4'
-
-const DEFAULT_LAYOUT: Layout = [
-  { i: 'builder', x: 0, y: 0, w: 3, h: 48, minW: 2, minH: 8 },
-  { i: 'chart', x: 3, y: 0, w: 6, h: 16, minW: 3, minH: 8 },
-  { i: 'ranking', x: 9, y: 0, w: 3, h: 16, minW: 2, minH: 4 },
-  { i: 'equity', x: 3, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'drawdown', x: 6, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'summary', x: 9, y: 16, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'heatmap', x: 3, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'yearly', x: 6, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'stats', x: 9, y: 25, w: 3, h: 9, minW: 2, minH: 4 },
-  { i: 'surface', x: 3, y: 34, w: 6, h: 14, minW: 4, minH: 6 },
-  { i: 'trades', x: 9, y: 34, w: 3, h: 14, minW: 2, minH: 6 },
-  { i: 'saved', x: 0, y: 48, w: 12, h: 10, minW: 4, minH: 4 },
-]
+const defaultSettings = loadDefaultSettings()
 
 // NOTE (2026-07-06): ema_length/rsi_min/ema_distance_pips/min_body_pips/
 // max_body_pips/max_wick_pips/breakout_bars were REMOVED from this list -
@@ -70,7 +54,7 @@ const DEFAULT_LAYOUT: Layout = [
 // other opt-in features are toggled (rr/lookahead_bars always apply; the
 // rest only take effect once their own use_* checkbox above is also on -
 // same as directly typing a value into that field would).
-const OPTIMIZABLE_PARAMS: OptimizableParam[] = [
+export const OPTIMIZABLE_PARAMS: OptimizableParam[] = [
   { id: 'rr', label: 'リスクリワード比' },
   { id: 'lookahead_bars', label: '先読みバー数' },
   { id: 'weekend_exit_hour', label: '週末決済時刻' },
@@ -87,13 +71,6 @@ const OPTIMIZABLE_PARAMS: OptimizableParam[] = [
   { id: 'consecutive_loss_stop_count', label: '連敗ストップ数 ※要チェックボックスON' },
   { id: 'entry_offset_pips', label: '指値/逆指値オフセット ※要指値/逆指値選択' },
   { id: 'risk_percent', label: 'リスク%(資金管理) ※要チェックボックスON' },
-]
-
-const OPTIMIZATION_METRICS = [
-  { id: 'net_profit', label: '総利益' },
-  { id: 'profit_factor', label: 'PF' },
-  { id: 'win_rate', label: '勝率%' },
-  { id: 'recovery_factor', label: 'Recovery' },
 ]
 
 const PARAM_DEFAULTS: Record<string, { min: number; max: number; step: number }> = {
@@ -120,48 +97,77 @@ function defaultParamRange(param: string): ParamRangeConfig {
   return { enabled: false, param, ...d }
 }
 
-function loadLayout(): Layout {
-  try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY)
-    if (!raw) return DEFAULT_LAYOUT
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed) && parsed.length === DEFAULT_LAYOUT.length) return parsed as Layout
-  } catch {
-    // ignore malformed saved layout, fall back to default
-  }
-  return DEFAULT_LAYOUT
-}
+export type MainTab = 'explore' | 'results' | 'validation' | 'library' | 'data' | 'settings'
 
-const NAV_ITEMS = [
-  'プロジェクト',
-  'データ',
-  'ストラテジー',
-  'バックテスト',
-  '最適化',
-  '分析',
-  'ランキング',
-  'レポート',
-  'ツール',
-  '設定',
+const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: string }[] }[] = [
+  {
+    id: 'explore',
+    label: '探索',
+    subTabs: [
+      { id: 'manual', label: '手動探索' },
+      { id: 'auto', label: '自動探索' },
+    ],
+  },
+  {
+    id: 'results',
+    label: '結果',
+    subTabs: [
+      { id: 'ranking', label: 'ランキング' },
+      { id: 'detail', label: 'ストラテジー詳細' },
+    ],
+  },
+  {
+    id: 'validation',
+    label: '検証',
+    subTabs: [
+      { id: 'oos', label: 'Out-of-Sample' },
+      { id: 'walkforward', label: 'Walk Forward' },
+      { id: 'montecarlo', label: 'Monte Carlo' },
+      { id: 'sensitivity', label: 'パラメータ安定性' },
+    ],
+  },
+  {
+    id: 'library',
+    label: 'ライブラリ',
+    subTabs: [
+      { id: 'saved', label: '保存済み戦略' },
+      { id: 'favorites', label: 'お気に入り' },
+      { id: 'export', label: 'エクスポート' },
+    ],
+  },
+  {
+    id: 'data',
+    label: 'データ',
+    subTabs: [
+      { id: 'dataset', label: 'データセット' },
+      { id: 'import', label: 'CSVインポート' },
+      { id: 'validator', label: 'Data Validator' },
+    ],
+  },
+  {
+    id: 'settings',
+    label: '設定',
+    subTabs: [
+      { id: 'cost', label: 'コスト' },
+      { id: 'execution', label: '約定条件' },
+      { id: 'timezone', label: 'タイムゾーン' },
+      { id: 'general', label: '一般設定' },
+    ],
+  },
 ]
-
-// Scroll-to-panel targets, keyed by nav label - panel ids are `panel-${key}`
-// matching each <Panel key="..."> below. レポート/ツール/設定 have no
-// corresponding built feature yet, so they're intentionally left out
-// (undefined) rather than pointed at a guessed/wrong panel; NAV_ITEMS still
-// renders them as plain text, just without a click handler.
-const NAV_TARGETS: Record<string, string[] | undefined> = {
-  プロジェクト: ['builder'],
-  データ: ['chart'],
-  ストラテジー: ['saved'],
-  バックテスト: ['ranking'],
-  最適化: ['surface'],
-  分析: ['yearly', 'heatmap', 'stats'],
-  ランキング: ['ranking'],
-}
 
 const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD', 'XAUUSD', 'XAGUSD']
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
+
+// ランキング行の既定表示名: 探索を実行した日付 + rank(6桁連番)。
+// 例: runDateが2026-07-14、rank=3 なら "2026/07/14-000003"。
+function defaultStrategyName(rank: number, runDate: Date | null): string {
+  const d = runDate ?? new Date()
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}/${mm}/${dd}-${String(rank).padStart(6, '0')}`
+}
 
 function defaultTree(): GroupNode {
   return {
@@ -169,26 +175,6 @@ function defaultTree(): GroupNode {
     children: [{ indicator: 'close', operator: '>', value: 0, params: {}, value_params: {} }],
   }
 }
-
-// react-grid-layout positions/drags/resizes a panel by cloning it with an
-// injected ref, className, style, and mouse/touch handlers - they must land
-// on the actual outer DOM node, so this forwards everything through instead
-// of swallowing it like a plain wrapper component would.
-type PanelProps = HTMLAttributes<HTMLDivElement> & { title: string; children: ReactNode }
-
-const Panel = forwardRef<HTMLDivElement, PanelProps>(function Panel(
-  { title, children, className, ...rest },
-  ref,
-) {
-  return (
-    <div ref={ref} className={['glass-panel flex h-full flex-col', className].filter(Boolean).join(' ')} {...rest}>
-      <div className="drag-handle glass-panel-header cursor-move select-none rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
-        {title}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">{children}</div>
-    </div>
-  )
-})
 
 function ParamRangeRow({
   label,
@@ -223,7 +209,7 @@ function ParamRangeRow({
       </label>
       <div className="grid grid-cols-4 gap-1">
         <select
-          className="glass-input col-span-4 rounded-lg px-1.5 py-1 text-xs"
+          className="glass-input col-span-4 w-full min-w-0 rounded-lg px-1.5 py-1 text-xs"
           value={value.param}
           onChange={(e) => {
             const d = PARAM_DEFAULTS[e.target.value] ?? { min: 1, max: 10, step: 1 }
@@ -239,21 +225,21 @@ function ParamRangeRow({
         <input
           type="number"
           title="最小値"
-          className="glass-input rounded-lg px-1 py-1 text-xs"
+          className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs"
           value={value.min}
           onChange={(e) => onChange({ ...value, min: Number(e.target.value) })}
         />
         <input
           type="number"
           title="最大値"
-          className="glass-input rounded-lg px-1 py-1 text-xs"
+          className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs"
           value={value.max}
           onChange={(e) => onChange({ ...value, max: Number(e.target.value) })}
         />
         <input
           type="number"
           title="刻み幅"
-          className="glass-input rounded-lg px-1 py-1 text-xs"
+          className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs"
           value={value.step}
           onChange={(e) => onChange({ ...value, step: Number(e.target.value) })}
         />
@@ -271,12 +257,86 @@ export default function App() {
   // api_server.py::BacktestRequest's n_candidates/max_depth/etc comment for
   // why rr/exit-rule/position-sizing settings don't apply in these modes.
   const [explorationMode, setExplorationMode] = useState<'manual' | 'structure' | 'structure_genetic'>('manual')
+  // Two-level nav: mainTab picks one of MAIN_TABS, subTab picks one of that
+  // tab's own subTabs (its id, not index - independent state per mainTab
+  // isn't needed since only one subTab bar is ever visible at a time).
+  const [mainTab, setMainTab] = useState<MainTab>('explore')
+  const [subTab, setSubTab] = useState('manual')
+
+  // ランキング一覧は画面に収まる固定高さの枠内で自分だけスクロールする
+  // (RankingTable.tsx参照)。ストラテジー詳細タブと行き来するとその枠の
+  // divごとアンマウント/再マウントされるので、DOM要素自身のscrollTopでは
+  // 位置を覚えていられない - 常に生き続けるApp本体側のrefにスクロール
+  // 位置を持たせ、RankingTable側のref callbackで復元/継続記録する。
+  const rankingScrollTopRef = useRef(0)
+
+  const handleMainTabClick = (tab: MainTab) => {
+    setMainTab(tab)
+    setSubTab(MAIN_TABS.find((t) => t.id === tab)?.subTabs[0].id ?? '')
+  }
+
+  const handleSubTabClick = (id: string) => {
+    setSubTab(id)
+  }
+
+  const handleExploreSubTabClick = (id: string) => {
+    setSubTab(id)
+    if (id === 'manual') setExplorationMode('manual')
+    else setExplorationMode((m) => (m === 'manual' ? 'structure_genetic' : m))
+  }
+
+  // Strategies checked in ライブラリ for cross-comparison - lifted here (not
+  // local to LibraryScreen) since 結果>比較 is a separate tab that needs to
+  // read the same selection.
+  const [compareIds, setCompareIds] = useState<string[]>([])
+  const toggleCompareId = (id: string) => {
+    setCompareIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]))
+  }
   // Detail settings (n-candidates/max-depth/.../mutation-rate) start collapsed -
   // a first-time user shouldn't have to parse 8 unfamiliar fields just to
   // click "run"; only someone who opens this should see them.
   const [explorationAdvOpen, setExplorationAdvOpen] = useState(false)
+  // 手動探索 screen's own "詳細設定" - collapsed by default so the screen
+  // reads as just エントリー条件/決済条件/実行, matching the 2026-07-12
+  // request to keep this screen focused on those three things; risk/money
+  // management, cost overrides, and param optimization are still here,
+  // just tucked away for anyone who opens it.
+  const [manualAdvOpen, setManualAdvOpen] = useState(false)
+  // Which indicators are eligible for generation - every category checked
+  // by default reproduces today's unfiltered "every indicator eligible"
+  // behavior (see engine/indicator_pool.py's CATEGORIES, the source of
+  // truth this mirrors). 探索レベル(light/standard/advanced)プリセットは
+  // 2026-07-13廃止 - 常にカスタム(カテゴリ+指標+数値の個別チェック)相当。
+  const [categories, setCategories] = useState<string[]>([
+    'indicator',
+    'price_action',
+    'time_filter',
+    'ict',
+    'chart_pattern',
+  ])
+  // カテゴリ内の個別指標名の絞り込み(空配列 = チェック済みカテゴリの指標が
+  // 全部有効、今日と同じ挙動)。
+  const [customIndicatorNames, setCustomIndicatorNames] = useState<string[]>([])
+  // 指標ごとの数値(param_ranges由来)/閾値(literal_range由来)の絞り込み。
+  // 空/未設定の指標はrepresentative value全部が候補になる(同じ空配列
+  // センチネル方式、engine/indicator_pool.py::value_presets/literal_presets)。
+  const [selectedParamValues, setSelectedParamValues] = useState<Record<string, Record<string, number[]>>>({})
+  const [selectedLiteralValues, setSelectedLiteralValues] = useState<Record<string, number[]>>({})
+  // 決済条件(RR)の候補リスト。空なら--mode devの1.2固定と同じ挙動
+  // (api_server.py::create_backtestがexploration_config自体を書かない)。
+  const [rrChoices, setRrChoices] = useState<number[]>([])
+  // 探索期間(開始日〜終了日) - 手動探索・自動探索どちらのバックテストにも
+  // 共通で効く(main.py::mainがload_price_data直後にフィルタする、
+  // api_server.py::create_backtestがoptimizerを問わずexploration-config
+  // 経由で渡す)。トップバーの共通コントロールとして表示。
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  // 生成される全候補にANDで必ず追加される条件(条件数min/max leavesの
+  // カウント対象外)。
+  const [mandatoryConditions, setMandatoryConditions] = useState<ConditionNode[]>([])
   const [nCandidates, setNCandidates] = useState(500)
   const [maxDepth, setMaxDepth] = useState(2)
+  const [minLeaves, setMinLeaves] = useState(1)
   const [maxLeaves, setMaxLeaves] = useState(4)
   const [minTrades, setMinTrades] = useState(30)
   const [mtfProbability, setMtfProbability] = useState(0)
@@ -295,31 +355,80 @@ export default function App() {
   const [longTree, setLongTree] = useState<GroupNode>(defaultTree())
   const [shortTree, setShortTree] = useState<GroupNode>(defaultTree())
 
+  // Shared Short/Long selector (top toolbar, used by both 手動探索 and
+  // 自動探索): two independently-toggleable buttons rather than a single
+  // exclusive choice - both active === dualDirectionMode, exactly one
+  // active === direction/dualDirectionMode=false (the existing manual-
+  // builder state, unchanged). At least one must stay active.
+  const shortActive = dualDirectionMode || direction === 'short'
+  const longActive = dualDirectionMode || direction === 'long'
+  const toggleShortActive = () => {
+    if (shortActive && !longActive) return
+    if (shortActive) {
+      setDualDirectionMode(false)
+      setDirection('long')
+    } else if (longActive) {
+      setDualDirectionMode(true)
+    } else {
+      setDualDirectionMode(false)
+      setDirection('short')
+    }
+  }
+  const toggleLongActive = () => {
+    if (longActive && !shortActive) return
+    if (longActive) {
+      setDualDirectionMode(false)
+      setDirection('short')
+    } else if (shortActive) {
+      setDualDirectionMode(true)
+    } else {
+      setDualDirectionMode(false)
+      setDirection('long')
+    }
+  }
+
   const [symbol, setSymbol] = useState('USDJPY')
   const [timeframe, setTimeframe] = useState('15m')
   const [mode, setMode] = useState('dev')
   const [jobId, setJobId] = useState<string | null>(null)
 
-  // Which ranking_total row (by its `rank` column) the user picked to
-  // inspect - null means "show the overall best row" (rank 1), the
-  // original/default behavior. rowJobId is the separate re-run job that
-  // produces THAT row's own trade_log/equity_curve/etc (see
-  // rerunRankingRow/rerun_ranking_row.py) - both reset whenever a brand new
-  // main backtest starts, since the old ranking they refer to is gone.
-  const [selectedRank, setSelectedRank] = useState<number | null>(null)
-  const [rowJobId, setRowJobId] = useState<string | null>(null)
+  // ストラテジー詳細タブの状態。openTabRanks=開いているタブ(最大20、rank自体を
+  // IDとして使う - RankingRow.rankは列ソートで表示順が変わっても値は変わらない
+  // 安定したサーバー割り当てID)。visibleRanks=画面に並べて表示中のタブ(最大4、
+  // openTabRanksの部分集合)。focusedRank=直近で開いた/選んだタブのrankで、
+  // 検証/エクスポート画面(ValidationScreen/ReportScreen)が今まで通り単一の
+  // selectedRank/bestRowとして参照できるようにするための後方互換用。
+  // tabJobIdsは各タブ用の再計算ジョブ(rerunRankingRow/rerun_ranking_row.py、
+  // 1行だけ再計算する既存の仕組みをタブの数だけ並列に使う)。
+  // 新しいバックテストが始まったら全てリセットする(旧ランキングは消えるため)。
+  const MAX_DETAIL_TABS = 20
+  const MAX_VISIBLE_TABS = 4
+  const [openTabRanks, setOpenTabRanks] = useState<number[]>([])
+  const [visibleRanks, setVisibleRanks] = useState<number[]>([])
+  const [focusedRank, setFocusedRank] = useState<number | null>(null)
+  const [tabJobIds, setTabJobIds] = useState<Record<number, string>>({})
 
-  // Chart display timeframe is independent from the backtest timeframe above -
-  // you may want to eyeball a strategy on 1h while backtesting on 15m.
-  const [chartTimeframe, setChartTimeframe] = useState('15m')
-  const [emaLength, setEmaLength] = useState(20)
+  // 各行の表示名。リネームした行だけcustomNamesに入り、それ以外はrunDate(この
+  // ジョブの実行日時)+rank(6桁連番)から機械的に組み立てる既定名を使う
+  // (例: 2026/07/14-000003)。ライブラリへの保存名にもこれをそのまま使う。
+  const [customNames, setCustomNames] = useState<Record<number, string>>({})
+  const [runDate, setRunDate] = useState<Date | null>(null)
+  const renameRow = (rank: number, name: string) => setCustomNames((prev) => ({ ...prev, [rank]: name }))
+
+  // 🔖/⭐によるライブラリ保存状態。rerunRankingRowと同じ「rank毎にジョブを
+  // 1つ持つ」パターンで、rerun_ranking_row.py --save-asの完了を待ってから
+  // SAVE_RESULT_JSON:マーカー(fetchSaveResult)で保存済みID/お気に入りを読む。
+  const [saveJobIds, setSaveJobIds] = useState<Record<number, string>>({})
+  // 保存ジョブは実体がバックテストの再計算(数秒かかる)なので、クリックから
+  // 完了までの間だけtrueにするフラグ。これが無いと、保存中に🔖/⭐を連打した
+  // 場合「まだ保存済みと判定されていない」せいで毎回新規保存が走ってしまい、
+  // ライブラリに同名の重複エントリが量産される実害があったため追加した。
+  const [pendingSaveRanks, setPendingSaveRanks] = useState<Set<number>>(new Set())
 
   // Any number of parameter ranges (not capped at 2) - each independently
   // enabled/disabled, all feeding one N-dimensional grid search on the
   // backend (main.py's itertools.product-based grid was already fully
-  // generic; this UI cap was the only limitation). The 3D surface below can
-  // only ever plot 2 axes at once, so surfaceParamX/Y pick which 2 of the
-  // currently-enabled ranges to visualize.
+  // generic; this UI cap was the only limitation).
   const [paramRanges, setParamRanges] = useState<ParamRangeConfig[]>(() => [
     defaultParamRange('rr'),
     defaultParamRange('lookahead_bars'),
@@ -328,9 +437,6 @@ export default function App() {
   const removeParamRange = (index: number) => setParamRanges((prev) => prev.filter((_, i) => i !== index))
   const updateParamRange = (index: number, next: ParamRangeConfig) =>
     setParamRanges((prev) => prev.map((r, i) => (i === index ? next : r)))
-  const [surfaceParamX, setSurfaceParamX] = useState('rr')
-  const [surfaceParamY, setSurfaceParamY] = useState('lookahead_bars')
-  const [optimizationMetric, setOptimizationMetric] = useState('net_profit')
 
   // Node-level condition-tree optimization: sweep one or more specific
   // conditions' own comparison values (e.g. "this RSI threshold, 60-80")
@@ -360,12 +466,12 @@ export default function App() {
   const [dailyExitHour, setDailyExitHour] = useState(4)
   const [saveAsName, setSaveAsName] = useState('')
 
-  // Execution cost simulation - all default to 0 (frictionless fills,
-  // matching the engine's default) so leaving these untouched reproduces
-  // today's existing behavior exactly.
-  const [spreadPips, setSpreadPips] = useState(0)
-  const [slippagePips, setSlippagePips] = useState(0)
-  const [commissionPerTrade, setCommissionPerTrade] = useState(0)
+  // Execution cost simulation - defaults come from the 設定 screen's
+  // localStorage-backed values (see defaultSettings.ts), which themselves
+  // fall back to frictionless-fill zeros matching the engine's own default.
+  const [spreadPips, setSpreadPips] = useState(defaultSettings.spreadPips)
+  const [slippagePips, setSlippagePips] = useState(defaultSettings.slippagePips)
+  const [commissionPerTrade, setCommissionPerTrade] = useState(defaultSettings.commissionPerTrade)
 
   // ATR trailing stop - off by default (fixed RR-based SL/TP, today's
   // existing behavior unchanged unless opted in).
@@ -396,11 +502,11 @@ export default function App() {
   // exposed since the user wants all three available.
   const [usePositionSizing, setUsePositionSizing] = useState(false)
   const [positionSizingMethod, setPositionSizingMethod] = useState<'risk_percent' | 'fixed_lot' | 'compounding'>('risk_percent')
-  const [initialCapital, setInitialCapital] = useState(1_000_000)
-  const [accountCurrency, setAccountCurrency] = useState<'JPY' | 'USD'>('JPY')
-  const [riskPercent, setRiskPercent] = useState(1.0)
+  const [initialCapital, setInitialCapital] = useState(defaultSettings.initialCapital)
+  const [accountCurrency, setAccountCurrency] = useState<'JPY' | 'USD'>(defaultSettings.accountCurrency)
+  const [riskPercent, setRiskPercent] = useState(defaultSettings.riskPercent)
   const [fixedLotSize, setFixedLotSize] = useState(0.1)
-  const [conversionRate, setConversionRate] = useState(150.0)
+  const [conversionRate, setConversionRate] = useState(defaultSettings.conversionRate)
 
   // Breakeven stop move and partial profit-taking - both off by default
   // (SL/TP stay exactly as RR-computed at entry, today's existing behavior
@@ -418,28 +524,19 @@ export default function App() {
   const updatePartialTpLevel = (index: number, next: PartialTpLevel) =>
     setPartialTpLevels((prev) => prev.map((l, i) => (i === index ? next : l)))
 
-  const [layout, setLayout] = useState<Layout>(loadLayout)
-  const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth()
-
-  const handleLayoutChange = (next: Layout) => {
-    setLayout(next)
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next))
-  }
-
-  const resetLayout = () => {
-    localStorage.removeItem(LAYOUT_STORAGE_KEY)
-    setLayout(DEFAULT_LAYOUT)
-  }
+  // Decoupled SL/TP basis - default to the values that reproduce the prior
+  // fixed "RR from signal candle" behavior exactly.
+  const [slBasis, setSlBasis] = useState<'signal_candle' | 'atr' | 'fixed_pips'>('signal_candle')
+  const [slAtrLength, setSlAtrLength] = useState(14)
+  const [slAtrMultiplier, setSlAtrMultiplier] = useState(2.0)
+  const [slFixedPips, setSlFixedPips] = useState(20.0)
+  const [tpBasis, setTpBasis] = useState<'rr' | 'fixed_pips' | 'custom'>('rr')
+  const [tpFixedPips, setTpFixedPips] = useState(20.0)
+  const [exitConditionTree, setExitConditionTree] = useState<GroupNode>(defaultTree())
 
   const queryClient = useQueryClient()
 
   const indicatorsQuery = useQuery({ queryKey: ['indicators'], queryFn: fetchIndicators })
-  const priceQuery = useQuery({
-    queryKey: ['price-data', symbol, chartTimeframe],
-    queryFn: () => fetchPriceData(symbol, chartTimeframe, 300),
-  })
-  const strategiesQuery = useQuery({ queryKey: ['strategies'], queryFn: fetchStrategies })
-
   const loadStrategyMutation = useMutation({
     mutationFn: fetchStrategyDetail,
     onSuccess: (detail) => {
@@ -498,6 +595,17 @@ export default function App() {
       } else if (typeof detail.params.partial_tp_rr === 'number' && typeof detail.params.partial_tp_fraction === 'number') {
         setPartialTpLevels([{ rr: detail.params.partial_tp_rr, fraction: detail.params.partial_tp_fraction }])
       }
+      if (detail.params.sl_basis === 'signal_candle' || detail.params.sl_basis === 'atr' || detail.params.sl_basis === 'fixed_pips') {
+        setSlBasis(detail.params.sl_basis)
+      }
+      if (typeof detail.params.sl_atr_length === 'number') setSlAtrLength(detail.params.sl_atr_length)
+      if (typeof detail.params.sl_atr_multiplier === 'number') setSlAtrMultiplier(detail.params.sl_atr_multiplier)
+      if (typeof detail.params.sl_fixed_pips === 'number') setSlFixedPips(detail.params.sl_fixed_pips)
+      if (detail.params.tp_basis === 'rr' || detail.params.tp_basis === 'fixed_pips' || detail.params.tp_basis === 'custom') {
+        setTpBasis(detail.params.tp_basis)
+      }
+      if (typeof detail.params.tp_fixed_pips === 'number') setTpFixedPips(detail.params.tp_fixed_pips)
+      if (detail.params.exit_condition_tree) setExitConditionTree(detail.params.exit_condition_tree as GroupNode)
     },
   })
 
@@ -505,7 +613,11 @@ export default function App() {
     mutationFn: () => {
       if (explorationMode !== 'manual') {
         return createBacktest({
-          mode,
+          // dev/fullモードの差はRR(1パターンか3パターンか)だけだったが、
+          // RRは下のrr_choicesで直接指定できるようになったので自動探索では
+          // 常にdev固定を送る(main.py側の他フィールドは条件ツリー使用時は
+          // 未使用なので実害なし、engine/backtest_engine.py参照)。
+          mode: 'dev',
           timeframe,
           symbol,
           optimizer: explorationMode,
@@ -519,6 +631,16 @@ export default function App() {
           population,
           mutation_rate: mutationRate,
           generations,
+          categories,
+          custom_indicator_names: customIndicatorNames,
+          rr_choices: rrChoices.length > 0 ? rrChoices : undefined,
+          direction_mode: dualDirectionMode ? 'both' : direction,
+          start_date: startDate || undefined,
+          end_date: endDate || undefined,
+          min_leaves: minLeaves,
+          selected_param_values: Object.keys(selectedParamValues).length > 0 ? selectedParamValues : undefined,
+          selected_literal_values: Object.keys(selectedLiteralValues).length > 0 ? selectedLiteralValues : undefined,
+          mandatory_conditions: mandatoryConditions.length > 0 ? mandatoryConditions : undefined,
           save_as: saveAsName.trim() || undefined,
         })
       }
@@ -587,15 +709,30 @@ export default function App() {
         breakeven_trigger_rr: breakevenTriggerRr,
         use_partial_tp: usePartialTp,
         partial_tp_levels: partialTpLevels,
+        sl_basis: slBasis,
+        sl_atr_length: slAtrLength,
+        sl_atr_multiplier: slAtrMultiplier,
+        sl_fixed_pips: slFixedPips,
+        tp_basis: tpBasis,
+        tp_fixed_pips: tpFixedPips,
+        exit_condition_tree: tpBasis === 'custom' ? exitConditionTree : undefined,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
         save_as: saveAsName.trim() || undefined,
       })
     },
     onSuccess: (data) => {
       setJobId(data.job_id)
-      // The old ranking (and whatever row was selected within it) belongs
-      // to a run that no longer exists once a new one starts.
-      setSelectedRank(null)
-      setRowJobId(null)
+      // The old ranking (and any open strategy-detail tabs within it)
+      // belongs to a run that no longer exists once a new one starts.
+      setOpenTabRanks([])
+      setVisibleRanks([])
+      setFocusedRank(null)
+      setTabJobIds({})
+      setCustomNames({})
+      setRunDate(new Date())
+      setSaveJobIds({})
+      setPendingSaveRanks(new Set())
     },
   })
 
@@ -619,34 +756,203 @@ export default function App() {
   // Re-running one ranking row the user clicked on (see RankingTable's
   // onSelectRow) - a separate job/poll/results trio mirroring the main
   // backtest's own three above, so a row selection never disturbs the
-  // original ranking or the main run's own job state.
-  const selectRowMutation = useMutation({
+  // original ranking or the main run's own job state. One mutation is
+  // enough (mutate() is called once per rank, not tied to a single
+  // in-flight request), but status/results need one query PER open tab -
+  // useQueries builds that array dynamically from openTabRanks.
+  const rerunRowMutation = useMutation({
     mutationFn: (rank: number) => rerunRankingRow(jobId as string, rank),
-    onSuccess: (data) => setRowJobId(data.job_id),
+    onSuccess: (data, rank) => setTabJobIds((prev) => ({ ...prev, [rank]: data.job_id })),
   })
 
-  const rowStatusQuery = useQuery({
-    queryKey: ['backtest-status', rowJobId],
-    queryFn: () => fetchBacktestStatus(rowJobId as string),
-    enabled: rowJobId !== null,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      return status === 'done' || status === 'error' ? false : 1000
+  const tabStatusQueries = useQueries({
+    queries: openTabRanks.map((rank) => ({
+      queryKey: ['backtest-status', tabJobIds[rank]],
+      queryFn: () => fetchBacktestStatus(tabJobIds[rank] as string),
+      enabled: tabJobIds[rank] != null,
+      refetchInterval: (query: { state: { data?: { status?: string } } }) => {
+        const status = query.state.data?.status
+        return status === 'done' || status === 'error' ? false : 1000
+      },
+      refetchIntervalInBackground: true,
+    })),
+  })
+
+  const tabResultsQueries = useQueries({
+    queries: openTabRanks.map((rank, i) => ({
+      queryKey: ['backtest-results', tabJobIds[rank]],
+      queryFn: () => fetchBacktestResults(tabJobIds[rank] as string),
+      enabled: tabJobIds[rank] != null && tabStatusQueries[i]?.data?.status === 'done',
+    })),
+  })
+
+  // Clicking a ranking row opens (or re-focuses) its tab and shows it alone
+  // (replaces whatever was visible) - dragging one tab onto another is the
+  // only way to build a side-by-side view (see StrategyDetailTabs.tsx).
+  const openStrategyTab = (rank: number) => {
+    setFocusedRank(rank)
+    setOpenTabRanks((prev) => (prev.includes(rank) || prev.length >= MAX_DETAIL_TABS ? prev : [...prev, rank]))
+    setVisibleRanks([rank])
+    if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+  }
+
+  const closeStrategyTab = (rank: number) => {
+    setOpenTabRanks((prev) => prev.filter((r) => r !== rank))
+    setVisibleRanks((prev) => prev.filter((r) => r !== rank))
+    if (focusedRank === rank) setFocusedRank(null)
+  }
+
+  const mergeStrategyTabs = (draggedRank: number, targetRank: number) => {
+    if (draggedRank === targetRank) return
+    setVisibleRanks((prev) => {
+      const base = prev.includes(targetRank) ? prev : [targetRank]
+      if (base.includes(draggedRank) || base.length >= MAX_VISIBLE_TABS) return base
+      return [...base, draggedRank]
+    })
+  }
+
+  // 複数並べて表示中のカード右上の×用: そのタブ自体は閉じず(タブバーには
+  // 残る/ランキング一覧のチェックも外れない)、並び表示から外すだけ。
+  const removeFromVisible = (rank: number) => {
+    setVisibleRanks((prev) => prev.filter((r) => r !== rank))
+  }
+
+  // ランキング一覧のチェックボックス用: チェックを付けるとタブバーに追加され
+  // (何も表示されていなければそのまま表示、既に何か表示中ならタブバーに
+  // 追加するだけで表示は変えない)、外すとopenStrategyTab同様タブごと閉じる。
+  // 従来「行クリックでタブを開く」だったonSelectRowの責務をチェックボックス
+  // に統合したもの。
+  const toggleRowChecked = (rank: number) => {
+    if (openTabRanks.includes(rank)) {
+      closeStrategyTab(rank)
+      return
+    }
+    setFocusedRank(rank)
+    setOpenTabRanks((prev) => (prev.length >= MAX_DETAIL_TABS ? prev : [...prev, rank]))
+    setVisibleRanks((prev) => (prev.length === 0 ? [rank] : prev))
+    if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+  }
+
+  // 🔖/⭐がクリックされた行をrerun_ranking_row.py --save-as経由でライブラリへ
+  // 保存する(rerunRowMutationと同じ「rankごとにジョブを1つ持つ」パターン)。
+  const saveRowMutation = useMutation({
+    mutationFn: ({ rank, name, favorite }: { rank: number; name: string; favorite: boolean }) =>
+      saveRankingRow(jobId as string, rank, name, favorite),
+    onSuccess: (data, variables) => {
+      setSaveJobIds((prev) => ({ ...prev, [variables.rank]: data.job_id }))
+      setPendingSaveRanks((prev) => {
+        const next = new Set(prev)
+        next.delete(variables.rank)
+        return next
+      })
+      queryClient.invalidateQueries({ queryKey: ['strategies'] })
     },
-    refetchIntervalInBackground: true,
+    onError: (_error, variables) => {
+      setPendingSaveRanks((prev) => {
+        const next = new Set(prev)
+        next.delete(variables.rank)
+        return next
+      })
+    },
   })
 
-  const rowResultsQuery = useQuery<BacktestResults>({
-    queryKey: ['backtest-results', rowJobId],
-    queryFn: () => fetchBacktestResults(rowJobId as string),
-    enabled: rowJobId !== null && rowStatusQuery.data?.status === 'done',
+  const favoriteToggleMutation = useMutation({
+    mutationFn: (strategyId: string) => toggleStrategyFavorite(strategyId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
   })
 
-  const handleSelectRankingRow = (row: RankingRow) => {
-    if (jobId === null) return
-    const rank = Number(row.rank)
-    setSelectedRank(rank)
-    selectRowMutation.mutate(rank)
+  const deleteSavedMutation = useMutation({
+    mutationFn: (strategyId: string) => deleteStrategy(strategyId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategies'] }),
+  })
+
+  // ライブラリ画面(LibraryScreen)がお気に入りをトグルしても、そこはApp.tsx
+  // とは別のuseMutationインスタンスなので、以前はランキング一覧側の表示に
+  // 一切反映されなかった(App.tsx内で完結する独自のfavoriteOverridesでしか
+  // 上書きしていなかったため)。['strategies']クエリをApp.tsx側でも購読して
+  // おき、そこから権威あるfavorite状態を引くようにすることで、保存/お気に
+  // 入り操作がどちらの画面から行われても両方に反映されるようにする
+  // (LibraryScreen/RankingTable双方の保存系ミューテーションが揃って
+  // invalidateQueries({queryKey:['strategies']})を呼んでいるので、この
+  // クエリは常に最新化される)。
+  const strategiesQuery = useQuery({ queryKey: ['strategies', 'all'], queryFn: fetchStrategies })
+  const favoriteById: Record<string, boolean> = {}
+  for (const s of strategiesQuery.data ?? []) {
+    favoriteById[s.id] = s.favorite
+  }
+
+  const saveJobEntries = Object.entries(saveJobIds)
+
+  const saveStatusQueries = useQueries({
+    queries: saveJobEntries.map(([, jid]) => ({
+      queryKey: ['backtest-status', jid],
+      queryFn: () => fetchBacktestStatus(jid),
+      refetchInterval: (query: { state: { data?: { status?: string } } }) => {
+        const status = query.state.data?.status
+        return status === 'done' || status === 'error' ? false : 1000
+      },
+      refetchIntervalInBackground: true,
+    })),
+  })
+
+  const saveResultQueries = useQueries({
+    queries: saveJobEntries.map(([, jid], i) => ({
+      queryKey: ['save-result', jid],
+      queryFn: () => fetchSaveResult(jid),
+      enabled: saveStatusQueries[i]?.data?.status === 'done',
+    })),
+  })
+
+  const savedMeta: Record<number, { id: string; favorite: boolean }> = {}
+  const saveJobStatusByRank: Record<number, string | undefined> = {}
+  saveJobEntries.forEach(([rankStr], i) => {
+    const rank = Number(rankStr)
+    saveJobStatusByRank[rank] = saveStatusQueries[i]?.data?.status
+    const data = saveResultQueries[i]?.data
+    if (!data) return
+    savedMeta[rank] = { id: data.id, favorite: favoriteById[data.id] ?? data.favorite }
+  })
+
+  const resolveName = (rank: number) => customNames[rank] ?? defaultStrategyName(rank, runDate)
+
+  // 保存ジョブ(バックテスト再計算を伴うため数秒かかる)がまだ完了して
+  // いない間はtrue。この間は🔖/⭐を押しても再送しない(連打による重複保存
+  // 防止)し、ボタン側にも「保存中」であることを表示する。
+  const isRowSavePending = (rank: number): boolean => {
+    if (pendingSaveRanks.has(rank)) return true
+    const status = saveJobStatusByRank[rank]
+    if (status == null) return false
+    return status !== 'error' && savedMeta[rank] == null
+  }
+
+  // 🔖はチェックボックスと同じ完全なon/offトグル: オンで保存、オフでライブラリ
+  // (保存済みストラテジー)から削除する。⭐はfalseに戻してもライブラリからは
+  // 削除しない(favoriteはあくまで保存済みエントリの属性の一つ)。
+  const handleBookmark = (rank: number) => {
+    if (jobId === null || isRowSavePending(rank)) return
+    const meta = savedMeta[rank]
+    if (meta) {
+      deleteSavedMutation.mutate(meta.id)
+      setSaveJobIds((prev) => {
+        const next = { ...prev }
+        delete next[rank]
+        return next
+      })
+    } else {
+      setPendingSaveRanks((prev) => new Set(prev).add(rank))
+      saveRowMutation.mutate({ rank, name: resolveName(rank), favorite: false })
+    }
+  }
+
+  const handleFavorite = (rank: number) => {
+    if (jobId === null || isRowSavePending(rank)) return
+    const meta = savedMeta[rank]
+    if (meta) {
+      favoriteToggleMutation.mutate(meta.id)
+    } else {
+      setPendingSaveRanks((prev) => new Set(prev).add(rank))
+      saveRowMutation.mutate({ rank, name: resolveName(rank), favorite: true })
+    }
   }
 
   useEffect(() => {
@@ -676,171 +982,313 @@ export default function App() {
 
   const results = resultsQuery.data
 
-  // When a ranking row is selected AND its own re-run has finished, show
-  // THAT row's trade_log/equity_curve/etc (and its own ranking_total entry
-  // for the stats/summary panels) instead of the main run's rank-1 default.
-  // ranking_total itself always comes from the original `results` (the
-  // rerun doesn't recompute a whole new ranking, just one row's own
-  // analysis) - see rerun_ranking_row.py.
-  const selectedRowResults = rowResultsQuery.data
-  const isRowLoading =
-    selectedRank !== null && !['done', 'error'].includes(rowStatusQuery.data?.status ?? 'queued')
-  // Without this, a failed row-rerun (rowStatusQuery.data.status === 'error')
-  // left isRowLoading permanently true forever - 'error' isn't 'done', so the
-  // old check above never stopped waiting, and the UI showed "再計算中..."
-  // indefinitely instead of the actual error (found via a real packaging bug:
-  // rerun_ranking_row.py was missing from build_package.ps1's file list, so
-  // every row click in a packaged build failed immediately - but the failure
-  // was invisible, it just looked like a permanent loading spinner).
-  const rowError =
-    selectedRank !== null && rowStatusQuery.data?.status === 'error'
-      ? (rowStatusQuery.data.error_summary ?? '再計算中にエラーが発生しました。')
-      : null
-  const displayResults = selectedRowResults ?? results
+  // Per-tab display data for StrategyDetailTabs - one entry per open tab,
+  // each independently resolving its own bestRow/displayResults/loading/
+  // error from that tab's own rerun job (see tabStatusQueries/
+  // tabResultsQueries above). ranking_total itself always comes from the
+  // original `results` (a rerun doesn't recompute the whole ranking, just
+  // one row's own trade_log/equity_curve - see rerun_ranking_row.py).
+  const strategyTabs: StrategyTabData[] = openTabRanks.map((rank, i) => {
+    const status = tabStatusQueries[i]?.data?.status
+    const isLoading = tabJobIds[rank] != null && !['done', 'error'].includes(status ?? 'queued')
+    // Without this check, a failed row-rerun left isLoading permanently true
+    // forever - 'error' isn't 'done', so the naive check above never stopped
+    // waiting (found via a real packaging bug: rerun_ranking_row.py was
+    // missing from build_package.ps1's file list, so every row click in a
+    // packaged build failed invisibly behind a permanent loading spinner).
+    const error = status === 'error' ? (tabStatusQueries[i]?.data?.error_summary ?? '再計算中にエラーが発生しました。') : null
+    return {
+      rank,
+      name: resolveName(rank),
+      bestRow: results?.ranking_total?.find((row) => Number(row.rank) === rank),
+      displayResults: tabResultsQueries[i]?.data ?? results,
+      isLoading,
+      error,
+      isFavorite: savedMeta[rank]?.favorite ?? false,
+      isPending: isRowSavePending(rank),
+    }
+  })
+
+  // RankingTableの名称セル/保存状態表示用に、全行分をまとめて解決しておく。
+  const rankingNames: Record<number, string> = {}
+  const rankingRowMeta: Record<number, { isChecked: boolean; isSaved: boolean; isFavorite: boolean; isPending: boolean }> = {}
+  for (const row of results?.ranking_total ?? []) {
+    const rank = Number(row.rank)
+    rankingNames[rank] = resolveName(rank)
+    const meta = savedMeta[rank]
+    rankingRowMeta[rank] = {
+      isChecked: openTabRanks.includes(rank),
+      isSaved: meta != null,
+      isFavorite: meta?.favorite ?? false,
+      isPending: isRowSavePending(rank),
+    }
+  }
+
+  // Back-compat scalars for ValidationScreen/ReportScreen, which only ever
+  // needed "the one currently-relevant rank/row" and know nothing about
+  // multiple open tabs - focusedRank (last opened/clicked tab) fills that
+  // same role selectedRank used to.
   const bestRow =
-    (selectedRank !== null
-      ? results?.ranking_total?.find((row) => Number(row.rank) === selectedRank)
+    (focusedRank !== null
+      ? results?.ranking_total?.find((row) => Number(row.rank) === focusedRank)
       : undefined) ?? results?.ranking_total?.[0]
   const isRunning = statusQuery.data && !['done', 'error'].includes(statusQuery.data.status)
 
-  const handleNavClick = (item: string) => {
-    const targets = NAV_TARGETS[item]
-    if (!targets) return
-    targets.forEach((key, i) => {
-      const el = document.getElementById(`panel-${key}`)
-      if (!el) return
-      if (i === 0) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      el.classList.add('nav-highlight')
-      setTimeout(() => el.classList.remove('nav-highlight'), 1200)
-    })
-  }
-
   return (
     <div className="min-h-screen text-gray-200">
-      <nav className="glass-nav sticky top-0 z-10 flex items-center gap-5 px-4 py-3 text-sm">
-        <span className="brand-text text-base font-bold tracking-wide">Strategy Lab</span>
-        {NAV_ITEMS.map((item) =>
-          NAV_TARGETS[item] ? (
+      <nav className="glass-nav sticky top-0 z-10 text-sm">
+        <div className="flex items-center gap-5 px-4 py-3">
+          <span className="brand-text text-base font-bold tracking-wide">Strategy Lab</span>
+          {MAIN_TABS.map((tab) => (
             <button
-              key={item}
+              key={tab.id}
               type="button"
-              onClick={() => handleNavClick(item)}
-              className="cursor-pointer text-gray-400 transition-colors hover:text-gray-200"
+              onClick={() => handleMainTabClick(tab.id)}
+              className={
+                mainTab === tab.id
+                  ? 'cursor-pointer font-semibold text-gray-100'
+                  : 'cursor-pointer text-gray-400 transition-colors hover:text-gray-200'
+              }
             >
-              {item}
+              {tab.label}
             </button>
-          ) : (
-            <span key={item} className="cursor-default text-gray-600" title="準備中">
-              {item}
-            </span>
-          ),
+          ))}
+        </div>
+        {mainTab !== 'explore' && (
+        <div className="flex items-center gap-4 border-t border-white/5 px-4 py-2 text-xs">
+          {(MAIN_TABS.find((t) => t.id === mainTab)?.subTabs ?? []).map((st) => (
+            <button
+              key={st.id}
+              type="button"
+              onClick={() => handleSubTabClick(st.id)}
+              className={
+                subTab === st.id
+                  ? 'rounded-full bg-blue-500/20 px-3 py-1 font-semibold text-blue-100'
+                  : 'rounded-full px-3 py-1 text-gray-400 hover:bg-white/5 hover:text-gray-200'
+              }
+            >
+              {st.label}
+            </button>
+          ))}
+        </div>
         )}
-        <button
-          type="button"
-          onClick={resetLayout}
-          className="ml-auto rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-gray-400 hover:bg-white/10 hover:text-gray-200"
-        >
-          レイアウトをリセット
-        </button>
       </nav>
 
-      <div ref={gridContainerRef} className="p-4">
-        <div className="mb-4 flex w-64 overflow-hidden rounded-lg border border-white/10 text-xs">
-          <button
-            type="button"
-            onClick={() => setExplorationMode('manual')}
-            className={
-              explorationMode === 'manual'
-                ? 'flex-1 bg-blue-500/30 px-2 py-1.5 font-semibold text-blue-100'
-                : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-            }
-          >
-            手動ビルダー
-          </button>
-          <button
-            type="button"
-            onClick={() => setExplorationMode((m) => (m === 'manual' ? 'structure_genetic' : m))}
-            className={
-              explorationMode !== 'manual'
-                ? 'flex-1 bg-purple-500/30 px-2 py-1.5 font-semibold text-purple-100'
-                : 'flex-1 px-2 py-1.5 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-            }
-          >
-            自動探索
-          </button>
-        </div>
+      <div className="p-4">
 
-        {gridMounted && explorationMode === 'manual' && (
-          <GridLayout
-            width={gridWidth}
-            layout={layout}
-            gridConfig={{ cols: 12, rowHeight: 24, margin: [16, 16] }}
-            dragConfig={{ handle: '.drag-handle' }}
-            onLayoutChange={handleLayoutChange}
-          >
-            <Panel key="builder" id="panel-builder" title="① ストラテジービルダー">
+        {mainTab === 'data' && subTab === 'dataset' && <DataScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
+        {mainTab === 'data' && subTab === 'import' && <CsvImportScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
+        {mainTab === 'data' && subTab === 'validator' && <DataValidatorScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
+
+        {mainTab === 'library' && subTab === 'export' && (
+          <ReportScreen
+            jobId={jobId}
+            jobDone={statusQuery.data?.status === 'done'}
+            symbol={symbol}
+            timeframe={timeframe}
+            selectedRank={focusedRank}
+            bestRow={bestRow}
+            results={results}
+          />
+        )}
+        {mainTab === 'library' && (subTab === 'saved' || subTab === 'favorites') && (
+          <LibraryScreen
+            favoritesOnly={subTab === 'favorites'}
+            onLoad={(id) => loadStrategyMutation.mutate(id)}
+            isLoading={loadStrategyMutation.isPending}
+            compareIds={compareIds}
+            onToggleCompare={toggleCompareId}
+            onGoToCompare={() => {
+              setMainTab('results')
+              setSubTab('ranking')
+            }}
+          />
+        )}
+
+        {mainTab === 'validation' && (
+          <ValidationScreen
+            subTab={subTab}
+            symbol={symbol}
+            timeframe={timeframe}
+            effectiveRank={focusedRank ?? bestRow?.rank ?? null}
+          />
+        )}
+
+        {mainTab === 'results' && (
+          <ResultsScreen
+            subTab={subTab}
+            results={results}
+            strategyTabs={strategyTabs}
+            visibleRanks={visibleRanks}
+            indicators={indicatorsQuery.data ?? []}
+            onSelectTab={openStrategyTab}
+            onCloseTab={closeStrategyTab}
+            onMergeTabs={mergeStrategyTabs}
+            onRemoveFromView={removeFromVisible}
+            onRenameRow={renameRow}
+            jobId={jobId}
+            names={rankingNames}
+            rowMeta={rankingRowMeta}
+            focusedRank={focusedRank}
+            onToggleChecked={toggleRowChecked}
+            rankingScrollTopRef={rankingScrollTopRef}
+            onBookmark={handleBookmark}
+            onFavorite={handleFavorite}
+          />
+        )}
+
+        {mainTab === 'settings' && <SettingsScreen subTab={subTab} />}
+
+        {mainTab === 'explore' && (
+          <div className="mb-3 flex flex-nowrap items-center gap-3 overflow-x-auto rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5">
+            <div className="inline-flex h-9 flex-none items-stretch rounded-lg border border-white/10 bg-white/[0.03] p-0.5 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={() => handleExploreSubTabClick('manual')}
+                className={
+                  subTab === 'manual'
+                    ? 'flex items-center rounded-md bg-blue-500/80 px-4 text-white shadow'
+                    : 'flex items-center rounded-md px-4 text-gray-400 hover:text-gray-200'
+                }
+              >
+                手動探索
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExploreSubTabClick('auto')}
+                className={
+                  subTab === 'auto'
+                    ? 'flex items-center rounded-md bg-purple-500/80 px-4 text-white shadow'
+                    : 'flex items-center rounded-md px-4 text-gray-400 hover:text-gray-200'
+                }
+              >
+                自動探索
+              </button>
+            </div>
+            <select
+              className="glass-input h-9 rounded-lg px-2 text-sm"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+            >
+              {SYMBOLS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <select
+              className="glass-input h-9 rounded-lg px-2 text-sm"
+              value={timeframe}
+              onChange={(e) => setTimeframe(e.target.value)}
+            >
+              {TIMEFRAMES.map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
+            </select>
+            <div className="inline-flex h-9 flex-none items-stretch rounded-lg border border-white/10 bg-white/[0.03] p-0.5 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={toggleShortActive}
+                title="Short(売り)"
+                className={
+                  shortActive
+                    ? 'flex items-center rounded-md bg-blue-500/80 px-4 text-white shadow'
+                    : 'flex items-center rounded-md px-4 text-gray-400 hover:text-gray-200'
+                }
+              >
+                Short
+              </button>
+              <button
+                type="button"
+                onClick={toggleLongActive}
+                title="Long(買い)"
+                className={
+                  longActive
+                    ? 'flex items-center rounded-md bg-purple-500/80 px-4 text-white shadow'
+                    : 'flex items-center rounded-md px-4 text-gray-400 hover:text-gray-200'
+                }
+              >
+                Long
+              </button>
+            </div>
+            <div className="flex flex-none items-center gap-1.5 text-xs text-gray-400">
+              <input
+                type="date"
+                className="glass-input h-9 w-[130px] flex-none rounded-lg px-2 text-sm"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+              <span>〜</span>
+              <input
+                type="date"
+                className="glass-input h-9 w-[130px] flex-none rounded-lg px-2 text-sm"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => runMutation.mutate()}
+              disabled={
+                runMutation.isPending ||
+                Boolean(isRunning) ||
+                (subTab === 'auto' && categories.length === 0)
+              }
+              className="glow-button h-9 w-[136px] flex-none rounded-lg text-sm font-semibold text-white transition-shadow disabled:opacity-40"
+            >
+              {isRunning ? '実行中...' : 'バックテスト実行'}
+            </button>
+            <div className="ml-[35px] min-w-0 flex-1">
+              <AutoExplorationHero progress={statusQuery.data?.progress} isRunning={isRunning} compact />
+            </div>
+          </div>
+        )}
+
+        {mainTab === 'explore' && subTab === 'manual' && explorationMode === 'manual' && (
+          <>
+            <div className="glass-panel flex flex-col rounded-2xl">
+              <div className="glass-panel-header rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
+                ストラテジービルダー
+              </div>
+              <div className="p-3">
               <div className="space-y-3">
-                <label className="flex items-center gap-1.5 text-xs text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={dualDirectionMode}
-                    onChange={(e) => setDualDirectionMode(e.target.checked)}
-                  />
-                  Long+Shortを同時に評価(同じ足で両方成立したらスキップ)
-                </label>
+                <div className="flex items-center gap-4">
+                  {!dualDirectionMode && (
+                    <div className="flex items-center gap-1 text-xs text-gray-300">
+                      <select
+                        className="glass-input rounded-lg px-2 py-1.5"
+                        value={entryMethod}
+                        onChange={(e) => setEntryMethod(e.target.value as 'market' | 'limit' | 'stop')}
+                      >
+                        <option value="market">成行(条件確定の次の足で即エントリー)</option>
+                        <option value="limit">指値(有利な価格まで戻ったら約定)</option>
+                        <option value="stop">逆指値(さらにブレイクしたら約定)</option>
+                      </select>
+                      {entryMethod !== 'market' && (
+                        <label className="flex items-center gap-1">
+                          オフセット
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.5}
+                            className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
+                            value={entryOffsetPips}
+                            onChange={(e) => setEntryOffsetPips(Number(e.target.value))}
+                          />
+                          pips
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-                {!dualDirectionMode && (
-                  <div className="flex gap-4 text-sm">
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        className="accent-blue-500"
-                        checked={direction === 'short'}
-                        onChange={() => setDirection('short')}
-                      />
-                      Short(売り)
-                    </label>
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        className="accent-purple-500"
-                        checked={direction === 'long'}
-                        onChange={() => setDirection('long')}
-                      />
-                      Long(買い)
-                    </label>
-                  </div>
-                )}
+                <div className="grid grid-cols-2 gap-4 items-stretch">
+                <div className="flex h-[calc(100vh-310px)] flex-col rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                <div className="flex-none text-sm font-semibold text-gray-200">エントリー条件</div>
 
-                {!dualDirectionMode && (
-                  <div className="flex items-center gap-2 text-xs text-gray-300">
-                    <span className="text-gray-400">エントリー方式</span>
-                    <select
-                      className="glass-input rounded-lg px-2 py-1"
-                      value={entryMethod}
-                      onChange={(e) => setEntryMethod(e.target.value as 'market' | 'limit' | 'stop')}
-                    >
-                      <option value="market">成行(条件確定の次の足で即エントリー)</option>
-                      <option value="limit">指値(有利な価格まで戻ったら約定)</option>
-                      <option value="stop">逆指値(さらにブレイクしたら約定)</option>
-                    </select>
-                    {entryMethod !== 'market' && (
-                      <label className="ml-auto flex items-center gap-1">
-                        オフセット
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.5}
-                          className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
-                          value={entryOffsetPips}
-                          onChange={(e) => setEntryOffsetPips(Number(e.target.value))}
-                        />
-                        pips
-                      </label>
-                    )}
-                  </div>
-                )}
-
+                <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pt-1.5">
                 {indicatorsQuery.data && !dualDirectionMode && (
                   <ConditionTreeEditor node={tree} indicators={indicatorsQuery.data} onChange={setTree} />
                 )}
@@ -857,96 +1305,141 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <select
-                    className="glass-input rounded-lg px-2 py-1.5"
-                    value={symbol}
-                    onChange={(e) => setSymbol(e.target.value)}
-                  >
-                    {SYMBOLS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="glass-input rounded-lg px-2 py-1.5"
-                    value={timeframe}
-                    onChange={(e) => setTimeframe(e.target.value)}
-                  >
-                    {TIMEFRAMES.map((tf) => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="glass-input col-span-2 rounded-lg px-2 py-1.5"
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value)}
-                  >
-                    <option value="dev">dev(軽量)</option>
-                    <option value="full">full(本番)</option>
-                  </select>
                 </div>
-                {explorationMode === 'manual' && (
-                <div className="text-xs text-gray-500">
-                  ※この条件ビルダーではdev/fullの違いはレポート上の表記のみです(パラメータの範囲は下の「パラメータ最適化」で指定してください)
-                </div>
-                )}
 
+                </div>
+
+                <div className="space-y-3">
                 {explorationMode === 'manual' && (
-                <>
-                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
-                  <div className="text-xs font-semibold text-gray-400">決済ルール</div>
-                  <label className="flex items-center justify-between text-xs text-gray-300">
-                    リスクリワード比(RR)
-                    <input
-                      type="number"
-                      step={0.1}
-                      min={0.1}
-                      className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs"
-                      value={rr}
-                      onChange={(e) => setRr(Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={useWeekendExit}
-                      onChange={(e) => setUseWeekendExit(e.target.checked)}
-                    />
-                    週末決済を使う
-                    <input
-                      type="number"
-                      min={0}
-                      max={23}
-                      disabled={!useWeekendExit}
-                      className="glass-input ml-auto w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
-                      value={weekendExitHour}
-                      onChange={(e) => setWeekendExitHour(Number(e.target.value))}
-                    />
-                    時
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={useDailyExit}
-                      onChange={(e) => setUseDailyExit(e.target.checked)}
-                    />
-                    日次決済を使う
-                    <input
-                      type="number"
-                      min={0}
-                      max={23}
-                      disabled={!useDailyExit}
-                      className="glass-input ml-auto w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
-                      value={dailyExitHour}
-                      onChange={(e) => setDailyExitHour(Number(e.target.value))}
-                    />
-                    時
-                  </label>
+                <div className="flex h-[calc(100vh-310px)] flex-col rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                  <div className="flex-none text-sm font-semibold text-gray-200">決済条件</div>
+
+                  <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pt-1.5">
+                  <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.02] p-1.5">
+                    <div className="text-xs font-semibold text-gray-300">利確(TP)</div>
+                    <div className="flex flex-col gap-1 text-xs text-gray-300">
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="tp_basis" checked={tpBasis === 'rr'} onChange={() => setTpBasis('rr')} />
+                        RR方式(リスクリワード比)
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={0.1}
+                          disabled={tpBasis !== 'rr'}
+                          className="glass-input ml-auto w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={rr}
+                          onChange={(e) => setRr(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="tp_basis" checked={tpBasis === 'fixed_pips'} onChange={() => setTpBasis('fixed_pips')} />
+                        固定pips
+                        <input
+                          type="number"
+                          step={1}
+                          min={0.1}
+                          disabled={tpBasis !== 'fixed_pips'}
+                          className="glass-input ml-auto w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={tpFixedPips}
+                          onChange={(e) => setTpFixedPips(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="tp_basis" checked={tpBasis === 'custom'} onChange={() => setTpBasis('custom')} />
+                        カスタム条件
+                      </label>
+                    </div>
+                    {tpBasis === 'custom' && indicatorsQuery.data && (
+                      <div className="pl-5">
+                        <ConditionTreeEditor node={exitConditionTree} indicators={indicatorsQuery.data} onChange={setExitConditionTree} />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.02] p-1.5">
+                    <div className="text-xs font-semibold text-gray-300">損切り(SL)</div>
+                    <div className="flex flex-col gap-1 text-xs text-gray-300">
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="sl_basis" checked={slBasis === 'signal_candle'} onChange={() => setSlBasis('signal_candle')} />
+                        直近高値/安値(シグナル足)
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="sl_basis" checked={slBasis === 'atr'} onChange={() => setSlBasis('atr')} />
+                        ATR
+                        <input
+                          type="number"
+                          step={1}
+                          min={1}
+                          disabled={slBasis !== 'atr'}
+                          className="glass-input ml-auto w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={slAtrLength}
+                          onChange={(e) => setSlAtrLength(Number(e.target.value))}
+                        />
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={0.1}
+                          disabled={slBasis !== 'atr'}
+                          className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={slAtrMultiplier}
+                          onChange={(e) => setSlAtrMultiplier(Number(e.target.value))}
+                        />
+                        倍
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="radio" name="sl_basis" checked={slBasis === 'fixed_pips'} onChange={() => setSlBasis('fixed_pips')} />
+                        固定pips
+                        <input
+                          type="number"
+                          step={1}
+                          min={0.1}
+                          disabled={slBasis !== 'fixed_pips'}
+                          className="glass-input ml-auto w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                          value={slFixedPips}
+                          onChange={(e) => setSlFixedPips(Number(e.target.value))}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <label className="flex items-center gap-1 text-xs text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={useWeekendExit}
+                        onChange={(e) => setUseWeekendExit(e.target.checked)}
+                      />
+                      週末決済
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        disabled={!useWeekendExit}
+                        className="glass-input ml-auto w-14 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={weekendExitHour}
+                        onChange={(e) => setWeekendExitHour(Number(e.target.value))}
+                      />
+                      時
+                    </label>
+                    <label className="flex items-center gap-1 text-xs text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={useDailyExit}
+                        onChange={(e) => setUseDailyExit(e.target.checked)}
+                      />
+                      日次決済
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        disabled={!useDailyExit}
+                        className="glass-input ml-auto w-14 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={dailyExitHour}
+                        onChange={(e) => setDailyExitHour(Number(e.target.value))}
+                      />
+                      時
+                    </label>
+                  </div>
                   <label className="flex items-center gap-1.5 text-xs text-gray-300">
                     <input
                       type="checkbox"
@@ -956,25 +1449,25 @@ export default function App() {
                     ATRトレーリングストップを使う
                   </label>
                   <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
-                    <label className="flex items-center justify-between gap-1">
-                      期間
+                    <label className="flex flex-col gap-1">
+                      <span>期間</span>
                       <input
                         type="number"
                         min={1}
                         disabled={!useAtrTrailingStop}
-                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        className="glass-input w-full rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={atrTrailingLength}
                         onChange={(e) => setAtrTrailingLength(Number(e.target.value))}
                       />
                     </label>
-                    <label className="flex items-center justify-between gap-1">
-                      倍率
+                    <label className="flex flex-col gap-1">
+                      <span>倍率</span>
                       <input
                         type="number"
                         step={0.1}
                         min={0.1}
                         disabled={!useAtrTrailingStop}
-                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        className="glass-input w-full rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={atrTrailingMultiplier}
                         onChange={(e) => setAtrTrailingMultiplier(Number(e.target.value))}
                       />
@@ -986,18 +1479,18 @@ export default function App() {
                       checked={useBreakevenStop}
                       onChange={(e) => setUseBreakevenStop(e.target.checked)}
                     />
-                    建値移動(ブレイクイーブン)を使う
+                    建値移動(ブレイクイーブン)
                     <span className="ml-auto flex items-center gap-1">
+                      RR
                       <input
                         type="number"
                         step={0.1}
                         min={0}
                         disabled={!useBreakevenStop}
-                        className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        className="glass-input w-14 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={breakevenTriggerRr}
                         onChange={(e) => setBreakevenTriggerRr(Number(e.target.value))}
                       />
-                      RR到達で
                     </span>
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-gray-300">
@@ -1010,28 +1503,28 @@ export default function App() {
                   </label>
                   <div className={`space-y-1.5 pl-5 ${!usePartialTp ? 'opacity-40' : ''}`}>
                     {partialTpLevels.map((level, i) => (
-                      <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-1.5 text-xs text-gray-300">
-                        <label className="flex items-center justify-between gap-1">
-                          到達RR
+                      <div key={i} className="flex items-end gap-1.5 text-xs text-gray-300">
+                        <label className="flex flex-1 flex-col gap-1">
+                          <span>到達RR</span>
                           <input
                             type="number"
                             step={0.1}
                             min={0.1}
                             disabled={!usePartialTp}
-                            className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                            className="glass-input w-full rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                             value={level.rr}
                             onChange={(e) => updatePartialTpLevel(i, { ...level, rr: Number(e.target.value) })}
                           />
                         </label>
-                        <label className="flex items-center justify-between gap-1">
-                          決済割合
+                        <label className="flex flex-1 flex-col gap-1">
+                          <span>決済割合</span>
                           <input
                             type="number"
                             step={0.05}
                             min={0.05}
                             max={0.95}
                             disabled={!usePartialTp}
-                            className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                            className="glass-input w-full rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                             value={level.fraction}
                             onChange={(e) => updatePartialTpLevel(i, { ...level, fraction: Number(e.target.value) })}
                           />
@@ -1058,7 +1551,25 @@ export default function App() {
                       + 段階を追加
                     </button>
                   </div>
+                  </div>
                 </div>
+                )}
+                </div>
+                </div>
+
+                {explorationMode === 'manual' && (
+                <>
+                <button
+                  type="button"
+                  onClick={() => setManualAdvOpen((v) => !v)}
+                  className="flex items-center gap-1.5 text-[10.5px] text-gray-400 hover:text-gray-200"
+                >
+                  <span className={`text-[9px] transition-transform ${manualAdvOpen ? 'rotate-90' : ''}`}>▸</span>
+                  詳細設定(リスク管理・資金管理・コスト・パラメータ最適化)
+                </button>
+
+                {manualAdvOpen && (
+                <>
 
                 <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2">
                   <div className="text-xs font-semibold text-gray-400">リスク管理(任意・一時停止して再開)</div>
@@ -1069,16 +1580,21 @@ export default function App() {
                       onChange={(e) => setUseMaxDdStop(e.target.checked)}
                     />
                     最大DDストップを使う
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      disabled={!useMaxDdStop}
-                      className="glass-input ml-auto w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
-                      value={maxDdStopPips}
-                      onChange={(e) => setMaxDdStopPips(Number(e.target.value))}
-                    />
-                    pips
+                  </label>
+                  <label className="flex items-center justify-between gap-1 pl-5 text-xs text-gray-300">
+                    <span>上限</span>
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        disabled={!useMaxDdStop}
+                        className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        value={maxDdStopPips}
+                        onChange={(e) => setMaxDdStopPips(Number(e.target.value))}
+                      />
+                      pips
+                    </span>
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-gray-300">
                     <input
@@ -1088,9 +1604,9 @@ export default function App() {
                     />
                     連敗ストップを使う
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5 pl-5 text-xs text-gray-300">
+                  <div className="flex flex-col gap-1.5 pl-5 text-xs text-gray-300">
                     <label className="flex items-center justify-between gap-1">
-                      連敗数
+                      <span>連敗数</span>
                       <input
                         type="number"
                         min={1}
@@ -1101,7 +1617,7 @@ export default function App() {
                       />
                     </label>
                     <label className="flex items-center justify-between gap-1">
-                      停止バー数
+                      <span>停止バー数</span>
                       <input
                         type="number"
                         min={1}
@@ -1124,10 +1640,10 @@ export default function App() {
                     資金管理(ポジションサイジング)を使う
                   </label>
                   <div className={`space-y-1.5 pl-5 text-xs text-gray-300 ${!usePositionSizing ? 'opacity-40' : ''}`}>
-                    <label className="flex items-center justify-between gap-1">
-                      方式
+                    <label className="flex flex-col gap-1">
+                      <span>方式</span>
                       <select
-                        className="glass-input w-40 rounded-lg px-1.5 py-1 text-xs"
+                        className="glass-input w-full rounded-lg px-1.5 py-1 text-xs"
                         disabled={!usePositionSizing}
                         value={positionSizingMethod}
                         onChange={(e) => setPositionSizingMethod(e.target.value as 'risk_percent' | 'fixed_lot' | 'compounding')}
@@ -1137,9 +1653,9 @@ export default function App() {
                         <option value="compounding">複利(資金%を都度の残高で計算)</option>
                       </select>
                     </label>
-                    <div className="grid grid-cols-2 gap-1.5">
+                    <div className="flex flex-col gap-1.5">
                       <label className="flex items-center justify-between gap-1">
-                        初期資金
+                        <span>初期資金</span>
                         <input
                           type="number"
                           min={0}
@@ -1151,7 +1667,7 @@ export default function App() {
                         />
                       </label>
                       <label className="flex items-center justify-between gap-1">
-                        口座通貨
+                        <span>口座通貨</span>
                         <select
                           className="glass-input w-16 rounded-lg px-1.5 py-1 text-xs"
                           disabled={!usePositionSizing}
@@ -1165,7 +1681,7 @@ export default function App() {
                     </div>
                     {(positionSizingMethod === 'risk_percent' || positionSizingMethod === 'compounding') && (
                       <label className="flex items-center justify-between gap-1">
-                        リスク%(1取引あたり)
+                        <span>リスク%(1取引あたり)</span>
                         <input
                           type="number"
                           min={0.01}
@@ -1179,7 +1695,7 @@ export default function App() {
                     )}
                     {positionSizingMethod === 'fixed_lot' && (
                       <label className="flex items-center justify-between gap-1">
-                        固定ロット数
+                        <span>固定ロット数</span>
                         <input
                           type="number"
                           min={0.01}
@@ -1191,14 +1707,14 @@ export default function App() {
                         />
                       </label>
                     )}
-                    <label className="flex items-center justify-between gap-1">
-                      為替換算レート(通貨ペア⇔口座通貨)
+                    <label className="flex flex-col gap-1">
+                      <span>為替換算レート(通貨ペア⇔口座通貨)</span>
                       <input
                         type="number"
                         min={0.01}
                         step={0.01}
                         disabled={!usePositionSizing}
-                        className="glass-input w-20 rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
+                        className="glass-input w-full rounded-lg px-1.5 py-1 text-xs disabled:opacity-40"
                         value={conversionRate}
                         onChange={(e) => setConversionRate(Number(e.target.value))}
                       />
@@ -1264,17 +1780,6 @@ export default function App() {
                   >
                     + パラメータ範囲を追加
                   </button>
-                  <select
-                    className="glass-input w-full rounded-lg px-2 py-1.5 text-xs"
-                    value={optimizationMetric}
-                    onChange={(e) => setOptimizationMetric(e.target.value)}
-                  >
-                    {OPTIMIZATION_METRICS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        グラフの高さ: {m.label}
-                      </option>
-                    ))}
-                  </select>
                 </div>
 
                 {!dualDirectionMode &&
@@ -1339,32 +1844,32 @@ export default function App() {
                                     ))}
                                   </select>
                                   <div className="grid grid-cols-3 gap-1.5">
-                                    <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
-                                      最小
+                                    <label className="flex flex-col gap-1 text-xs text-gray-300">
+                                      <span>最小</span>
                                       <input
                                         type="number"
                                         disabled={!range.enabled}
-                                        className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                        className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
                                         value={range.min}
                                         onChange={(e) => updateConditionOptimizeRange(i, { ...range, min: Number(e.target.value) })}
                                       />
                                     </label>
-                                    <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
-                                      最大
+                                    <label className="flex flex-col gap-1 text-xs text-gray-300">
+                                      <span>最大</span>
                                       <input
                                         type="number"
                                         disabled={!range.enabled}
-                                        className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                        className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
                                         value={range.max}
                                         onChange={(e) => updateConditionOptimizeRange(i, { ...range, max: Number(e.target.value) })}
                                       />
                                     </label>
-                                    <label className="flex items-center justify-between gap-1 text-xs text-gray-300">
-                                      刻み
+                                    <label className="flex flex-col gap-1 text-xs text-gray-300">
+                                      <span>刻み</span>
                                       <input
                                         type="number"
                                         disabled={!range.enabled}
-                                        className="glass-input w-14 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
+                                        className="glass-input w-full min-w-0 rounded-lg px-1 py-1 text-xs disabled:opacity-40"
                                         value={range.step}
                                         onChange={(e) => updateConditionOptimizeRange(i, { ...range, step: Number(e.target.value) })}
                                       />
@@ -1388,22 +1893,8 @@ export default function App() {
                 </>
                 )}
 
-                <input
-                  type="text"
-                  placeholder="名前を付けて保存(任意)"
-                  className="glass-input w-full rounded-lg px-2 py-1.5 text-xs"
-                  value={saveAsName}
-                  onChange={(e) => setSaveAsName(e.target.value)}
-                />
-
-                <button
-                  type="button"
-                  onClick={() => runMutation.mutate()}
-                  disabled={runMutation.isPending || Boolean(isRunning)}
-                  className="glow-button w-full rounded-lg py-2 font-semibold text-white transition-shadow disabled:opacity-40"
-                >
-                  {isRunning ? '実行中...' : 'バックテスト実行'}
-                </button>
+                </>
+                )}
 
                 {statusQuery.data?.status === 'error' && (
                   <div className="rounded-lg border border-red-500/20 bg-red-950/40 p-2.5 text-xs text-red-200">
@@ -1421,257 +1912,55 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </Panel>
-
-            <Panel key="chart" id="panel-chart" title="② チャート">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                <div className="flex overflow-hidden rounded-lg border border-white/10">
-                  {TIMEFRAMES.map((tf) => (
-                    <button
-                      key={tf}
-                      type="button"
-                      onClick={() => setChartTimeframe(tf)}
-                      className={
-                        tf === chartTimeframe
-                          ? 'bg-blue-500/30 px-2 py-1 font-semibold text-blue-100'
-                          : 'px-2 py-1 text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                      }
-                    >
-                      {tf}
-                    </button>
-                  ))}
-                </div>
-                <label className="flex items-center gap-1.5 text-gray-400">
-                  EMA
-                  <input
-                    type="number"
-                    min={1}
-                    className="glass-input w-16 rounded-lg px-1.5 py-1"
-                    value={emaLength}
-                    onChange={(e) => setEmaLength(Math.max(1, Number(e.target.value)))}
-                  />
-                </label>
               </div>
-              {priceQuery.data && (
-                <ChartPanel bars={priceQuery.data} trades={displayResults?.trade_log ?? []} emaLength={emaLength} symbol={symbol} />
-              )}
-            </Panel>
+            </div>
 
-            {explorationMode === 'manual' && (
-              <Panel key="equity" title="⑩ エクイティカーブ">
-                {selectedRank !== null && (
-                  <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
-                    <span className={rowError ? 'text-red-400' : undefined}>
-                      {rowError ? `エラー: ${rowError}` : isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}
-                    </span>
-                    {!isRowLoading && (
-                      <button
-                        onClick={() => {
-                          setSelectedRank(null)
-                          setRowJobId(null)
-                        }}
-                        className="text-emerald-400 hover:underline"
-                      >
-                        全体ベストに戻す
-                      </button>
-                    )}
-                  </div>
-                )}
-                <EquityCurveChart points={displayResults?.equity_curve ?? []} />
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="drawdown" title="⑨ ドローダウン推移">
-                <DrawdownChart points={displayResults?.equity_curve ?? []} />
-              </Panel>
-            )}
-
-            <Panel key="ranking" id="panel-ranking" title="③ ランキング一覧">
-              <RankingTable
-                rows={results?.ranking_total ?? []}
-                selectedRank={selectedRank}
-                onSelectRow={handleSelectRankingRow}
-              />
-            </Panel>
-
-
-            {explorationMode === 'manual' && (
-              <Panel key="summary" title="④ 戦略サマリー">
-                <StrategySummaryPanel
-                  symbol={symbol}
-                  timeframe={timeframe}
-                  mode={mode}
-                  direction={direction}
-                  dualDirectionMode={dualDirectionMode}
-                  testCount={results?.ranking_total?.length ?? 0}
-                  row={bestRow}
-                />
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="heatmap" id="panel-heatmap" title="⑦ 月別収益ヒートマップ">
-                <MonthlyHeatmap rows={displayResults?.monthly_analysis ?? []} />
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="yearly" id="panel-yearly" title="⑥ 年別成績">
-                <YearlyPerformanceChart rows={displayResults?.yearly_analysis ?? []} />
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="stats" id="panel-stats" title="⑪ 統計情報">
-                <StatsPanel row={bestRow} />
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="surface" id="panel-surface" title="⑧ 最適化サーフェス(3D)">
-                {(() => {
-                  const enabledParams = paramRanges.filter((r) => r.enabled).map((r) => r.param)
-                  const effectiveX = enabledParams.includes(surfaceParamX) ? surfaceParamX : (enabledParams[0] ?? surfaceParamX)
-                  const effectiveY = enabledParams.includes(surfaceParamY) ? surfaceParamY : (enabledParams[1] ?? surfaceParamY)
-                  return (
-                    <>
-                      {enabledParams.length > 2 && (
-                        <div className="mb-2 flex gap-2 text-xs text-gray-300">
-                          <label className="flex flex-1 items-center gap-1">
-                            X軸
-                            <select
-                              className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
-                              value={effectiveX}
-                              onChange={(e) => setSurfaceParamX(e.target.value)}
-                            >
-                              {enabledParams.map((param) => (
-                                <option key={param} value={param}>
-                                  {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="flex flex-1 items-center gap-1">
-                            Y軸
-                            <select
-                              className="glass-input flex-1 rounded-lg px-1.5 py-1 text-xs"
-                              value={effectiveY}
-                              onChange={(e) => setSurfaceParamY(e.target.value)}
-                            >
-                              {enabledParams.map((param) => (
-                                <option key={param} value={param}>
-                                  {OPTIMIZABLE_PARAMS.find((p) => p.id === param)?.label ?? param}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                      )}
-                      <OptimizationSurface
-                        rows={results?.ranking_total ?? []}
-                        paramX={effectiveX}
-                        paramY={effectiveY}
-                        metric={optimizationMetric}
-                        metricLabel={OPTIMIZATION_METRICS.find((m) => m.id === optimizationMetric)?.label ?? optimizationMetric}
-                      />
-                    </>
-                  )
-                })()}
-              </Panel>
-            )}
-
-            {explorationMode === 'manual' && (
-              <Panel key="trades" title="⑤ 取引履歴">
-                <TradeHistoryTable rows={displayResults?.trade_log ?? []} />
-              </Panel>
-            )}
-
-            <Panel key="saved" id="panel-saved" title="保存済み戦略">
-              <SavedStrategiesPanel
-                strategies={strategiesQuery.data ?? []}
-                onLoad={(id) => loadStrategyMutation.mutate(id)}
-                isLoading={loadStrategyMutation.isPending}
-              />
-            </Panel>
-          </GridLayout>
+          </>
         )}
 
-        {explorationMode !== 'manual' && (
-          <>
-            <AutoExplorationHero progress={statusQuery.data?.progress} isRunning={isRunning} />
-            <div className="grid grid-cols-[280px_1fr] items-start gap-4">
-            <AutoExplorationRail
-              explorationMode={explorationMode}
-              setExplorationMode={setExplorationMode}
-              explorationAdvOpen={explorationAdvOpen}
-              setExplorationAdvOpen={setExplorationAdvOpen}
-              nCandidates={nCandidates}
-              setNCandidates={setNCandidates}
-              maxDepth={maxDepth}
-              setMaxDepth={setMaxDepth}
-              maxLeaves={maxLeaves}
-              setMaxLeaves={setMaxLeaves}
-              minTrades={minTrades}
-              setMinTrades={setMinTrades}
-              mtfProbability={mtfProbability}
-              setMtfProbability={setMtfProbability}
-              mtfTimeframes={mtfTimeframes}
-              setMtfTimeframes={setMtfTimeframes}
-              population={population}
-              setPopulation={setPopulation}
-              generations={generations}
-              setGenerations={setGenerations}
-              mutationRate={mutationRate}
-              setMutationRate={setMutationRate}
-              symbol={symbol}
-              setSymbol={setSymbol}
-              timeframe={timeframe}
-              setTimeframe={setTimeframe}
-              mode={mode}
-              setMode={setMode}
-              saveAsName={saveAsName}
-              setSaveAsName={setSaveAsName}
-              symbols={SYMBOLS}
-              timeframes={TIMEFRAMES}
-              runMutation={runMutation}
-              isRunning={isRunning}
-              statusData={statusQuery.data}
-            />
-            <div className="flex flex-col gap-4">
-              <div className="glass-panel rounded-2xl">
-                <div className="glass-panel-header rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
-                  ③ ランキング一覧
-                </div>
-                <div className="p-3">
-                  <RankingTable
-                    rows={results?.ranking_total ?? []}
-                    selectedRank={selectedRank}
-                    onSelectRow={handleSelectRankingRow}
-                  />
-                </div>
-              </div>
-              <div className="glass-panel rounded-2xl">
-                <div className="glass-panel-header rounded-t-2xl px-3 py-2 text-sm font-semibold tracking-wide text-gray-200">
-                  ④ 選択中ストラテジーの詳細
-                </div>
-                <div className="p-3">
-                  <AutoExplorationDetail
-                    displayResults={displayResults}
-                    bestRow={bestRow}
-                    selectedRank={selectedRank}
-                    isRowLoading={isRowLoading}
-                    rowError={rowError}
-                    onResetSelection={() => {
-                      setSelectedRank(null)
-                      setRowJobId(null)
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-            </div>
-          </>
+        {mainTab === 'explore' && subTab === 'auto' && (
+          <AutoExplorationScreen
+            explorationMode={explorationMode}
+            setExplorationMode={setExplorationMode}
+            explorationAdvOpen={explorationAdvOpen}
+            setExplorationAdvOpen={setExplorationAdvOpen}
+            categories={categories}
+            setCategories={setCategories}
+            customIndicatorNames={customIndicatorNames}
+            setCustomIndicatorNames={setCustomIndicatorNames}
+            selectedParamValues={selectedParamValues}
+            setSelectedParamValues={setSelectedParamValues}
+            selectedLiteralValues={selectedLiteralValues}
+            setSelectedLiteralValues={setSelectedLiteralValues}
+            nCandidates={nCandidates}
+            setNCandidates={setNCandidates}
+            maxDepth={maxDepth}
+            setMaxDepth={setMaxDepth}
+            minLeaves={minLeaves}
+            setMinLeaves={setMinLeaves}
+            maxLeaves={maxLeaves}
+            setMaxLeaves={setMaxLeaves}
+            minTrades={minTrades}
+            setMinTrades={setMinTrades}
+            mtfProbability={mtfProbability}
+            setMtfProbability={setMtfProbability}
+            mtfTimeframes={mtfTimeframes}
+            setMtfTimeframes={setMtfTimeframes}
+            population={population}
+            setPopulation={setPopulation}
+            generations={generations}
+            setGenerations={setGenerations}
+            mutationRate={mutationRate}
+            setMutationRate={setMutationRate}
+            rrChoices={rrChoices}
+            setRrChoices={setRrChoices}
+            mandatoryConditions={mandatoryConditions}
+            setMandatoryConditions={setMandatoryConditions}
+            indicators={indicatorsQuery.data ?? []}
+            saveAsName={saveAsName}
+            setSaveAsName={setSaveAsName}
+            statusData={statusQuery.data}
+          />
         )}
       </div>
     </div>

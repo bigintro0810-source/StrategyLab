@@ -9,6 +9,7 @@ import pandas as pd
 from engine.conditions import evaluate_condition_tree
 from engine.indicators import atr as _wilder_atr
 from engine.signal_builder import build_candidate_signal
+from engine.structure_generator import wrap_with_mandatory_conditions
 
 
 @dataclass
@@ -219,6 +220,76 @@ def _resolve_partial_tp_levels(p: dict[str, Any]) -> list[tuple[float, float]]:
     )
 
 
+def _resolve_sl(
+    sl_basis: str,
+    direction: str,
+    entry_price: float,
+    position_signal_high: float,
+    position_signal_low: float,
+    sl_atr_arr: np.ndarray | None,
+    entry_bar_index: int,
+    sl_atr_multiplier: float,
+    sl_fixed_pips: float,
+    pip: float,
+) -> tuple[float, float]:
+    """Returns (stop_price, risk_distance) for the basis the strategy asked
+    for. risk_distance is always positive (or 0/NaN-derived when the chosen
+    basis can't produce a level yet, e.g. ATR still warming up) - callers
+    already treat risk_distance<=0 as "skip this entry", so that's reused
+    here rather than adding a second failure signal.
+
+    "atr" reads sl_atr_arr[entry_bar_index - 1] - the ATR as of the last
+    CLOSED bar before entry, same causality as the ATR-trailing overlay
+    elsewhere in this file (entry itself fires at this bar's OPEN, so this
+    bar's own high/low aren't known yet)."""
+    if sl_basis == "atr":
+        atr_value = (
+            float(sl_atr_arr[entry_bar_index - 1])
+            if sl_atr_arr is not None and entry_bar_index > 0 and not np.isnan(sl_atr_arr[entry_bar_index - 1])
+            else np.nan
+        )
+        if np.isnan(atr_value):
+            return entry_price, 0.0
+        distance = atr_value * sl_atr_multiplier
+        stop_price = entry_price + distance if direction == "short" else entry_price - distance
+        return stop_price, distance
+
+    if sl_basis == "fixed_pips":
+        distance = sl_fixed_pips * pip
+        stop_price = entry_price + distance if direction == "short" else entry_price - distance
+        return stop_price, distance
+
+    # "signal_candle" (default) - the triggering signal bar's own high/low,
+    # today's original and only behavior before sl_basis existed.
+    if direction == "short":
+        stop_price = float(position_signal_high)
+        return stop_price, stop_price - entry_price
+    stop_price = float(position_signal_low)
+    return stop_price, entry_price - stop_price
+
+
+def _resolve_tp(
+    tp_basis: str,
+    direction: str,
+    entry_price: float,
+    risk_distance: float,
+    rr: float,
+    tp_fixed_pips: float,
+    pip: float,
+) -> float | None:
+    """Returns the TP price, or None for tp_basis="custom" (no fixed price
+    level - the caller checks exit_signal_arr per-bar instead; SL from
+    _resolve_sl above still applies as a safety net regardless of TP basis)."""
+    if tp_basis == "fixed_pips":
+        distance = tp_fixed_pips * pip
+        return entry_price - distance if direction == "short" else entry_price + distance
+    if tp_basis == "custom":
+        return None
+    # "rr" (default) - TP at risk_distance*rr from entry, today's original
+    # and only behavior before tp_basis existed.
+    return entry_price - risk_distance * rr if direction == "short" else entry_price + risk_distance * rr
+
+
 def prepare_indicator_columns(
     df: pd.DataFrame,
     ema_lengths: list[int] | tuple[int, ...],
@@ -340,6 +411,26 @@ def run_backtest(
     breakout_bars = int(p["breakout_bars"])
     rr = float(p["rr"])
 
+    # Decoupled SL/TP basis (2026-07-12) - both default to the values that
+    # reproduce today's exact prior behavior (sl_basis="signal_candle": SL
+    # at the triggering signal candle's high/low; tp_basis="rr": TP at
+    # entry +/- risk_distance*rr), so every existing caller/test that never
+    # sets these two keys is completely unaffected. See _resolve_sl/_resolve_tp
+    # below for what each basis actually computes.
+    sl_basis = str(p.get("sl_basis", "signal_candle"))
+    sl_atr_length = int(p.get("sl_atr_length", 14))
+    sl_atr_multiplier = float(p.get("sl_atr_multiplier", 2.0))
+    sl_fixed_pips = float(p.get("sl_fixed_pips", 20.0))
+    tp_basis = str(p.get("tp_basis", "rr"))
+    tp_fixed_pips = float(p.get("tp_fixed_pips", 20.0))
+    exit_condition_tree = p.get("exit_condition_tree")
+    if sl_basis not in ("signal_candle", "atr", "fixed_pips"):
+        raise ValueError(f"未対応のsl_basisです(signal_candle/atr/fixed_pipsのみ対応): {sl_basis}")
+    if tp_basis not in ("rr", "fixed_pips", "custom"):
+        raise ValueError(f"未対応のtp_basisです(rr/fixed_pips/customのみ対応): {tp_basis}")
+    if tp_basis == "custom" and not exit_condition_tree:
+        raise ValueError("tp_basis='custom'にはexit_condition_treeの指定が必要です。")
+
     use_weekend_exit = bool(p["use_weekend_exit"])
     weekend_exit_hour = int(p["weekend_exit_hour"])
 
@@ -381,6 +472,15 @@ def run_backtest(
     atr_trail_arr = (
         _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
         if use_atr_trailing_stop
+        else None
+    )
+    # Separate array/length from the trailing overlay above - this one sets
+    # the INITIAL SL distance at entry (sl_basis="atr"), not a per-bar
+    # tightening of an already-set SL, so it's computed independently even
+    # though both ultimately call the same Wilder ATR function.
+    sl_atr_arr = (
+        _wilder_atr(df, sl_atr_length).to_numpy(dtype=float)
+        if sl_basis == "atr"
         else None
     )
 
@@ -443,6 +543,18 @@ def run_backtest(
             },
         )
 
+    # exit_condition_tree signal (tp_basis="custom" only) - evaluated once
+    # up front exactly like the entry condition_tree above, since
+    # evaluate_condition_tree needs the whole df to compute indicator
+    # series; the per-bar loop below just indexes into this array while a
+    # position is open, the same way it already indexes candidate_signal
+    # while flat.
+    exit_signal_arr = (
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        if tp_basis == "custom"
+        else None
+    )
+
     # Fast path: a numba-jitted reimplementation of the exact loop below,
     # verified byte-for-byte identical to it (tests/test_fast_backtest_parity.py)
     # across many condition trees/directions/rr/exit-flag combinations before
@@ -453,7 +565,9 @@ def run_backtest(
     # behavior change for strategies actually using those features. See
     # engine/numba_fast_backtest.py's module docstring for why (profiling
     # showed this loop itself, not condition-tree evaluation, is ~70% of a
-    # single backtest's cost).
+    # single backtest's cost). sl_basis/tp_basis both being left at their
+    # defaults is required too - the fast path only models the original
+    # signal-candle SL / rr-based TP.
     fast_path_eligible = (
         entry_method == "market"
         and not use_atr_trailing_stop
@@ -462,6 +576,8 @@ def run_backtest(
         and not use_max_dd_stop
         and not use_consecutive_loss_stop
         and not use_position_sizing
+        and sl_basis == "signal_candle"
+        and tp_basis == "rr"
     )
     if fast_path_eligible:
         from engine.numba_fast_backtest import run_market_backtest_fast
@@ -555,20 +671,14 @@ def run_backtest(
             position_signal_bar = pending_signal_bar
             position_signal_time = pending_signal_time
 
-            if direction == "short":
-                stop_price = float(position_signal_high)
-                risk_distance = stop_price - entry_price
-            else:
-                stop_price = float(position_signal_low)
-                risk_distance = entry_price - stop_price
+            stop_price, risk_distance = _resolve_sl(
+                sl_basis, direction, entry_price, position_signal_high, position_signal_low,
+                sl_atr_arr, i, sl_atr_multiplier, sl_fixed_pips, pip,
+            )
 
             if risk_distance > 0:
                 sl = stop_price
-                tp = (
-                    entry_price - risk_distance * rr
-                    if direction == "short"
-                    else entry_price + risk_distance * rr
-                )
+                tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                 in_position = True
 
                 breakeven_trigger_price = (
@@ -667,12 +777,16 @@ def run_backtest(
             else:
                 if direction == "short":
                     hit_sl = high_price >= sl
-                    hit_tp = low_price <= tp
+                    hit_tp = tp is not None and low_price <= tp
                 else:
                     hit_sl = low_price <= sl
-                    hit_tp = high_price >= tp
+                    hit_tp = tp is not None and high_price >= tp
+                # tp_basis="custom" only - SL above still applies as a
+                # safety net regardless, checked with the same priority as
+                # a price-level TP (SL wins if both fire on the same bar).
+                hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
 
-                if hit_sl and hit_tp:
+                if hit_sl and (hit_tp or hit_custom_exit):
                     exit_reason = "SL_and_TP_SL_first"
                     exit_price = sl
                 elif hit_sl:
@@ -681,6 +795,9 @@ def run_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
+                elif hit_custom_exit:
+                    exit_reason = "CustomExit"
+                    exit_price = close_price
                 elif use_partial_tp:
                     # Only checked when the bar didn't already fully close
                     # the trade above - a partial fill and the full SL/TP
@@ -964,6 +1081,20 @@ def _run_limit_stop_backtest(
     lookahead_bars = int(p["lookahead_bars"])
     rr = float(p["rr"])
 
+    sl_basis = str(p.get("sl_basis", "signal_candle"))
+    sl_atr_length = int(p.get("sl_atr_length", 14))
+    sl_atr_multiplier = float(p.get("sl_atr_multiplier", 2.0))
+    sl_fixed_pips = float(p.get("sl_fixed_pips", 20.0))
+    tp_basis = str(p.get("tp_basis", "rr"))
+    tp_fixed_pips = float(p.get("tp_fixed_pips", 20.0))
+    exit_condition_tree = p.get("exit_condition_tree")
+    if sl_basis not in ("signal_candle", "atr", "fixed_pips"):
+        raise ValueError(f"未対応のsl_basisです(signal_candle/atr/fixed_pipsのみ対応): {sl_basis}")
+    if tp_basis not in ("rr", "fixed_pips", "custom"):
+        raise ValueError(f"未対応のtp_basisです(rr/fixed_pips/customのみ対応): {tp_basis}")
+    if tp_basis == "custom" and not exit_condition_tree:
+        raise ValueError("tp_basis='custom'にはexit_condition_treeの指定が必要です。")
+
     use_weekend_exit = bool(p["use_weekend_exit"])
     weekend_exit_hour = int(p["weekend_exit_hour"])
 
@@ -989,6 +1120,15 @@ def _run_limit_stop_backtest(
     atr_trail_arr = (
         _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
         if use_atr_trailing_stop
+        else None
+    )
+    # Separate array/length from the trailing overlay above - this one sets
+    # the INITIAL SL distance at entry (sl_basis="atr"), not a per-bar
+    # tightening of an already-set SL, so it's computed independently even
+    # though both ultimately call the same Wilder ATR function.
+    sl_atr_arr = (
+        _wilder_atr(df, sl_atr_length).to_numpy(dtype=float)
+        if sl_basis == "atr"
         else None
     )
 
@@ -1022,6 +1162,14 @@ def _run_limit_stop_backtest(
 
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
+        # mandatory_conditions (auto-exploration's "必須固定" checkboxes) is
+        # a run-level constant, the same for every candidate - kept OUTSIDE
+        # condition_tree itself (never echoed back as part of it) so that
+        # engine/structure_generator.py's crossover/mutation, which only
+        # ever touch p["condition_tree"], can't accidentally discard or
+        # mutate it. AND-ed in here, at the last possible moment before
+        # evaluation, instead.
+        condition_tree = wrap_with_mandatory_conditions(condition_tree, p.get("mandatory_conditions"))
         candidate_signal = evaluate_condition_tree(
             condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
         )
@@ -1048,6 +1196,12 @@ def _run_limit_stop_backtest(
                 "pip": pip,
             },
         )
+
+    exit_signal_arr = (
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        if tp_basis == "custom"
+        else None
+    )
 
     # An order priced ABOVE the market at placement time fills when price
     # rises to meet it (checked via that bar's high); one priced BELOW
@@ -1128,20 +1282,14 @@ def _run_limit_stop_backtest(
                         position_signal_bar = order_bar
                         position_signal_time = order_signal_time
 
-                        if direction == "short":
-                            stop_price = float(position_signal_high)
-                            risk_distance = stop_price - entry_price
-                        else:
-                            stop_price = float(position_signal_low)
-                            risk_distance = entry_price - stop_price
+                        stop_price, risk_distance = _resolve_sl(
+                            sl_basis, direction, entry_price, position_signal_high, position_signal_low,
+                            sl_atr_arr, i, sl_atr_multiplier, sl_fixed_pips, pip,
+                        )
 
                         if risk_distance > 0:
                             sl = stop_price
-                            tp = (
-                                entry_price - risk_distance * rr
-                                if direction == "short"
-                                else entry_price + risk_distance * rr
-                            )
+                            tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                             in_position = True
 
                             breakeven_trigger_price = (
@@ -1214,12 +1362,16 @@ def _run_limit_stop_backtest(
             else:
                 if direction == "short":
                     hit_sl = high_price >= sl
-                    hit_tp = low_price <= tp
+                    hit_tp = tp is not None and low_price <= tp
                 else:
                     hit_sl = low_price <= sl
-                    hit_tp = high_price >= tp
+                    hit_tp = tp is not None and high_price >= tp
+                # tp_basis="custom" only - SL above still applies as a
+                # safety net regardless, checked with the same priority as
+                # a price-level TP (SL wins if both fire on the same bar).
+                hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
 
-                if hit_sl and hit_tp:
+                if hit_sl and (hit_tp or hit_custom_exit):
                     exit_reason = "SL_and_TP_SL_first"
                     exit_price = sl
                 elif hit_sl:
@@ -1228,6 +1380,9 @@ def _run_limit_stop_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
+                elif hit_custom_exit:
+                    exit_reason = "CustomExit"
+                    exit_price = close_price
                 elif use_partial_tp:
                     while len(partial_legs) < len(partial_tp_levels):
                         next_level_price = partial_tp_prices[len(partial_legs)]
@@ -1446,6 +1601,20 @@ def _run_dual_direction_backtest(
     lookahead_bars = int(p["lookahead_bars"])
     rr = float(p["rr"])
 
+    sl_basis = str(p.get("sl_basis", "signal_candle"))
+    sl_atr_length = int(p.get("sl_atr_length", 14))
+    sl_atr_multiplier = float(p.get("sl_atr_multiplier", 2.0))
+    sl_fixed_pips = float(p.get("sl_fixed_pips", 20.0))
+    tp_basis = str(p.get("tp_basis", "rr"))
+    tp_fixed_pips = float(p.get("tp_fixed_pips", 20.0))
+    exit_condition_tree = p.get("exit_condition_tree")
+    if sl_basis not in ("signal_candle", "atr", "fixed_pips"):
+        raise ValueError(f"未対応のsl_basisです(signal_candle/atr/fixed_pipsのみ対応): {sl_basis}")
+    if tp_basis not in ("rr", "fixed_pips", "custom"):
+        raise ValueError(f"未対応のtp_basisです(rr/fixed_pips/customのみ対応): {tp_basis}")
+    if tp_basis == "custom" and not exit_condition_tree:
+        raise ValueError("tp_basis='custom'にはexit_condition_treeの指定が必要です。")
+
     use_weekend_exit = bool(p["use_weekend_exit"])
     weekend_exit_hour = int(p["weekend_exit_hour"])
 
@@ -1471,6 +1640,15 @@ def _run_dual_direction_backtest(
     atr_trail_arr = (
         _wilder_atr(df, int(p.get("atr_trailing_length", 14))).to_numpy(dtype=float)
         if use_atr_trailing_stop
+        else None
+    )
+    # Separate array/length from the trailing overlay above - this one sets
+    # the INITIAL SL distance at entry (sl_basis="atr"), not a per-bar
+    # tightening of an already-set SL, so it's computed independently even
+    # though both ultimately call the same Wilder ATR function.
+    sl_atr_arr = (
+        _wilder_atr(df, sl_atr_length).to_numpy(dtype=float)
+        if sl_basis == "atr"
         else None
     )
 
@@ -1513,6 +1691,12 @@ def _run_dual_direction_backtest(
         evaluate_condition_tree(short_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
         if short_tree is not None
         else np.zeros(len(df), dtype=bool)
+    )
+
+    exit_signal_arr = (
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        if tp_basis == "custom"
+        else None
     )
 
     profits: list[float] = []
@@ -1625,20 +1809,14 @@ def _run_dual_direction_backtest(
                 position_signal_bar = state["pending_signal_bar"]
                 position_signal_time = state["pending_signal_time"]
 
-                if side == "short":
-                    stop_price = float(position_signal_high)
-                    risk_distance = stop_price - entry_price
-                else:
-                    stop_price = float(position_signal_low)
-                    risk_distance = entry_price - stop_price
+                stop_price, risk_distance = _resolve_sl(
+                    sl_basis, side, entry_price, position_signal_high, position_signal_low,
+                    sl_atr_arr, i, sl_atr_multiplier, sl_fixed_pips, pip,
+                )
 
                 if risk_distance > 0:
                     sl = stop_price
-                    tp = (
-                        entry_price - risk_distance * rr
-                        if side == "short"
-                        else entry_price + risk_distance * rr
-                    )
+                    tp = _resolve_tp(tp_basis, side, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                     in_position = True
 
                     breakeven_trigger_price = (
@@ -1717,12 +1895,13 @@ def _run_dual_direction_backtest(
             else:
                 if position_direction == "short":
                     hit_sl = high_price >= sl
-                    hit_tp = low_price <= tp
+                    hit_tp = tp is not None and low_price <= tp
                 else:
                     hit_sl = low_price <= sl
-                    hit_tp = high_price >= tp
+                    hit_tp = tp is not None and high_price >= tp
+                hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
 
-                if hit_sl and hit_tp:
+                if hit_sl and (hit_tp or hit_custom_exit):
                     exit_reason = "SL_and_TP_SL_first"
                     exit_price = sl
                 elif hit_sl:
@@ -1731,6 +1910,9 @@ def _run_dual_direction_backtest(
                 elif hit_tp:
                     exit_reason = "TP"
                     exit_price = tp
+                elif hit_custom_exit:
+                    exit_reason = "CustomExit"
+                    exit_price = close_price
                 elif use_partial_tp:
                     while len(partial_legs) < len(partial_tp_levels):
                         next_level_price = partial_tp_prices[len(partial_legs)]

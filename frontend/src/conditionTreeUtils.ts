@@ -1,4 +1,4 @@
-import { isGroup, type ConditionNode, type OptimizeField, type TreeNode } from './types'
+import { isGroup, type ConditionNode, type IndicatorInfo, type OptimizeField, type Operator, type TreeNode } from './types'
 
 // Node-level condition-tree optimization helpers. These operate purely on
 // the in-memory tree the builder UI already holds - a path here is just a
@@ -101,23 +101,60 @@ export function optionIsValid(node: TreeNode, path: number[], field: OptimizeFie
   return optionIsValid(node.children[path[0]], path.slice(1), field)
 }
 
-/** Renders a condition tree as a compact, human-readable one-liner - used
- * to show what an auto-generated strategy (--optimizer structure/
- * structure_genetic) actually consists of in the ranking table, where each
- * row has a DIFFERENT tree (unlike the manual builder, where every row
- * shares the one tree already visible in the editor above). */
-export function describeConditionTree(node: TreeNode): string {
+// Mirrors ConditionRow.tsx's OPERATORS list (kept in sync by hand - both are
+// small, static, and rarely change).
+const OPERATOR_LABELS: Record<Operator, string> = {
+  '>': 'より上',
+  '<': 'より下',
+  '>=': '以上',
+  '<=': '以下',
+  '==': '一致',
+  crosses_above: '上抜け',
+  crosses_below: '下抜け',
+}
+
+function indicatorLabel(indicators: IndicatorInfo[], id: string): string {
+  return indicators.find((i) => i.id === id)?.label ?? id
+}
+
+function paramsLabel(indicators: IndicatorInfo[], indicatorId: string, params: Record<string, number>): string {
+  const info = indicators.find((i) => i.id === indicatorId)
+  const entries = Object.entries(params)
+  if (entries.length === 0) return ''
+  const parts = entries.map(([key, v]) => {
+    const paramLabel = info?.params.find((p) => p.name === key)?.label ?? key
+    return `${paramLabel}=${v}`
+  })
+  return `(${parts.join(',')})`
+}
+
+/** Renders a condition tree as a compact, human-readable one-liner with
+ * indicator names/params/operators translated to their Japanese labels (via
+ * the /api/indicators registry) - used to show what an auto-generated
+ * strategy (--optimizer structure/structure_genetic) actually consists of
+ * (ランキング一覧の「条件」列, ストラテジー詳細). AND/OR/NOT are left as-is,
+ * matching the manual builder's own group-operator dropdown (which also
+ * never translates them). */
+export function describeConditionTreeJapanese(node: TreeNode, indicators: IndicatorInfo[]): string {
   if (isGroup(node)) {
     if (node.op === 'NOT') {
-      return `NOT(${node.children.map(describeConditionTree).join(', ')})`
+      return `NOT(${node.children.map((c) => describeConditionTreeJapanese(c, indicators)).join(', ')})`
     }
-    return `(${node.children.map(describeConditionTree).join(` ${node.op} `)})`
+    return `(${node.children.map((c) => describeConditionTreeJapanese(c, indicators)).join(` ${node.op} `)})`
   }
 
-  const params = Object.entries(node.params)
-  const paramsText = params.length > 0 ? `(${params.map(([k, v]) => `${k}=${v}`).join(',')})` : ''
-  const value = typeof node.value === 'number' ? Number(node.value.toFixed(4)) : node.value
-  return `${node.indicator}${paramsText} ${node.operator} ${value}`
+  const leftLabel = indicatorLabel(indicators, node.indicator)
+  const leftParams = paramsLabel(indicators, node.indicator, node.params)
+  const operatorLabel = OPERATOR_LABELS[node.operator] ?? node.operator
+
+  if (typeof node.value === 'string') {
+    const rightLabel = indicatorLabel(indicators, node.value)
+    const rightParams = paramsLabel(indicators, node.value, node.value_params)
+    return `${leftLabel}${leftParams} ${operatorLabel} ${rightLabel}${rightParams}`
+  }
+
+  const value = Number(node.value.toFixed(4))
+  return `${leftLabel}${leftParams} ${operatorLabel} ${value}`
 }
 
 function cartesianProduct<T>(arrays: T[][]): T[][] {

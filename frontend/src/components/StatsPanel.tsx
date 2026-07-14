@@ -1,7 +1,9 @@
+import { toPips } from '../pipUtils'
 import type { RankingRow } from '../types'
 
 interface Props {
   row: RankingRow | undefined
+  symbol: string | undefined
 }
 
 function fmt(v: number | undefined, digits = 2): string {
@@ -9,39 +11,40 @@ function fmt(v: number | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
-export default function StatsPanel({ row }: Props) {
-  if (!row) {
-    return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
-  }
+function signedFmt(v: number | undefined, digits: number): string {
+  if (v === undefined || Number.isNaN(v)) return '-'
+  return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}`
+}
 
-  const profitOverDd = row.max_dd > 0 ? row.net_profit / row.max_dd : 0
+// タブ切り替えの外側・常時表示する統計ストリップ。ランキング一覧の列と
+// 同じ項目・同じ順序・同じ単位(PF,純利益(pips),期待値(pips),DD(pips),
+// 勝率(%),取引数(回),Sharpe,Recovery,Sortino,Calmar,CAGR(%))で揃えてある -
+// 同じ戦略の同じ指標が画面によって違う書き方をしていると混乱するため。
+export default function StatsPanel({ row, symbol }: Props) {
+  if (!row) {
+    return <div className="mb-2 text-xs text-gray-500">まだ結果がありません</div>
+  }
 
   const stats: { label: string; value: string }[] = [
     { label: 'PF', value: fmt(row.profit_factor) },
-    { label: '勝率%', value: fmt(row.win_rate, 1) },
-    { label: '損益期待値', value: fmt(row.expected_value) },
-    { label: '最大DD', value: fmt(row.max_dd, 1) },
-    { label: 'Recovery Factor', value: fmt(row.recovery_factor) },
+    { label: '純利益(pips)', value: signedFmt(toPips(row.net_profit, symbol), 1) },
+    { label: '期待値(pips)', value: signedFmt(toPips(row.expected_value, symbol), 3) },
+    { label: 'DD(pips)', value: fmt(toPips(row.max_dd, symbol), 1) },
+    { label: '勝率(%)', value: fmt(row.win_rate, 1) },
+    { label: '取引数(回)', value: String(row.trades) },
     { label: 'Sharpe', value: fmt(row.sharpe_ratio) },
+    { label: 'Recovery', value: fmt(row.recovery_factor) },
     { label: 'Sortino', value: fmt(row.sortino_ratio) },
     { label: 'Calmar', value: fmt(row.calmar_ratio) },
-    { label: 'CAGR', value: `${fmt(row.cagr * 100, 1)}%` },
-    { label: 'Profit/DD', value: fmt(profitOverDd) },
+    { label: 'CAGR(%)', value: fmt(row.cagr * 100, 1) },
   ]
 
-  if (row.final_account_balance !== undefined) {
-    stats.push(
-      { label: '最終残高', value: fmt(row.final_account_balance, 0) },
-      { label: '総損益(通貨額)', value: fmt(row.total_profit_currency, 0) },
-    )
-  }
-
   return (
-    <div className="grid grid-cols-2 gap-2 text-sm">
+    <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-xs">
       {stats.map((s) => (
-        <div key={s.label} className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
-          <div className="text-xs text-gray-400">{s.label}</div>
-          <div className="font-semibold text-gray-100">{s.value}</div>
+        <div key={s.label} className="flex items-center gap-1 whitespace-nowrap">
+          <span className="text-gray-400">{s.label}</span>
+          <span className="font-semibold text-gray-100">{s.value}</span>
         </div>
       ))}
     </div>

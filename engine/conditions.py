@@ -72,6 +72,8 @@ from engine.smc_indicators import (
     bullish_order_block,
     liquidity_sweep_bearish,
     liquidity_sweep_bullish,
+    mitigation_block_bearish,
+    mitigation_block_bullish,
 )
 import engine.candlestick_patterns as _cdl
 import engine.chart_patterns as _chart
@@ -134,6 +136,16 @@ def _highest_high(df: pd.DataFrame, length: int = 20) -> np.ndarray:
 def _lowest_low(df: pd.DataFrame, length: int = 20) -> np.ndarray:
     """Lowest low of the PREVIOUS `length` bars (shifted 1, excludes current bar)."""
     return df["low"].rolling(window=length).min().shift(1).to_numpy(dtype=float)
+
+
+def _highest_close(df: pd.DataFrame, length: int = 20) -> np.ndarray:
+    """Highest close of the PREVIOUS `length` bars (shifted 1, excludes current bar)."""
+    return df["close"].rolling(window=length).max().shift(1).to_numpy(dtype=float)
+
+
+def _lowest_close(df: pd.DataFrame, length: int = 20) -> np.ndarray:
+    """Lowest close of the PREVIOUS `length` bars (shifted 1, excludes current bar)."""
+    return df["close"].rolling(window=length).min().shift(1).to_numpy(dtype=float)
 
 
 def _donchian_mid(df: pd.DataFrame, length: int = 20) -> np.ndarray:
@@ -362,6 +374,8 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "atr": lambda df, length=14, **p: _atr(df, int(length)).to_numpy(dtype=float),
     "highest_high": lambda df, length=20, **p: _highest_high(df, int(length)),
     "lowest_low": lambda df, length=20, **p: _lowest_low(df, int(length)),
+    "highest_close": lambda df, length=20, **p: _highest_close(df, int(length)),
+    "lowest_close": lambda df, length=20, **p: _lowest_close(df, int(length)),
     "donchian_mid": lambda df, length=20, **p: _donchian_mid(df, int(length)),
     "bollinger_upper": lambda df, period=20, num_std=2.0, **p: _bollinger_upper(
         df, int(period), float(num_std)
@@ -423,6 +437,12 @@ INDICATOR_REGISTRY: dict[str, Any] = {
         df["open"], df["high"], df["low"], df["close"]
     ).astype(float),
     "breaker_block_bearish": lambda df, **p: breaker_block_bearish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).astype(float),
+    "mitigation_block_bullish": lambda df, **p: mitigation_block_bullish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).astype(float),
+    "mitigation_block_bearish": lambda df, **p: mitigation_block_bearish(
         df["open"], df["high"], df["low"], df["close"]
     ).astype(float),
     # Forex "volume" is broker tick/proxy volume (no central exchange), not

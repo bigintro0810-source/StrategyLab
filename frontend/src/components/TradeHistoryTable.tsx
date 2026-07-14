@@ -1,16 +1,16 @@
+import { toPips } from '../pipUtils'
 import type { TradeRow } from '../types'
 
 interface Props {
   rows: TradeRow[]
+  symbol: string | undefined
 }
 
-const BASE_COLUMNS: { key: keyof TradeRow; label: string; format?: (v: unknown) => string }[] = [
+const BASE_COLUMNS_WITHOUT_PROFIT: { key: keyof TradeRow; label: string; format?: (v: unknown) => string }[] = [
   { key: 'entry_time', label: 'エントリー時刻' },
   { key: 'entry_price', label: 'エントリー価格', format: (v) => Number(v).toFixed(3) },
   { key: 'exit_time', label: '決済時刻' },
   { key: 'exit_price', label: '決済価格', format: (v) => Number(v).toFixed(3) },
-  { key: 'profit', label: '損益(pips)', format: (v) => Number(v).toFixed(2) },
-  { key: 'exit_reason', label: '決済理由' },
 ]
 
 const DIRECTION_COLUMN: { key: keyof TradeRow; label: string; format?: (v: unknown) => string } = {
@@ -33,7 +33,7 @@ const PARTIAL_TP_COLUMN: { key: keyof TradeRow; label: string; format?: (v: unkn
 
 const MAX_ROWS = 200
 
-export default function TradeHistoryTable({ rows }: Props) {
+export default function TradeHistoryTable({ rows, symbol }: Props) {
   if (rows.length === 0) {
     return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
   }
@@ -46,10 +46,14 @@ export default function TradeHistoryTable({ rows }: Props) {
   // Only present when at least one trade actually took a partial profit
   // (use_partial_tp) - most trades in such a run still won't have it.
   const hasPartialTp = rows.some((r) => r.partial_exit_prices != null)
+  // symbolに依存するので(main.py::pip_size_for_symbol()と同じ規則)、静的な
+  // 列定義には入れられずここで組み立てる。
+  const profitColumn = { key: 'profit' as const, label: '損益(pips)', format: (v: unknown) => toPips(Number(v), symbol).toFixed(2) }
   const COLUMNS = [
-    BASE_COLUMNS[0],
+    BASE_COLUMNS_WITHOUT_PROFIT[0],
     ...(hasDirection ? [DIRECTION_COLUMN] : []),
-    ...BASE_COLUMNS.slice(1),
+    ...BASE_COLUMNS_WITHOUT_PROFIT.slice(1),
+    profitColumn,
     ...(hasPositionSizing ? POSITION_SIZING_COLUMNS : []),
     ...(hasPartialTp ? [PARTIAL_TP_COLUMN] : []),
   ]

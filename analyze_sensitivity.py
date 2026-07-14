@@ -1,4 +1,4 @@
-"""Parameter sensitivity analysis for the current best strategy (V3.0).
+"""Parameter sensitivity analysis for a given strategy (V3.0).
 
 For each tuned parameter, holds every other parameter at the best-known
 value and re-runs the backtest across that one parameter's other grid
@@ -6,26 +6,33 @@ values. A flat profit_factor across those variants means the strategy
 isn't relying on a lucky, narrow parameter choice; a cliff means it might
 be overfit to that exact value.
 
-Reads output/ranking_total.csv (produced by main.py), so run main.py
-first. --mode controls which parameter grid to vary across - dev mode
-has only one value per parameter, so there's nothing to test; use
---mode full (matching whatever mode actually produced ranking_total.csv).
+Reads ranking_total.csv from resolve_output_dir(symbol, timeframe) - the
+same per-symbol output directory every other script in this project uses
+(main.py/walk_forward.py/rerun_ranking_row.py) - so run main.py for that
+symbol/timeframe first. --mode controls which parameter grid to vary
+across - dev mode has only one value per parameter, so there's nothing to
+test; use --mode full (matching whatever mode actually produced
+ranking_total.csv).
 """
 
 import argparse
-from pathlib import Path
 
 import pandas as pd
 
 from engine.backtest_engine import compute_is_intraday, run_backtest
 from engine.params import reconstruct_params_from_row
-from main import build_parameter_space, find_data_file, load_price_data
-
-OUTPUT_DIR = Path("output")
+from main import SUPPORTED_SYMBOLS, build_parameter_space, find_data_file, load_price_data, resolve_output_dir
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="パラメータ感度分析")
+
+    parser.add_argument(
+        "--symbol",
+        choices=SUPPORTED_SYMBOLS,
+        default="USDJPY",
+        help="通貨ペア (main.pyの--symbolと合わせる。デフォルト: USDJPY)",
+    )
 
     parser.add_argument(
         "--mode",
@@ -40,10 +47,17 @@ def parse_args() -> argparse.Namespace:
         help="使用する時間足 (main.pyの--timeframeと合わせる)",
     )
 
+    parser.add_argument(
+        "--rank",
+        type=int,
+        default=1,
+        help="ranking_total.csv内のどの行(rank)を分析対象にするか (デフォルト: 1=全体ベスト)",
+    )
+
     return parser.parse_args()
 
 
-def load_best_row(output_dir: Path) -> dict:
+def load_ranking_row(output_dir, rank: int) -> dict:
     ranking_path = output_dir / "ranking_total.csv"
 
     if not ranking_path.exists():
@@ -51,7 +65,12 @@ def load_best_row(output_dir: Path) -> dict:
             f"{ranking_path} が見つかりません。先に main.py を実行してください。"
         )
 
-    return pd.read_csv(ranking_path).iloc[0].to_dict()
+    ranking_total = pd.read_csv(ranking_path)
+    matches = ranking_total[ranking_total["rank"] == rank]
+    if matches.empty:
+        raise ValueError(f"rank={rank} がranking_total.csvに見つかりません。")
+
+    return matches.iloc[0].to_dict()
 
 
 def analyze_param_sensitivity(
@@ -139,18 +158,20 @@ def rate_sensitivity(summary_df: pd.DataFrame) -> tuple[float, str]:
 def main() -> None:
     args = parse_args()
 
-    output_dir = OUTPUT_DIR if args.timeframe == "15m" else OUTPUT_DIR / args.timeframe
+    output_dir = resolve_output_dir(args.symbol, args.timeframe)
 
-    best_row = load_best_row(output_dir)
+    best_row = load_ranking_row(output_dir, args.rank)
     base_params = reconstruct_params_from_row(best_row)
-    param_space = build_parameter_space(args.mode)
+    param_space = build_parameter_space(args.mode, args.symbol)
 
-    data_path = find_data_file(args.timeframe)
+    data_path = find_data_file(args.timeframe, args.symbol)
     df = load_price_data(data_path)
     is_intraday = compute_is_intraday(df["datetime"])
 
+    print(f"通貨ペア: {args.symbol}")
     print(f"時間足: {args.timeframe}")
     print(f"モード: {args.mode}")
+    print(f"対象rank: {args.rank}")
     print(f"ベースラインPF: {best_row.get('profit_factor')}")
     print()
 

@@ -59,6 +59,8 @@ BUILDER_INDICATORS = {
     "rsi": ("RSI", True),
     "highest_high": ("直近高値(N本)", True),
     "lowest_low": ("直近安値(N本)", True),
+    "highest_close": ("直近終値の最高値(N本)", True),
+    "lowest_close": ("直近終値の最安値(N本)", True),
     "donchian_mid": ("ドンチアン中央値", True),
     "bollinger_upper": ("ボリンジャー上限", False),
     "bollinger_middle": ("ボリンジャー中央", False),

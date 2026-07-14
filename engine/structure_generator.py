@@ -66,15 +66,38 @@ def coarser_timeframes(base_timeframe: str) -> list[str]:
     return _TIMEFRAME_ORDER[_TIMEFRAME_ORDER.index(base_timeframe) + 1 :]
 
 
-def _sample_params(spec: IndicatorSpec, rng: random.Random) -> dict:
-    params = {name: rng.randint(lo, hi) for name, (lo, hi) in spec.param_ranges.items()}
+def _sample_params(
+    spec: IndicatorSpec,
+    rng: random.Random,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+) -> dict:
+    """Samples each param_ranges key from (in priority order): the caller's
+    per-run selection for this indicator+param (allowed_param_values, from
+    the auto-exploration screen's value checkboxes), else the indicator's
+    own value_presets (indicator_pool.py's representative-value template),
+    else the raw continuous range as a last-resort fallback (only reachable
+    if value_presets was somehow left empty for that param)."""
+    own_allowed = (allowed_param_values or {}).get(spec.name, {})
+    params = {}
+    for name, (lo, hi) in spec.param_ranges.items():
+        choices = own_allowed.get(name) or spec.value_presets.get(name) or list(range(int(lo), int(hi) + 1))
+        params[name] = rng.choice(choices)
     params.update({name: rng.choice(choices) for name, choices in spec.param_choices.items()})
     return params
 
 
-def _sample_literal(spec: IndicatorSpec, rng: random.Random) -> float:
+def _sample_literal(
+    spec: IndicatorSpec,
+    rng: random.Random,
+    allowed_literal_values: dict[str, list] | None = None,
+) -> float:
+    own_allowed = (allowed_literal_values or {}).get(spec.name)
+    if own_allowed:
+        return rng.choice(own_allowed)
     if spec.literal_choices is not None:
         return rng.choice(spec.literal_choices)
+    if spec.literal_presets:
+        return rng.choice(spec.literal_presets)
     lo, hi = spec.literal_range
     if spec.literal_is_int:
         return float(rng.randint(int(lo), int(hi)))
@@ -82,7 +105,12 @@ def _sample_literal(spec: IndicatorSpec, rng: random.Random) -> float:
 
 
 def _pick_value_side(
-    spec: IndicatorSpec, own_params: dict, grouped: dict[str, list[IndicatorSpec]], rng: random.Random
+    spec: IndicatorSpec,
+    own_params: dict,
+    grouped: dict[str, list[IndicatorSpec]],
+    rng: random.Random,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
 ) -> tuple[float | str, dict]:
     """Returns (value, value_params) for a Condition whose left side is spec/own_params.
 
@@ -97,14 +125,14 @@ def _pick_value_side(
     )
 
     if not use_indicator_pair:
-        return _sample_literal(spec, rng), {}
+        return _sample_literal(spec, rng, allowed_literal_values), {}
 
     candidates = grouped[spec.kind]
     own_signature = (spec.name, tuple(sorted(own_params.items())))
 
     for _ in range(20):
         other = rng.choice(candidates)
-        other_params = _sample_params(other, rng)
+        other_params = _sample_params(other, rng, allowed_param_values)
         if (other.name, tuple(sorted(other_params.items()))) != own_signature:
             return other.name, other_params
 
@@ -114,20 +142,25 @@ def _pick_value_side(
     # (>, <) or always-true (==), which the ranking step naturally sinks
     # via zero/near-total trade count - not worth a hard failure here.
     if has_literal:
-        return _sample_literal(spec, rng), {}
+        return _sample_literal(spec, rng, allowed_literal_values), {}
     return other.name, other_params
 
 
 def _generate_leaf(
     rng: random.Random,
     grouped: dict[str, list[IndicatorSpec]],
+    pool: list[IndicatorSpec],
     mtf_timeframes: list[str] | None = None,
     mtf_probability: float = 0.0,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
 ) -> Condition:
-    spec = rng.choice(INDICATOR_POOL)
-    own_params = _sample_params(spec, rng)
+    spec = rng.choice(pool)
+    own_params = _sample_params(spec, rng, allowed_param_values)
     operator = rng.choice(OPERATORS_BY_KIND[spec.kind])
-    value, value_params = _pick_value_side(spec, own_params, grouped, rng)
+    value, value_params = _pick_value_side(
+        spec, own_params, grouped, rng, allowed_param_values, allowed_literal_values
+    )
 
     # Each side independently may reference a coarser timeframe than the
     # backtest's own base - e.g. a 15m entry filtered by a 1h/4h/1d EMA, or
@@ -157,11 +190,14 @@ def _generate_leaf(
 def _generate_node(
     rng: random.Random,
     grouped: dict[str, list[IndicatorSpec]],
+    pool: list[IndicatorSpec],
     depth: int,
     max_depth: int,
     leaves_left: list[int],
     mtf_timeframes: list[str] | None = None,
     mtf_probability: float = 0.0,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
 ) -> Condition | ConditionGroup:
     """leaves_left is a 1-element list used as a mutable shared budget across
     the recursion - a plain int can't be decremented by a nested call and
@@ -171,9 +207,15 @@ def _generate_node(
     that has already committed to >=2 children can still exceed it by one or
     two conditions in the worst case, not worth guarding against precisely
     for an MVP screening pass)."""
+    leaf_kwargs = dict(
+        mtf_timeframes=mtf_timeframes,
+        mtf_probability=mtf_probability,
+        allowed_param_values=allowed_param_values,
+        allowed_literal_values=allowed_literal_values,
+    )
     if depth >= max_depth or leaves_left[0] <= 1:
         leaves_left[0] -= 1
-        return _generate_leaf(rng, grouped, mtf_timeframes, mtf_probability)
+        return _generate_leaf(rng, grouped, pool, **leaf_kwargs)
 
     op = rng.choices(_GROUP_OPS, weights=_GROUP_OP_WEIGHTS)[0]
     n_children = 1 if op == "NOT" else rng.choice([2, 2, 3])
@@ -181,16 +223,17 @@ def _generate_node(
     children: list[Condition | ConditionGroup] = []
     for _ in range(n_children):
         if leaves_left[0] <= 1:
-            children.append(_generate_leaf(rng, grouped, mtf_timeframes, mtf_probability))
+            children.append(_generate_leaf(rng, grouped, pool, **leaf_kwargs))
             leaves_left[0] -= 1
         elif rng.random() < 0.5:
             children.append(
                 _generate_node(
-                    rng, grouped, depth + 1, max_depth, leaves_left, mtf_timeframes, mtf_probability
+                    rng, grouped, pool, depth + 1, max_depth, leaves_left,
+                    mtf_timeframes, mtf_probability, allowed_param_values, allowed_literal_values,
                 )
             )
         else:
-            children.append(_generate_leaf(rng, grouped, mtf_timeframes, mtf_probability))
+            children.append(_generate_leaf(rng, grouped, pool, **leaf_kwargs))
             leaves_left[0] -= 1
 
     return ConditionGroup(op=op, children=children)
@@ -203,12 +246,17 @@ def generate_random_tree(
     max_leaves: int = 4,
     mtf_timeframes: list[str] | None = None,
     mtf_probability: float = 0.0,
+    pool: list[IndicatorSpec] | None = None,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
 ) -> Condition | ConditionGroup:
-    grouped = pool_by_kind()
+    pool = pool if pool is not None else INDICATOR_POOL
+    grouped = pool_by_kind(pool)
     leaves_left = [rng.randint(min_leaves, max_leaves)]
     return _generate_node(
-        rng, grouped, depth=0, max_depth=max_depth, leaves_left=leaves_left,
+        rng, grouped, pool, depth=0, max_depth=max_depth, leaves_left=leaves_left,
         mtf_timeframes=mtf_timeframes, mtf_probability=mtf_probability,
+        allowed_param_values=allowed_param_values, allowed_literal_values=allowed_literal_values,
     )
 
 
@@ -220,6 +268,9 @@ def generate_candidate_trees(
     max_leaves: int = 4,
     mtf_timeframes: list[str] | None = None,
     mtf_probability: float = 0.0,
+    pool: list[IndicatorSpec] | None = None,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
 ) -> list[dict]:
     """Generates up to n structurally-distinct condition trees, as plain
     dicts ready to drop into a condition_tree param_space list (see main.py's
@@ -237,6 +288,11 @@ def generate_candidate_trees(
     engine/optimizer_search.py's sample_random_combos, since a narrow pool
     can exhaust distinct trees well before n is reached - looping forever
     waiting for a uniqueness that can't happen would hang the CLI)."""
+    if pool is not None and len(pool) == 0:
+        raise ValueError(
+            "選択した条件カテゴリ/探索レベルに該当する指標が1つもありません。"
+            "カテゴリを1つ以上有効にしてください。"
+        )
     rng = random.Random(seed)
     seen: set[str] = set()
     trees: list[dict] = []
@@ -247,7 +303,8 @@ def generate_candidate_trees(
         attempts += 1
         tree = generate_random_tree(
             rng, max_depth=max_depth, min_leaves=min_leaves, max_leaves=max_leaves,
-            mtf_timeframes=mtf_timeframes, mtf_probability=mtf_probability,
+            mtf_timeframes=mtf_timeframes, mtf_probability=mtf_probability, pool=pool,
+            allowed_param_values=allowed_param_values, allowed_literal_values=allowed_literal_values,
         )
         tree_dict = tree.to_dict()
         signature = json.dumps(tree_dict, sort_keys=True)
@@ -257,6 +314,21 @@ def generate_candidate_trees(
         trees.append(tree_dict)
 
     return trees
+
+
+def wrap_with_mandatory_conditions(tree: dict, mandatory_conditions: list[dict] | None) -> dict:
+    """AND-combines mandatory_conditions (a run-level constant, the same for
+    every candidate) onto a generated tree. Deliberately applied here, at
+    the boundary between generation and evaluation, rather than spliced into
+    the random tree itself: mandatory conditions must survive crossover/
+    mutation unchanged, and both of those operate on whatever
+    individual["condition_tree"] holds. Keeping the constant entirely
+    outside that field means _crossover/_mutate never need to know it
+    exists - callers wrap right before backtesting instead (main.py's
+    structure/structure_genetic branches)."""
+    if not mandatory_conditions:
+        return tree
+    return {"op": "AND", "children": [*copy.deepcopy(mandatory_conditions), tree]}
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +402,13 @@ def _crossover(
         child_tree = _replace_node_at_path(tree_a, path_a, subtree_b)
         if _count_leaves(child_tree) <= max_leaves * 2 and _tree_depth(child_tree) <= max_depth + 2:
             direction = rng.choice([parent_a["direction"], parent_b["direction"]])
-            return {"condition_tree": child_tree, "direction": direction}
+            child = {"condition_tree": child_tree, "direction": direction}
+            # rr only evolves in full mode (see StructureGeneticSearch's
+            # rr_choices) - both parents always have it or neither does, so
+            # checking parent_a alone is enough.
+            if "rr" in parent_a:
+                child["rr"] = rng.choice([parent_a["rr"], parent_b["rr"]])
+            return child
 
     return copy.deepcopy(parent_a)
 
@@ -339,9 +417,14 @@ def _mutate(
     individual: dict,
     rng: random.Random,
     grouped: dict[str, list[IndicatorSpec]],
+    pool: list[IndicatorSpec],
     mutation_rate: float,
     mtf_timeframes: list[str] | None = None,
     mtf_probability: float = 0.0,
+    rr_choices: list[float] | None = None,
+    allowed_param_values: dict[str, dict[str, list]] | None = None,
+    allowed_literal_values: dict[str, list] | None = None,
+    allowed_directions: list[str] | None = None,
 ) -> dict:
     """Leaf mutation (replace with a freshly generated leaf) and group
     mutation (flip AND<->OR, NOT excluded since it's locked to exactly one
@@ -349,7 +432,8 @@ def _mutate(
     equivalent of engine/optimizer_search.py's scalar _mutate() (per-key
     coin flip). direction flips independently at a quarter of mutation_rate
     since long<->short is a much bigger behavioral jump than tweaking one
-    condition."""
+    condition - skipped entirely when allowed_directions restricts the run
+    to a single direction, since there's nothing to flip to."""
     tree = copy.deepcopy(individual["condition_tree"])
 
     def _walk(node: dict) -> dict:
@@ -359,15 +443,24 @@ def _mutate(
             node["children"] = [_walk(child) for child in node["children"]]
             return node
         if rng.random() < mutation_rate:
-            return _generate_leaf(rng, grouped, mtf_timeframes, mtf_probability).to_dict()
+            return _generate_leaf(
+                rng, grouped, pool, mtf_timeframes, mtf_probability,
+                allowed_param_values, allowed_literal_values,
+            ).to_dict()
         return node
 
     mutated_tree = _walk(tree)
     direction = individual["direction"]
-    if rng.random() < mutation_rate / 4:
+    if (allowed_directions is None or len(allowed_directions) > 1) and rng.random() < mutation_rate / 4:
         direction = "short" if direction == "long" else "long"
 
-    return {"condition_tree": mutated_tree, "direction": direction}
+    result = {"condition_tree": mutated_tree, "direction": direction}
+    if "rr" in individual:
+        rr = individual["rr"]
+        if rr_choices and rng.random() < mutation_rate:
+            rr = rng.choice(rr_choices)
+        result["rr"] = rr
+    return result
 
 
 def _tournament_select(scored_population: list[tuple[float, dict]], rng: random.Random, k: int = 3) -> dict:
@@ -403,27 +496,52 @@ class StructureGeneticSearch:
         mutation_rate: float = 0.2,
         max_depth: int = 2,
         max_leaves: int = 4,
+        min_leaves: int = 1,
         seed: int = 42,
         mtf_timeframes: list[str] | None = None,
         mtf_probability: float = 0.0,
+        pool: list[IndicatorSpec] | None = None,
+        rr_choices: list[float] | None = None,
+        allowed_param_values: dict[str, dict[str, list]] | None = None,
+        allowed_literal_values: dict[str, list] | None = None,
+        allowed_directions: list[str] | None = None,
     ):
+        if pool is not None and len(pool) == 0:
+            raise ValueError(
+                "選択した条件カテゴリ/探索レベルに該当する指標が1つもありません。"
+                "カテゴリを1つ以上有効にしてください。"
+            )
         self.population_size = population_size
         self.elite_count = elite_count
         self.mutation_rate = mutation_rate
         self.max_depth = max_depth
         self.max_leaves = max_leaves
+        self.min_leaves = min_leaves
         self.mtf_timeframes = mtf_timeframes
         self.mtf_probability = mtf_probability
+        self.pool = pool if pool is not None else INDICATOR_POOL
         self.rng = random.Random(seed)
-        self.grouped = pool_by_kind()
+        self.grouped = pool_by_kind(self.pool)
+        # RR(利確のリスクリワード比)を条件ツリーと一緒に進化させるかどうか。
+        # Noneまたは要素数1(devモード相当)なら今まで通りmain.py側の
+        # base_defaults固定値のみを使い、個体には"rr"キーを持たせない。
+        # 2要素以上(fullモード)のときだけ個体ごとにRRも交叉・突然変異させる。
+        self.rr_choices = rr_choices if rr_choices and len(rr_choices) > 1 else None
+        self.allowed_param_values = allowed_param_values
+        self.allowed_literal_values = allowed_literal_values
+        self.allowed_directions = allowed_directions or ["long", "short"]
 
     def _random_individual(self) -> dict:
         tree = generate_random_tree(
-            self.rng, max_depth=self.max_depth, max_leaves=self.max_leaves,
-            mtf_timeframes=self.mtf_timeframes, mtf_probability=self.mtf_probability,
+            self.rng, max_depth=self.max_depth, min_leaves=self.min_leaves, max_leaves=self.max_leaves,
+            mtf_timeframes=self.mtf_timeframes, mtf_probability=self.mtf_probability, pool=self.pool,
+            allowed_param_values=self.allowed_param_values, allowed_literal_values=self.allowed_literal_values,
         ).to_dict()
-        direction = self.rng.choice(["long", "short"])
-        return {"condition_tree": tree, "direction": direction}
+        direction = self.rng.choice(self.allowed_directions)
+        individual = {"condition_tree": tree, "direction": direction}
+        if self.rr_choices:
+            individual["rr"] = self.rng.choice(self.rr_choices)
+        return individual
 
     def initial_population(self) -> list[dict]:
         return [self._random_individual() for _ in range(self.population_size)]
@@ -437,8 +555,9 @@ class StructureGeneticSearch:
             parent_b = _tournament_select(scored_population, self.rng)
             child = _crossover(parent_a, parent_b, self.rng, self.max_leaves, self.max_depth)
             child = _mutate(
-                child, self.rng, self.grouped, self.mutation_rate,
-                self.mtf_timeframes, self.mtf_probability,
+                child, self.rng, self.grouped, self.pool, self.mutation_rate,
+                self.mtf_timeframes, self.mtf_probability, self.rr_choices,
+                self.allowed_param_values, self.allowed_literal_values, self.allowed_directions,
             )
             next_gen.append(child)
 

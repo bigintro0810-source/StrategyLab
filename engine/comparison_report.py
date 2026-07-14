@@ -8,7 +8,7 @@ from engine.strategy_registry import get_strategy
 COMPARISON_OUTPUT = Path("saved_strategies") / "comparison.html"
 
 
-def _load_equity_series(entry: dict) -> list[float]:
+def load_equity_series(entry: dict) -> list[float]:
     equity_path = Path(entry["snapshot_dir"]) / "equity_curve.csv"
 
     if not equity_path.exists():
@@ -40,7 +40,7 @@ def build_comparison_html(entries: list[dict]) -> str:
         build_metrics_table(entries) if entries else "<p>データがありません。</p>"
     )
 
-    series = {entry["name"]: _load_equity_series(entry) for entry in entries}
+    series = {entry["name"]: load_equity_series(entry) for entry in entries}
     equity_chart = build_multi_equity_curve_svg(series)
 
     return f"""<!DOCTYPE html>

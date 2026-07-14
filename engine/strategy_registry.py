@@ -155,3 +155,17 @@ def toggle_favorite(strategy_id: str) -> dict:
 
 def rename_strategy(strategy_id: str, name: str) -> dict:
     return update_strategy(strategy_id, name=name)
+
+
+def delete_strategy(strategy_id: str) -> None:
+    entries = load_registry()
+    entry = next((e for e in entries if e["id"] == strategy_id), None)
+    if entry is None:
+        raise KeyError(f"保存された戦略が見つかりません: {strategy_id}")
+
+    remaining = [e for e in entries if e["id"] != strategy_id]
+    _write_registry(remaining)
+
+    snapshot_dir = Path(entry["snapshot_dir"])
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)

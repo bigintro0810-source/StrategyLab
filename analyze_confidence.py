@@ -7,20 +7,28 @@ fresh stability/Monte Carlo numbers with stale walk-forward/sensitivity
 numbers from a previous run. There's no run identifier linking these
 files together, so this script can't detect staleness itself; it just
 tells you which components it found and used.
+
+Reads from resolve_output_dir(symbol, timeframe) - the same per-symbol
+output directory every other script in this project uses.
 """
 
 import argparse
-from pathlib import Path
 
 import pandas as pd
 
 from engine.robustness import compute_confidence_score
-
-OUTPUT_DIR = Path("output")
+from main import SUPPORTED_SYMBOLS, resolve_output_dir
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="総合信頼性(Confidence Score)の集計")
+
+    parser.add_argument(
+        "--symbol",
+        choices=SUPPORTED_SYMBOLS,
+        default="USDJPY",
+        help="main.pyで使った通貨ペアに合わせる (デフォルト: USDJPY)",
+    )
 
     parser.add_argument(
         "--timeframe",
@@ -33,7 +41,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    output_dir = OUTPUT_DIR if args.timeframe == "15m" else OUTPUT_DIR / args.timeframe
+    output_dir = resolve_output_dir(args.symbol, args.timeframe)
 
     result = compute_confidence_score(output_dir)
 

@@ -27,12 +27,26 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from engine.conditions import INDICATOR_REGISTRY
-from engine.strategy_registry import get_strategy, list_strategies
-from main import find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
+from engine.indicator_pool import CATEGORIES, INDICATOR_POOL, LEVEL_PRESETS
+from engine.params import reconstruct_params_from_row
+from engine.pdf_report import export_pdf_report
+from engine.comparison_report import load_equity_series
+from engine.strategy_registry import (
+    add_tags,
+    delete_strategy,
+    get_strategy,
+    list_strategies,
+    remove_tag,
+    rename_strategy,
+    set_memo,
+    toggle_favorite,
+)
+from main import SUPPORTED_SYMBOLS, find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
 
 app = FastAPI(title="Strategy Lab API")
 
@@ -122,6 +136,16 @@ class BacktestRequest(BaseModel):
     # fallback for older saved strategies with no partial_tp_levels key -
     # see engine/backtest_engine.py::_resolve_partial_tp_levels).
     partial_tp_levels: Optional[list[dict]] = None
+    # Decoupled SL/TP basis (2026-07-12) - both default to the values that
+    # reproduce prior behavior exactly (sl_basis="signal_candle",
+    # tp_basis="rr"). See engine/backtest_engine.py::_resolve_sl/_resolve_tp.
+    sl_basis: str = "signal_candle"
+    sl_atr_length: int = 14
+    sl_atr_multiplier: float = 2.0
+    sl_fixed_pips: float = 20.0
+    tp_basis: str = "rr"
+    tp_fixed_pips: float = 20.0
+    exit_condition_tree: Optional[dict] = None
     # Auto-exploration engine (optimizer="structure"/"structure_genetic") -
     # ignored for every other optimizer value. Mirrors main.py's
     # --n-candidates/--max-depth/--max-leaves/--min-trades/--mtf-probability/
@@ -141,6 +165,34 @@ class BacktestRequest(BaseModel):
     population: int = 20
     mutation_rate: float = 0.2
     generations: int = 30
+    # Which indicators are eligible for generation - mirrors main.py's
+    # --categories/--explore-level 1:1 (see engine/indicator_pool.py's
+    # CATEGORIES/LEVEL_PRESETS). Both None reproduces today's unfiltered
+    # "every indicator eligible" behavior.
+    categories: Optional[list[str]] = None
+    explore_level: Optional[str] = None
+    # 探索レベル="custom" のときだけ使う、カテゴリ内の個別指標名の絞り込み
+    # (例: indicatorカテゴリのうちRSI/MACDだけ)。mirrors main.py's
+    # --custom-indicator-names 1:1. explore_levelと同時指定時はexplore_level優先
+    # (main.py側のロジックと同じ)。
+    custom_indicator_names: Optional[list[str]] = None
+    # 2026-07-13追加、自動探索専用画面(決済条件/必須固定条件/方向/期間指定)用。
+    # main.pyには個別フラグを増やさず、まとめて1つのJSON(--exploration-config)
+    # として渡す。全てNoneなら今まで通りの挙動(main.py::main()参照)。
+    rr_choices: Optional[list[float]] = None
+    direction_mode: str = "both"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    min_leaves: int = 1
+    # {indicator_name: {param_name: [values]}} - 空/未指定の指標はrepresentative
+    # value全部が候補になる(main.py側のフォールバック、engine/indicator_pool.py
+    # のvalue_presets)。
+    selected_param_values: Optional[dict[str, dict[str, list[float]]]] = None
+    # {indicator_name: [values]} - 閾値(比較に使う数値)側の絞り込み。
+    selected_literal_values: Optional[dict[str, list[float]]] = None
+    # 完全に確定した条件(indicator/operator/value/params/value_params)のリスト。
+    # 生成される全候補にANDで必ず含まれる(条件数min/max_leavesのカウント対象外)。
+    mandatory_conditions: Optional[list[dict]] = None
 
 
 def _build_strategy_config(req: "BacktestRequest") -> Path:
@@ -190,6 +242,13 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "partial_tp_rr": [req.partial_tp_rr],
         "partial_tp_fraction": [req.partial_tp_fraction],
         "partial_tp_levels": [req.partial_tp_levels],
+        "sl_basis": [req.sl_basis],
+        "sl_atr_length": [req.sl_atr_length],
+        "sl_atr_multiplier": [req.sl_atr_multiplier],
+        "sl_fixed_pips": [req.sl_fixed_pips],
+        "tp_basis": [req.tp_basis],
+        "tp_fixed_pips": [req.tp_fixed_pips],
+        "exit_condition_tree": [req.exit_condition_tree],
         # Without this, run_backtest()/engine/filters.py silently fall back to
         # pip_size=0.01 (main.py's own default grid always sets this
         # per-symbol, but --strategy-config JSON files don't unless told to) -
@@ -305,6 +364,12 @@ async def create_backtest(req: BacktestRequest) -> dict:
         ]
         if req.mtf_timeframes:
             cmd += ["--mtf-timeframes", req.mtf_timeframes]
+        if req.categories:
+            cmd += ["--categories", ",".join(req.categories)]
+        if req.explore_level:
+            cmd += ["--explore-level", req.explore_level]
+        elif req.custom_indicator_names:
+            cmd += ["--custom-indicator-names", ",".join(req.custom_indicator_names)]
         if req.optimizer == "structure_genetic":
             cmd += [
                 "--population", str(req.population),
@@ -315,6 +380,45 @@ async def create_backtest(req: BacktestRequest) -> dict:
         config_path = _build_strategy_config(req)
         cmd += ["--strategy-config", str(config_path)]
 
+    # --exploration-config is independent of --strategy-config and applies
+    # regardless of optimizer: date-range filtering (main.py applies it
+    # right after load_price_data, unconditionally) is a generic backtest
+    # setting, shared by the top toolbar's date pickers for both 手動探索
+    # and 自動探索 (see frontend/src/App.tsx). rr_choices/direction/
+    # min_leaves/selected_*/mandatory_conditions only make sense for
+    # structure/structure_genetic - main.py only reads them inside those
+    # two branches, so they're left out of the JSON for every other
+    # optimizer even if somehow set.
+    is_structure_optimizer = req.optimizer in ("structure", "structure_genetic")
+    exploration_config = {
+        "rr_choices": req.rr_choices if is_structure_optimizer else None,
+        "direction": req.direction_mode if is_structure_optimizer else None,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+        "min_leaves": req.min_leaves if is_structure_optimizer else None,
+        "selected_param_values": req.selected_param_values if is_structure_optimizer else None,
+        "selected_literal_values": req.selected_literal_values if is_structure_optimizer else None,
+        "mandatory_conditions": req.mandatory_conditions if is_structure_optimizer else None,
+    }
+    has_exploration_overrides = req.start_date or req.end_date or (
+        is_structure_optimizer and (
+            req.rr_choices
+            or req.direction_mode != "both"
+            or req.min_leaves != 1
+            or req.selected_param_values
+            or req.selected_literal_values
+            or req.mandatory_conditions
+        )
+    )
+    if has_exploration_overrides:
+        config_dir = Path("output") / "exploration_configs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        exploration_config_path = config_dir / f"{job_id}.json"
+        exploration_config_path.write_text(
+            json.dumps(exploration_config, ensure_ascii=False), encoding="utf-8"
+        )
+        cmd += ["--exploration-config", str(exploration_config_path)]
+
     if req.save_as:
         cmd += ["--save-as", req.save_as]
 
@@ -322,6 +426,7 @@ async def create_backtest(req: BacktestRequest) -> dict:
         "status": "queued",
         "symbol": req.symbol,
         "timeframe": req.timeframe,
+        "mode": req.mode,
         "stdout": "",
         "stderr": "",
     }
@@ -364,6 +469,68 @@ async def rerun_ranking_row(job_id: str, rank: int) -> dict:
     asyncio.create_task(_run_job(new_job_id, cmd))
 
     return {"job_id": new_job_id}
+
+
+class SaveRowRequest(BaseModel):
+    name: str
+    favorite: bool = False
+
+
+@app.post("/api/backtests/{job_id}/rows/{rank}/save")
+async def save_ranking_row(job_id: str, rank: int, req: SaveRowRequest) -> dict:
+    """Saves one specific ranking_total.csv row into saved_strategies -
+    lets ランキング一覧's 🔖/⭐ buttons save any row, not just rank #1 (the
+    only row main.py's own end-of-run --save-as already covers). Reuses
+    rerun_ranking_row.py's own re-computation (it already knows how to
+    reconstruct params for an arbitrary rank) rather than duplicating that
+    logic here - the entry itself is written by save_strategy(), and the
+    only way to read the resulting entry back out of a fire-and-forget
+    subprocess is the SAVE_RESULT_JSON: stdout marker (see
+    _extract_friendly_error's own precedent for stdout-marker parsing)."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    new_job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "rerun_ranking_row.py",
+        "--symbol", job["symbol"],
+        "--timeframe", job["timeframe"],
+        "--rank", str(rank),
+        "--mode", job["mode"],
+        "--save-as", req.name,
+    ]
+    if req.favorite:
+        cmd.append("--favorite")
+
+    JOBS[new_job_id] = {
+        "status": "queued",
+        "symbol": job["symbol"],
+        "timeframe": job["timeframe"],
+        "stdout": "",
+        "stderr": "",
+    }
+
+    asyncio.create_task(_run_job(new_job_id, cmd))
+
+    return {"job_id": new_job_id}
+
+
+@app.get("/api/backtests/{job_id}/save-result")
+async def get_save_result(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    for line in job["stdout"].splitlines():
+        if line.startswith("SAVE_RESULT_JSON:"):
+            return json.loads(line[len("SAVE_RESULT_JSON:"):])
+
+    raise HTTPException(status_code=404, detail="save result not found in job output")
 
 
 def _read_progress(symbol: str, timeframe: str) -> dict | None:
@@ -482,6 +649,8 @@ INDICATOR_LABELS: dict[str, str] = {
     "atr": "ATR",
     "highest_high": "直近高値(N本)",
     "lowest_low": "直近安値(N本)",
+    "highest_close": "直近終値の最高値(N本)",
+    "lowest_close": "直近終値の最安値(N本)",
     "donchian_mid": "ドンチアン中央値",
     "bollinger_upper": "ボリンジャー上限",
     "bollinger_middle": "ボリンジャー中央",
@@ -507,6 +676,8 @@ INDICATOR_LABELS: dict[str, str] = {
     "choch_bearish": "CHoCH(弱気/下降転換)",
     "breaker_block_bullish": "ブレイカーブロック(強気)",
     "breaker_block_bearish": "ブレイカーブロック(弱気)",
+    "mitigation_block_bullish": "ミティゲーションブロック(強気)",
+    "mitigation_block_bearish": "ミティゲーションブロック(弱気)",
     "vwap": "VWAP(出来高加重平均価格・日次リセット)",
     "hour": "時刻(JST)",
     "weekday": "曜日(0=月〜6=日)",
@@ -828,6 +999,8 @@ INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     "atr": [{"name": "length", "label": "期間", "default": 14, "type": "int"}],
     "highest_high": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "lowest_low": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
+    "highest_close": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
+    "lowest_close": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "donchian_mid": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "bollinger_upper": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
@@ -1567,6 +1740,17 @@ INDICATOR_PARAM_SPECS.update({
 })
 
 
+_CATEGORY_LABELS: dict[str, str] = {
+    "indicator": "インジケーター",
+    "price_action": "プライスアクション",
+    "time_filter": "時間フィルター",
+    "ict": "ICT",
+    "chart_pattern": "チャートパターン",
+}
+
+_CATEGORY_BY_NAME: dict[str, str] = {spec.name: spec.category for spec in INDICATOR_POOL}
+
+
 @app.get("/api/indicators")
 async def get_indicators() -> list[dict]:
     return [
@@ -1574,14 +1758,95 @@ async def get_indicators() -> list[dict]:
             "id": name,
             "label": INDICATOR_LABELS.get(name, name),
             "params": INDICATOR_PARAM_SPECS.get(name, []),
+            "category": _CATEGORY_BY_NAME.get(name),
         }
         for name in INDICATOR_REGISTRY
     ]
 
 
+@app.get("/api/exploration-categories")
+async def get_exploration_categories() -> dict:
+    """Metadata for the auto-exploration screen's category checkboxes and
+    探索レベル (explore level) preset selector - see
+    engine/indicator_pool.py's CATEGORIES/LEVEL_PRESETS, the single source
+    of truth this just describes for the frontend rather than duplicating."""
+    counts: dict[str, int] = {cat: 0 for cat in CATEGORIES}
+    names_by_category: dict[str, list[dict]] = {cat: [] for cat in CATEGORIES}
+    for spec in INDICATOR_POOL:
+        counts[spec.category] = counts.get(spec.category, 0) + 1
+        names_by_category.setdefault(spec.category, []).append(
+            {
+                "id": spec.name,
+                "label": INDICATOR_LABELS.get(spec.name, spec.name),
+                # 2026-07-13追加: 自動探索の「数値まで選べる」チェックボックス用の
+                # 代表値リスト(engine/indicator_pool.py::_apply_value_presets)。
+                # param_presetsはparam_ranges/param_choicesの各パラメータ名に対応。
+                "param_presets": spec.value_presets,
+                "literal_presets": spec.literal_presets,
+            }
+        )
+
+    return {
+        "categories": [
+            {
+                "id": cat,
+                "label": _CATEGORY_LABELS.get(cat, cat),
+                "count": counts.get(cat, 0),
+                "names": names_by_category.get(cat, []),
+            }
+            for cat in CATEGORIES
+        ],
+        "levels": [
+            {"id": level, "count": len(names)}
+            for level, names in LEVEL_PRESETS.items()
+        ],
+    }
+
+
 @app.get("/api/strategies")
-async def get_strategies() -> list[dict]:
-    return list_strategies()
+async def get_strategies(tag: Optional[str] = None, favorite_only: bool = False) -> list[dict]:
+    return list_strategies(tag=tag, favorite_only=favorite_only)
+
+
+@app.get("/api/strategies/compare")
+async def compare_strategies(ids: str) -> dict:
+    """ids is a comma-separated list of strategy_ids - query params can't
+    carry a JSON array cleanly, and this mirrors strategy_manager.py's own
+    `compare` subcommand's multi-id CLI arg. Returns the same
+    metrics+equity-curve data engine/comparison_report.py's HTML report is
+    built from, as plain JSON instead, so the frontend can render its own
+    native comparison view rather than embedding that HTML report.
+
+    Registered BEFORE /api/strategies/{strategy_id} below - Starlette
+    matches routes in declaration order, so this static "compare" segment
+    would otherwise be swallowed by that dynamic path and 404 as "strategy
+    not found: compare"."""
+    strategy_ids = [s.strip() for s in ids.split(",") if s.strip()]
+    if not strategy_ids:
+        raise HTTPException(status_code=400, detail="idsを1つ以上指定してください")
+
+    entries = []
+    for strategy_id in strategy_ids:
+        try:
+            entries.append(get_strategy(strategy_id))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"strategy not found: {strategy_id}")
+
+    return {
+        "entries": [
+            {
+                "id": entry["id"],
+                "name": entry["name"],
+                "symbol": entry.get("symbol", "USDJPY"),
+                "timeframe": entry["timeframe"],
+                "favorite": entry["favorite"],
+                "tags": entry["tags"],
+                "metrics": entry["metrics"],
+                "equity_curve": load_equity_series(entry),
+            }
+            for entry in entries
+        ]
+    }
 
 
 @app.get("/api/strategies/{strategy_id}")
@@ -1590,6 +1855,444 @@ async def get_strategy_detail(strategy_id: str) -> dict:
         return get_strategy(strategy_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="strategy not found")
+
+
+@app.delete("/api/strategies/{strategy_id}")
+async def delete_strategy_endpoint(strategy_id: str) -> dict:
+    """ランキング一覧の🔖をオフにする操作用 - チェックボックスと同じ
+    トグル挙動(オンで保存/オフで削除)にするため、保存済みストラテジーを
+    レジストリごと削除する。"""
+    try:
+        delete_strategy(strategy_id)
+        return {"status": "deleted"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+@app.post("/api/strategies/{strategy_id}/favorite")
+async def toggle_strategy_favorite(strategy_id: str) -> dict:
+    try:
+        return toggle_favorite(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+class TagsRequest(BaseModel):
+    tags: list[str]
+
+
+@app.post("/api/strategies/{strategy_id}/tags")
+async def add_strategy_tags(strategy_id: str, req: TagsRequest) -> dict:
+    try:
+        return add_tags(strategy_id, req.tags)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+@app.delete("/api/strategies/{strategy_id}/tags/{tag}")
+async def remove_strategy_tag(strategy_id: str, tag: str) -> dict:
+    try:
+        return remove_tag(strategy_id, tag)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+class MemoRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/strategies/{strategy_id}/memo")
+async def set_strategy_memo(strategy_id: str, req: MemoRequest) -> dict:
+    try:
+        return set_memo(strategy_id, req.text)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+class RenameRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/strategies/{strategy_id}/rename")
+async def rename_strategy_endpoint(strategy_id: str, req: RenameRequest) -> dict:
+    try:
+        return rename_strategy(strategy_id, req.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+def _read_csv_df(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+@app.get("/api/backtests/{job_id}/report.pdf")
+async def get_report_pdf(job_id: str) -> FileResponse:
+    """Generates a PDF for whichever result currently sits in this job's
+    output_dir (the auto-run best row, or a rank rerun_ranking_row.py has
+    since overwritten it with - see rerun_ranking_row.py's module docstring
+    for why it reuses the same dir). fpdf2 has no ProcessPoolExecutor/spawn
+    concern like main.py's optimizer, so this runs in-process rather than as
+    a subprocess."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    pdf_path = export_pdf_report(
+        output_dir=output_dir,
+        mode=job.get("mode", "dev"),
+        timeframe=job["timeframe"],
+        symbol=job["symbol"],
+        ranking_total=_read_csv_df(output_dir / "ranking_total.csv"),
+        equity_df=_read_csv_df(output_dir / "equity_curve.csv"),
+        stability_df=_read_csv_df(output_dir / "stability_analysis.csv"),
+        monte_carlo_summary=_read_csv_df(output_dir / "monte_carlo_summary.csv"),
+    )
+    return FileResponse(pdf_path, media_type="application/pdf", filename="strategy_lab_report.pdf")
+
+
+def _build_strategy_config_from_params(params: dict, prefix: str) -> Path:
+    """Same strategy_configs/*.json shape as _build_strategy_config, but
+    sourced from an already-reconstructed full params dict (e.g. from
+    reconstruct_params_from_row) instead of a BacktestRequest - used by
+    tools that re-test one already-computed ranking row rather than a
+    fresh condition tree from the builder."""
+    wrapped = {key: [value] for key, value in params.items()}
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = f"{prefix}_{timestamp}_{uuid.uuid4().hex[:6]}"
+    config_path = Path("strategy_configs") / f"{name}.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps({"name": name, "params": wrapped}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def _load_ranking_row(symbol: str, timeframe: str, rank: int) -> dict:
+    ranking_path = resolve_output_dir(symbol, timeframe) / "ranking_total.csv"
+    if not ranking_path.exists():
+        raise HTTPException(status_code=404, detail="ranking_total.csvが見つかりません。先にバックテストを実行してください。")
+    df = pd.read_csv(ranking_path)
+    matches = df[df["rank"] == rank]
+    if matches.empty:
+        raise HTTPException(status_code=404, detail=f"rank={rank} がranking_total.csvに見つかりません。")
+    return matches.iloc[0].to_dict()
+
+
+class WalkForwardRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    rank: int
+
+
+@app.post("/api/tools/walk-forward")
+async def run_walk_forward(req: WalkForwardRequest) -> dict:
+    """Walk-forward validates ONE already-selected ranking row (not a fresh
+    grid search) - the row's params get wrapped as a single-combination
+    strategy_config, so walk_forward.py's own train-window "optimize then
+    pick top N" step trivially resolves to that one strategy, and the test
+    windows show how it holds up out-of-sample without re-optimizing."""
+    row = _load_ranking_row(req.symbol, req.timeframe, req.rank)
+    params = reconstruct_params_from_row(row)
+    config_path = _build_strategy_config_from_params(params, "wf")
+
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "walk_forward.py",
+        "--symbol", req.symbol,
+        "--timeframe", req.timeframe,
+        "--strategy-config", str(config_path),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/tools/walk-forward/{job_id}/results")
+async def get_walk_forward_results(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    return {"rows": _read_csv_records(output_dir / "walk_forward_results.csv")}
+
+
+class MonteCarloRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    rank: int
+    simulations: int = 1000
+
+
+@app.post("/api/tools/monte-carlo")
+async def run_monte_carlo(req: MonteCarloRequest) -> dict:
+    """Re-runs rerun_ranking_row.py for this rank with a caller-chosen
+    simulation count - reuses the exact same job/results endpoints as any
+    other rank rerun (GET /api/backtests/{job_id}/results already returns
+    monte_carlo_summary from the same output_dir this overwrites)."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "rerun_ranking_row.py",
+        "--symbol", req.symbol,
+        "--timeframe", req.timeframe,
+        "--rank", str(req.rank),
+        "--simulations", str(req.simulations),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+class SensitivityRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    mode: str = "full"
+    rank: int = 1
+
+
+@app.post("/api/tools/sensitivity")
+async def run_sensitivity(req: SensitivityRequest) -> dict:
+    """Runs analyze_sensitivity.py for one already-computed ranking row -
+    see that script's module docstring for what it measures. --mode should
+    match whatever mode originally produced ranking_total.csv (dev mode has
+    only one value per parameter, so there's nothing to vary)."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "analyze_sensitivity.py",
+        "--symbol", req.symbol,
+        "--timeframe", req.timeframe,
+        "--mode", req.mode,
+        "--rank", str(req.rank),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/tools/sensitivity/{job_id}/results")
+async def get_sensitivity_results(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    return {"summary": _read_csv_records(output_dir / "sensitivity_summary.csv")}
+
+
+class ConfidenceRequest(BaseModel):
+    symbol: str
+    timeframe: str
+
+
+@app.post("/api/tools/confidence")
+async def run_confidence(req: ConfidenceRequest) -> dict:
+    """Runs analyze_confidence.py, which combines whatever stability/Monte
+    Carlo/walk-forward/sensitivity artifacts already sit in this symbol's
+    output_dir into one Confidence Score - see that script's module
+    docstring for the staleness caveat (it can't tell if those artifacts
+    came from the same underlying strategy)."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "analyze_confidence.py",
+        "--symbol", req.symbol,
+        "--timeframe", req.timeframe,
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/tools/confidence/{job_id}/results")
+async def get_confidence_results(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    records = _read_csv_records(output_dir / "confidence_summary.csv")
+    return records[0] if records else {}
+
+
+class OosRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    rank: int = 1
+    split_ratio: float = 0.7
+
+
+@app.post("/api/tools/oos")
+async def run_oos(req: OosRequest) -> dict:
+    """Runs run_oos_test.py for one already-computed ranking row - a single
+    in-sample/out-of-sample split of the SAME already-selected strategy
+    (no re-optimization), simpler than the multi-window walk-forward tool."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "run_oos_test.py",
+        "--symbol", req.symbol,
+        "--timeframe", req.timeframe,
+        "--rank", str(req.rank),
+        "--split-ratio", str(req.split_ratio),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/tools/oos/{job_id}/results")
+async def get_oos_results(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    return {"rows": _read_csv_records(output_dir / "oos_results.csv")}
+
+
+# Approximate minutes per bar, used only for gap detection below (a "gap"
+# is a jump much larger than one bar's worth of time) - not the same
+# concept as engine/backtest_engine.py's is_intraday, and deliberately
+# rough for 1w/1mo (calendar-variable) since gap detection there is a
+# secondary nicety, not the main point of the validator.
+_TIMEFRAME_MINUTES: dict[str, int] = {
+    "1m": 1, "5m": 5, "10m": 10, "15m": 15, "30m": 30,
+    "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1mo": 43200,
+}
+
+
+@app.get("/api/data/validate")
+async def validate_data(symbol: str = "USDJPY", timeframe: str = "15m") -> dict:
+    """Basic data-integrity report for one symbol/timeframe's CSV: row
+    count, date range, duplicate timestamps, OHLC consistency violations,
+    and large time gaps (missing bars) - a quicker sanity check than
+    opening the CSV by hand after importing new broker data."""
+    try:
+        path = find_data_file(timeframe, symbol)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    df = load_price_data(path)
+    if df.empty:
+        raise HTTPException(status_code=422, detail="データが空です")
+
+    duplicate_timestamps = int(df["datetime"].duplicated().sum())
+
+    zone_high = df[["open", "close", "low"]].max(axis=1)
+    zone_low = df[["open", "close", "high"]].min(axis=1)
+    ohlc_violations = int(((df["high"] < zone_high) | (df["low"] > zone_low)).sum())
+
+    minutes_per_bar = _TIMEFRAME_MINUTES.get(timeframe, 15)
+    deltas = df["datetime"].diff().dt.total_seconds().div(60).fillna(minutes_per_bar)
+    # >5x expected interval flags a real gap while tolerating ordinary
+    # weekend/holiday closures without listing hundreds of "gaps" - a
+    # market-hours calendar would be more precise but is out of scope here.
+    gap_mask = deltas > minutes_per_bar * 5
+    gap_rows = df.loc[gap_mask, "datetime"]
+    gaps = [
+        {"before": str(df["datetime"].iloc[i - 1]), "after": str(df["datetime"].iloc[i]), "minutes": round(deltas.iloc[i], 1)}
+        for i in gap_rows.index[:50]
+    ]
+
+    return {
+        "path": str(path),
+        "rows": len(df),
+        "start": str(df["datetime"].min()),
+        "end": str(df["datetime"].max()),
+        "duplicate_timestamps": duplicate_timestamps,
+        "ohlc_violations": ohlc_violations,
+        "gap_count": int(gap_mask.sum()),
+        "gaps": gaps,
+    }
+
+
+class CsvImportRequest(BaseModel):
+    source_root: str
+    symbols: list[str]
+    timeframes: list[str]
+    # Relative to the project root, matching find_data_file's own lookup
+    # (engine/data_loader.py::DATA_DIRS) - overwrites whatever CSV is
+    # currently there for each symbol/timeframe pair.
+    dest_root: str = "data/raw"
+
+
+@app.post("/api/data/import")
+async def import_csv(req: CsvImportRequest) -> dict:
+    """Batch-converts broker CSVs via import_broker_csv.py's --batch-source
+    mode - see that script's module docstring for the expected input
+    filename convention and EET->JST timezone conversion. Runs as a
+    subprocess through the same job queue as every backtest/tool, so the
+    frontend can poll progress with the exact same GET /api/backtests/
+    {job_id} endpoint."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "import_broker_csv.py",
+        "--batch-source", req.source_root,
+        "--batch-dest", req.dest_root,
+        "--symbols", ",".join(req.symbols),
+        "--timeframes", ",".join(req.timeframes),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": req.symbols[0] if req.symbols else "",
+        "timeframe": req.timeframes[0] if req.timeframes else "",
+        "stdout": "",
+        "stderr": "",
+    }
+    asyncio.create_task(_run_job(job_id, cmd))
+
+    return {"job_id": job_id}
 
 
 # Serves the built frontend (frontend/dist, produced by `npm run build`) as

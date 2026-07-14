@@ -1,27 +1,30 @@
 import Plot from 'react-plotly.js'
+import { toPips } from '../pipUtils'
 import type { EquityPoint } from '../types'
 
 interface Props {
   points: EquityPoint[]
+  symbol: string | undefined
 }
 
-export default function EquityCurveChart({ points }: Props) {
+export default function EquityCurveChart({ points, symbol }: Props) {
   if (points.length === 0) {
     return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
   }
 
-  const x = points.map((p) => p.trade_number)
+  const x = points.map((p) => p.exit_time)
 
   return (
     <Plot
       data={[
         {
           x,
-          y: points.map((p) => p.equity),
+          y: points.map((p) => toPips(p.equity, symbol)),
           type: 'scatter',
-          mode: 'lines',
+          mode: 'lines+markers',
           name: 'エクイティ',
-          line: { color: '#22c55e' },
+          line: { color: '#22c55e', width: 1.5 },
+          marker: { color: '#22c55e', size: 4, line: { width: 0 } },
         },
       ]}
       layout={{
@@ -31,7 +34,14 @@ export default function EquityCurveChart({ points }: Props) {
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
         font: { color: '#d1d5db' },
-        xaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '取引番号' } },
+        // dtick: 'M12'で1年ごとに目盛り/グリッド線を必ず引く(Plotly任せの
+        // 自動間引きだと期間が長いほど数年おきにしか線が出ず粗く見えるため)。
+        xaxis: {
+          type: 'date',
+          dtick: 'M12',
+          tickformat: '%Y',
+          gridcolor: 'rgba(255,255,255,0.08)',
+        },
         yaxis: { gridcolor: 'rgba(255,255,255,0.08)', title: { text: '損益(pips)' } },
       }}
       config={{ displayModeBar: false, responsive: true }}

@@ -1,0 +1,312 @@
+{
+  "name": "wf_20260710_162800_f11385",
+  "params": {
+    "condition_tree": [
+      {
+        "op": "AND",
+        "children": [
+          {
+            "indicator": "close",
+            "operator": ">",
+            "value": 0,
+            "params": {},
+            "value_params": {}
+          }
+        ]
+      }
+    ],
+    "long_condition_tree": [
+      null
+    ],
+    "short_condition_tree": [
+      null
+    ],
+    "symbol": [
+      "USDJPY"
+    ],
+    "ema_length": [
+      200
+    ],
+    "min_body_pips": [
+      20.0
+    ],
+    "max_body_pips": [
+      0.0
+    ],
+    "max_wick_pips": [
+      0.0
+    ],
+    "lookahead_bars": [
+      15
+    ],
+    "breakout_bars": [
+      30
+    ],
+    "ema_distance_pips": [
+      50.0
+    ],
+    "rsi_min": [
+      70.0
+    ],
+    "rr": [
+      1.2
+    ],
+    "spread_pips": [
+      0.0
+    ],
+    "slippage_pips": [
+      0.0
+    ],
+    "commission_per_trade": [
+      0.0
+    ],
+    "use_atr_trailing_stop": [
+      false
+    ],
+    "atr_trailing_length": [
+      14
+    ],
+    "atr_trailing_multiplier": [
+      2.0
+    ],
+    "use_max_dd_stop": [
+      false
+    ],
+    "max_dd_stop_pips": [
+      100.0
+    ],
+    "use_consecutive_loss_stop": [
+      false
+    ],
+    "consecutive_loss_stop_count": [
+      3
+    ],
+    "consecutive_loss_stop_bars": [
+      100
+    ],
+    "entry_method": [
+      "market"
+    ],
+    "entry_offset_pips": [
+      10.0
+    ],
+    "use_position_sizing": [
+      false
+    ],
+    "position_sizing_method": [
+      "risk_percent"
+    ],
+    "initial_capital": [
+      1000000.0
+    ],
+    "account_currency": [
+      "JPY"
+    ],
+    "risk_percent": [
+      1.0
+    ],
+    "fixed_lot_size": [
+      0.1
+    ],
+    "contract_size": [
+      100000.0
+    ],
+    "conversion_rate": [
+      150.0
+    ],
+    "use_breakeven_stop": [
+      false
+    ],
+    "breakeven_trigger_rr": [
+      0.5
+    ],
+    "use_partial_tp": [
+      false
+    ],
+    "partial_tp_rr": [
+      1.0
+    ],
+    "partial_tp_fraction": [
+      0.5
+    ],
+    "partial_tp_levels": [
+      [
+        {
+          "rr": 1,
+          "fraction": 0.5
+        }
+      ]
+    ],
+    "session_start": [
+      8
+    ],
+    "session_end": [
+      3
+    ],
+    "use_weekend_exit": [
+      true
+    ],
+    "weekend_exit_hour": [
+      4
+    ],
+    "use_daily_exit": [
+      false
+    ],
+    "daily_exit_hour": [
+      4
+    ],
+    "pip_size": [
+      0.01
+    ],
+    "direction": [
+      "short"
+    ],
+    "entry_trigger": [
+      "breakout"
+    ],
+    "use_session_filter": [
+      true
+    ],
+    "use_min_body_filter": [
+      true
+    ],
+    "use_max_body_filter": [
+      true
+    ],
+    "use_max_wick_filter": [
+      true
+    ],
+    "use_ema_distance_filter": [
+      true
+    ],
+    "use_rsi_filter": [
+      true
+    ],
+    "use_donchian_filter": [
+      false
+    ],
+    "donchian_period": [
+      20
+    ],
+    "use_bollinger_filter": [
+      false
+    ],
+    "bollinger_period": [
+      20
+    ],
+    "bollinger_std": [
+      2.0
+    ],
+    "use_macd_filter": [
+      false
+    ],
+    "macd_fast": [
+      12
+    ],
+    "macd_slow": [
+      26
+    ],
+    "macd_signal": [
+      9
+    ],
+    "use_ichimoku_filter": [
+      false
+    ],
+    "ichimoku_tenkan": [
+      9
+    ],
+    "ichimoku_kijun": [
+      26
+    ],
+    "ichimoku_senkou_b": [
+      52
+    ],
+    "use_stochastic_filter": [
+      false
+    ],
+    "stochastic_k_period": [
+      14
+    ],
+    "stochastic_d_period": [
+      3
+    ],
+    "stochastic_smooth": [
+      3
+    ],
+    "stochastic_level": [
+      80.0
+    ],
+    "use_pivot_filter": [
+      false
+    ],
+    "use_prev_high_filter": [
+      false
+    ],
+    "use_prev_low_filter": [
+      false
+    ],
+    "use_round_number_filter": [
+      false
+    ],
+    "round_number_pips": [
+      10.0
+    ],
+    "use_weekday_filter": [
+      false
+    ],
+    "weekday_monday": [
+      true
+    ],
+    "weekday_tuesday": [
+      true
+    ],
+    "weekday_wednesday": [
+      true
+    ],
+    "weekday_thursday": [
+      true
+    ],
+    "weekday_friday": [
+      true
+    ],
+    "adr_period": [
+      14
+    ],
+    "use_fvg_filter": [
+      false
+    ],
+    "use_order_block_filter": [
+      false
+    ],
+    "use_bos_filter": [
+      false
+    ],
+    "use_choch_filter": [
+      false
+    ],
+    "use_liquidity_sweep_filter": [
+      false
+    ],
+    "smc_swing_lookback": [
+      5
+    ],
+    "use_supertrend_filter": [
+      false
+    ],
+    "supertrend_period": [
+      10
+    ],
+    "supertrend_multiplier": [
+      3.0
+    ],
+    "use_adx_filter": [
+      false
+    ],
+    "adx_period": [
+      14
+    ],
+    "adx_threshold": [
+      25.0
+    ]
+  }
+}

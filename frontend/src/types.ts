@@ -105,6 +105,15 @@ export interface BacktestRequest {
   // partial_tp_rr/partial_tp_fraction above. Each level closes `fraction`
   // of whatever REMAINS of the position once price reaches that level's rr.
   partial_tp_levels?: { rr: number; fraction: number }[]
+  // Decoupled SL/TP basis: both default server-side to the values that
+  // reproduce the prior fixed RR-from-signal-candle behavior exactly.
+  sl_basis?: 'signal_candle' | 'atr' | 'fixed_pips'
+  sl_atr_length?: number
+  sl_atr_multiplier?: number
+  sl_fixed_pips?: number
+  tp_basis?: 'rr' | 'fixed_pips' | 'custom'
+  tp_fixed_pips?: number
+  exit_condition_tree?: GroupNode
   // Auto-exploration engine (optimizer="structure"/"structure_genetic") -
   // ignored server-side for every other optimizer value. See
   // api_server.py::BacktestRequest for the field-by-field mapping to
@@ -118,6 +127,45 @@ export interface BacktestRequest {
   population?: number
   mutation_rate?: number
   generations?: number
+  // Which indicators are eligible for generation - see
+  // api_server.py::BacktestRequest / engine/indicator_pool.py's
+  // CATEGORIES/LEVEL_PRESETS. Both undefined means every indicator is
+  // eligible (today's unfiltered behavior).
+  categories?: string[]
+  explore_level?: 'light' | 'standard' | 'advanced'
+  // 探索レベル="custom"のときだけ使う、カテゴリ内の個別指標名の絞り込み。
+  // explore_levelと同時指定時はexplore_level優先(main.py側と同じ)。
+  custom_indicator_names?: string[]
+  // 2026-07-13追加、自動探索専用画面用。全てundefinedなら今まで通りの挙動
+  // (api_server.py::BacktestRequest参照)。
+  rr_choices?: number[]
+  direction_mode?: 'long' | 'short' | 'both'
+  start_date?: string
+  end_date?: string
+  min_leaves?: number
+  selected_param_values?: Record<string, Record<string, number[]>>
+  selected_literal_values?: Record<string, number[]>
+  mandatory_conditions?: ConditionNode[]
+}
+
+export interface ExplorationCategory {
+  id: string
+  label: string
+  count: number
+  names: {
+    id: string
+    label: string
+    // 代表値リスト(engine/indicator_pool.py::_apply_value_presets) -
+    // param_presetsはparam_ranges/param_choicesの各パラメータ名に対応、
+    // literal_presetsは比較閾値(literal_range/literal_choices)の代表値。
+    param_presets: Record<string, number[]>
+    literal_presets: number[] | null
+  }[]
+}
+
+export interface ExplorationCategoriesResponse {
+  categories: ExplorationCategory[]
+  levels: { id: string; count: number }[]
 }
 
 export interface PartialTpLevel {

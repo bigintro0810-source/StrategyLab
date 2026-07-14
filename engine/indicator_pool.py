@@ -51,6 +51,26 @@ class IndicatorSpec:
     literal_range: tuple[float, float] | None = None
     literal_choices: list[float] | None = None
     literal_is_int: bool = False
+    # Trading-taxonomy category, orthogonal to `kind` above (kind drives
+    # comparison-operator legality; category drives the auto-exploration
+    # UI's category checkboxes/探索レベル presets - see _categorize below).
+    # Left blank at construction time and filled in by _apply_categories()
+    # once the whole pool is built, rather than tagged on all ~330
+    # individual entries by hand - a new indicator picks up a sane default
+    # from its name automatically; only genuine misclassifications need an
+    # entry in _CATEGORY_OVERRIDES.
+    category: str = ""
+    # UI-facing "representative value" checklists, one per param_ranges key
+    # plus one for literal_range (the comparison threshold) - what the
+    # auto-exploration screen's checkboxes actually offer, and what
+    # generation samples from once a user has narrowed a selection (see
+    # _sample_params/_sample_literal in structure_generator.py). Left empty
+    # at construction time and filled in by _apply_value_presets() once the
+    # whole pool is built, same pattern as `category` above. For params
+    # already in param_choices/literal_choices, these are just that same
+    # discrete list (no continuous range to templatize in the first place).
+    value_presets: dict[str, list[float]] = field(default_factory=dict)
+    literal_presets: list[float] | None = None
 
 
 # Which operators make sense for each kind. Condition.evaluate() itself
@@ -88,6 +108,8 @@ INDICATOR_POOL: list[IndicatorSpec] = [
     IndicatorSpec("sma", "price_level", param_ranges={"length": (10, 300)}, allow_indicator_pair=True),
     IndicatorSpec("highest_high", "price_level", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
     IndicatorSpec("lowest_low", "price_level", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
+    IndicatorSpec("highest_close", "price_level", param_ranges={"length": (10, 300)}, allow_indicator_pair=True),
+    IndicatorSpec("lowest_close", "price_level", param_ranges={"length": (10, 300)}, allow_indicator_pair=True),
     IndicatorSpec("donchian_mid", "price_level", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
     IndicatorSpec(
         "bollinger_upper", "price_level", param_ranges={"period": (10, 50)}, allow_indicator_pair=True
@@ -193,6 +215,8 @@ INDICATOR_POOL: list[IndicatorSpec] = [
     IndicatorSpec("order_block_bearish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("breaker_block_bullish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("breaker_block_bearish", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec("mitigation_block_bullish", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec("mitigation_block_bearish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec(
         "bos_bullish", "boolean_signal", param_ranges={"length": (3, 10)}, literal_choices=[1.0]
     ),
@@ -387,8 +411,8 @@ _DISTANCE_TARGET_PARAMS: dict[str, tuple[dict, dict]] = {
     "prev_day_low": ({}, {}),
     "donchian_upper": ({"length": (10, 50)}, {}),
     "donchian_lower": ({"length": (10, 50)}, {}),
-    "bb_upper": ({"period": (10, 50)}, {"num_std": [1.5, 2.0, 2.5]}),
-    "bb_lower": ({"period": (10, 50)}, {"num_std": [1.5, 2.0, 2.5]}),
+    "bb_upper": ({"period": (10, 50)}, {"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]}),
+    "bb_lower": ({"period": (10, 50)}, {"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]}),
 }
 
 # "volatility": always positive, symbol-scale-dependent (a distance in raw
@@ -464,7 +488,7 @@ INDICATOR_POOL.extend([
     # 価格位置
     IndicatorSpec(
         "bb_percent_b", "unitless_ratio", literal_range=(-0.2, 1.2),
-        param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.5, 2.0, 2.5]},
+        param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
     ),
     IndicatorSpec(
         "donchian_percent_position", "unitless_ratio", literal_range=(-0.2, 1.2),
@@ -560,18 +584,18 @@ INDICATOR_POOL.extend([
     # エントリー専用イベント
     IndicatorSpec(
         "bb_width", "volatility",
-        param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.5, 2.0, 2.5]},
+        param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
         allow_indicator_pair=True,
     ),
     IndicatorSpec(
         "bb_squeeze", "boolean_signal", literal_choices=[1.0],
         param_ranges={"period": (10, 50), "window": (50, 200)},
-        param_choices={"num_std": [1.5, 2.0, 2.5], "percentile": [5.0, 10.0, 15.0, 20.0]},
+        param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0], "percentile": [5.0, 10.0, 15.0, 20.0]},
     ),
     IndicatorSpec(
         "bb_expansion", "boolean_signal", literal_choices=[1.0],
         param_ranges={"period": (10, 50), "window": (50, 200)},
-        param_choices={"num_std": [1.5, 2.0, 2.5], "percentile": [5.0, 10.0, 15.0, 20.0]},
+        param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0], "percentile": [5.0, 10.0, 15.0, 20.0]},
     ),
     IndicatorSpec(
         "supertrend_flip_bullish", "boolean_signal", literal_choices=[1.0],
@@ -851,12 +875,12 @@ INDICATOR_POOL.extend([
     IndicatorSpec(
         "ttm_squeeze", "boolean_signal", literal_choices=[1.0],
         param_ranges={"bb_period": (10, 30), "kc_period": (10, 30), "kc_atr_period": (7, 20)},
-        param_choices={"bb_num_std": [1.5, 2.0, 2.5], "kc_multiplier": [1.0, 1.5, 2.0]},
+        param_choices={"bb_num_std": [1.0, 1.5, 2.0, 2.5, 3.0], "kc_multiplier": [1.0, 1.5, 2.0]},
     ),
     IndicatorSpec(
         "ttm_squeeze_release", "boolean_signal", literal_choices=[1.0],
         param_ranges={"bb_period": (10, 30), "kc_period": (10, 30), "kc_atr_period": (7, 20)},
-        param_choices={"bb_num_std": [1.5, 2.0, 2.5], "kc_multiplier": [1.0, 1.5, 2.0]},
+        param_choices={"bb_num_std": [1.0, 1.5, 2.0, 2.5, 3.0], "kc_multiplier": [1.0, 1.5, 2.0]},
     ),
     IndicatorSpec(
         "ichimoku_price_vs_cloud", "trend_binary",
@@ -886,11 +910,11 @@ INDICATOR_POOL.extend([
     IndicatorSpec("linreg_value", "price_level", allow_indicator_pair=True, param_ranges={"length": (10, 50)}),
     IndicatorSpec(
         "linreg_upper", "price_level", allow_indicator_pair=True,
-        param_ranges={"length": (10, 50)}, param_choices={"num_std": [1.5, 2.0, 2.5]},
+        param_ranges={"length": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
     ),
     IndicatorSpec(
         "linreg_lower", "price_level", allow_indicator_pair=True,
-        param_ranges={"length": (10, 50)}, param_choices={"num_std": [1.5, 2.0, 2.5]},
+        param_ranges={"length": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
     ),
     IndicatorSpec("ha_bullish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("ha_bearish", "boolean_signal", literal_choices=[1.0]),
@@ -1042,3 +1066,249 @@ def pool_by_kind(pool: list[IndicatorSpec] = INDICATOR_POOL) -> dict[str, list[I
     for spec in pool:
         grouped.setdefault(spec.kind, []).append(spec)
     return grouped
+
+
+# ---------------------------------------------------------------------------
+# Trading-taxonomy categories (indicator / price_action / time_filter / ict /
+# chart_pattern) - what the auto-exploration UI's category checkboxes and
+# 探索レベル (explore level) presets filter on. Assigned by name pattern so
+# a future addition to INDICATOR_POOL above doesn't also need a manual
+# categorize-this-entry edit here; only genuine exceptions need
+# _CATEGORY_OVERRIDES. See indicator_pool.py's module docstring for why this
+# is a separate concept from `kind`.
+# ---------------------------------------------------------------------------
+
+CATEGORIES = ["indicator", "price_action", "time_filter", "ict", "chart_pattern"]
+
+_ICT_PREFIXES = (
+    "fvg_", "order_block_", "breaker_block_", "liquidity_sweep_",
+    "bos_", "choch_", "mitigation_block_",
+)
+_ICT_EXACT = {
+    "dist_fvg_bullish", "dist_fvg_bearish",
+    "dist_order_block_bullish", "dist_order_block_bearish",
+    "dist_bos_bullish", "dist_bos_bearish",
+    "fvg_first_retest_bullish", "fvg_first_retest_bearish",
+    "order_block_first_retest_bullish", "order_block_first_retest_bearish",
+}
+
+# Multi-swing chart patterns and harmonic patterns - all boolean_signal,
+# name-prefix-matchable since every variant follows a `{pattern}_{bullish|
+# bearish|breakout|breakdown}` naming convention.
+_CHART_PATTERN_PREFIXES = (
+    "double_top", "double_bottom", "triple_top", "triple_bottom",
+    "head_and_shoulders", "inverse_head_and_shoulders",
+    "ascending_triangle", "descending_triangle", "symmetrical_triangle",
+    "rising_wedge", "falling_wedge",
+    "bull_flag", "bear_flag", "bullish_pennant", "bearish_pennant",
+    "in_range_box", "range_box_",
+    "uptrend_line_break", "downtrend_line_break",
+    "ascending_channel_break", "descending_channel_break",
+    "false_breakout_",
+    "saucer_", "ascending_rectangle", "descending_rectangle",
+    "broadening_formation", "diamond_formation", "cup_with_handle",
+    "gartley_", "bat_", "butterfly_", "crab_", "ab_cd_", "three_drives_",
+)
+
+_TIME_FILTER_PREFIXES = ("killzone_", "minutes_since_")
+_TIME_FILTER_EXACT = {"hour", "weekday", "month"}
+
+# Raw price/candle behavior - deliberately excludes computed lines/bands
+# (ema/bollinger/donchian/etc, which fall through to "indicator" below) even
+# though some (highest_high/lowest_low/donchian_mid) are conceptually
+# "breakout" material, since the user's own Phase 1 wishlist names Donchian
+# Channel as an インジケーター, not a price-action item.
+_PRICE_ACTION_EXACT = {
+    "close", "open", "high", "low", "candle_body",
+    "bullish_candle", "bearish_candle", "large_bullish_candle", "large_bearish_candle",
+    "small_bullish_candle", "small_bearish_candle", "doji", "long_upper_wick", "long_lower_wick",
+    "no_upper_wick", "no_lower_wick", "marubozu_bullish", "marubozu_bearish",
+    "pin_bar_bullish", "pin_bar_bearish", "hammer", "hanging_man", "inverted_hammer", "shooting_star",
+    "engulfing_bullish", "engulfing_bearish", "inside_bar", "outside_bar",
+    "tweezer_top", "tweezer_bottom", "harami_bullish", "harami_bearish", "gap_up", "gap_down",
+    "morning_star", "evening_star", "three_white_soldiers", "three_black_crows",
+    "rising_three_methods", "falling_three_methods",
+    "consecutive_bullish_candles", "consecutive_bearish_candles",
+    "consecutive_higher_highs", "consecutive_lower_lows",
+    "body_larger_than_average", "wick_ratio_at_least", "body_ratio_at_least",
+    "higher_high", "higher_low", "lower_high", "lower_low",
+    "today_new_high", "today_new_low", "today_range_position", "today_range_pct_of_adr",
+    "long_legged_doji", "dragonfly_doji", "gravestone_doji", "spinning_top",
+    "kicker_bullish", "kicker_bearish", "belt_hold_bullish", "belt_hold_bearish",
+    "abandoned_baby_bullish", "abandoned_baby_bearish",
+    "three_inside_up", "three_inside_down", "three_outside_up", "three_outside_down",
+    "nr4", "nr7", "volume_climax_bullish", "volume_climax_bearish",
+    "dist_to_round_number", "avg_body_size", "max_body_size", "min_body_size", "body_size_std",
+    "avg_upper_wick", "avg_lower_wick", "is_max_body_of_n", "percentile_rank_body",
+    "ha_bullish", "ha_bearish", "ha_strong_bullish", "ha_strong_bearish",
+    "first_pullback_after_breakout_bullish", "first_pullback_after_breakout_bearish",
+    "prev_day_high", "prev_day_low", "prev_day_mid",
+}
+
+# Known-wrong results from the name-pattern rules above, keyed by indicator
+# name - checked first, before any prefix/exact-set rule.
+_CATEGORY_OVERRIDES: dict[str, str] = {}
+
+
+def _categorize(name: str) -> str:
+    if name in _CATEGORY_OVERRIDES:
+        return _CATEGORY_OVERRIDES[name]
+    if name in _ICT_EXACT or name.startswith(_ICT_PREFIXES):
+        return "ict"
+    if name.startswith(_CHART_PATTERN_PREFIXES):
+        return "chart_pattern"
+    if name in _TIME_FILTER_EXACT or name.startswith(_TIME_FILTER_PREFIXES):
+        return "time_filter"
+    if name in _PRICE_ACTION_EXACT:
+        return "price_action"
+    return "indicator"
+
+
+def _apply_categories(pool: list[IndicatorSpec]) -> None:
+    for spec in pool:
+        spec.category = _categorize(spec.name)
+
+
+_apply_categories(INDICATOR_POOL)
+
+
+# ---------------------------------------------------------------------------
+# 代表値リスト (value_presets/literal_presets) - 2026-07-13追加。
+# 自動探索UIの「数値までチェックボックスで選ぶ」機能のための、param_ranges/
+# literal_rangeそれぞれの代表値リスト。(lo, hi)のレンジ帯ごとにテンプレート
+# を引き、無ければ範囲内を均等割りするフォールバックで埋める。実際にどの
+# 値が妥当かはユーザーとの相談で確定した値(project memory参照)。
+# ---------------------------------------------------------------------------
+
+_RANGE_VALUE_TEMPLATES: dict[tuple[int, int], list[float]] = {
+    (10, 300): [9, 20, 50, 100, 200],
+    (10, 50): [10, 20, 34, 50],
+    (7, 30): [7, 9, 14, 21, 30],
+    (10, 30): [10, 14, 20, 30],
+    (1, 10): [1, 3, 5, 10],
+    (2, 20): [2, 5, 10, 20],
+    (2, 10): [2, 3, 5, 10],
+    (3, 10): [3, 5, 7, 10],
+    (3, 15): [3, 5, 10, 15],
+    (5, 30): [5, 10, 14, 20, 30],
+    (5, 21): [5, 9, 14, 21],
+    (3, 5): [3, 5],
+    (8, 16): [8, 12, 16],
+    (20, 30): [20, 26, 30],
+    (7, 11): [7, 9, 11],
+    (5, 15): [9],
+    (20, 35): [26],
+    (40, 65): [52],
+    (7, 20): [7, 14, 20],
+    (10, 40): [10, 20, 30, 40],
+    (20, 50): [20, 30, 40, 50],
+    (50, 200): [50, 100, 150, 200],
+    (100, 300): [100, 150, 200, 300],
+    (20, 100): [20, 50, 100],
+    (50, 300): [50, 100, 200, 300],
+    (5, 20): [5, 10, 15, 20],
+    (25, 60): [25, 40, 60],
+    (1, 5): [1, 2, 3, 5],
+    (15, 50): [15, 25, 40, 50],
+}
+
+_LITERAL_VALUE_TEMPLATES: dict[tuple[float, float], list[float]] = {
+    (20.0, 80.0): [20, 30, 40, 50, 60, 70, 80],
+    (15.0, 40.0): [15, 20, 25, 30, 40],
+    (-200.0, 200.0): [-100, 0, 100],
+    (-90.0, -10.0): [-80, -50, -20],
+    (38.2, 61.8): [38.2, 50.0, 61.8],
+    (-0.3, 0.3): [-0.2, 0.0, 0.2],
+    (-3.0, 3.0): [-2, -1, 0, 1, 2],
+    (0.0, 100.0): [10, 30, 50, 70, 90],
+    (-0.2, 1.2): [0.0, 0.5, 1.0],
+    (0.0, 1.0): [0.2, 0.5, 0.8],
+}
+
+# 時刻/曜日/月は「代表値を間引く」より全列挙の方が実用的(24/7/12個なら
+# チェックボックスに並べても多すぎない)。
+_LITERAL_FULL_RANGE_NAMES = {"hour", "weekday", "month"}
+
+
+def _generic_spread(lo: float, hi: float, n: int = 4, as_int: bool = False) -> list[float]:
+    """テンプレート表に無いレンジ用のフォールバック: 範囲内をn点均等割り。"""
+    if hi <= lo:
+        return [int(lo) if as_int else lo]
+    step = (hi - lo) / (n - 1)
+    raw = [lo + i * step for i in range(n)]
+    values = sorted({int(round(v)) for v in raw}) if as_int else sorted({round(v, 4) for v in raw})
+    return values
+
+
+def _apply_value_presets(pool: list[IndicatorSpec]) -> None:
+    for spec in pool:
+        for param, (lo, hi) in spec.param_ranges.items():
+            spec.value_presets[param] = _RANGE_VALUE_TEMPLATES.get(
+                (lo, hi), _generic_spread(lo, hi, as_int=True)
+            )
+        for param, choices in spec.param_choices.items():
+            spec.value_presets[param] = choices
+
+        if spec.literal_choices is not None:
+            spec.literal_presets = spec.literal_choices
+        elif spec.literal_range is not None:
+            lo, hi = spec.literal_range
+            if spec.name in _LITERAL_FULL_RANGE_NAMES:
+                values = list(range(int(lo), int(hi) + 1))
+            else:
+                values = _LITERAL_VALUE_TEMPLATES.get((lo, hi), _generic_spread(lo, hi, n=5))
+                if spec.literal_is_int:
+                    values = sorted({int(round(v)) for v in values})
+            spec.literal_presets = values
+
+
+_apply_value_presets(INDICATOR_POOL)
+
+
+def pool_by_category(pool: list[IndicatorSpec] = INDICATOR_POOL) -> dict[str, list[IndicatorSpec]]:
+    grouped: dict[str, list[IndicatorSpec]] = {}
+    for spec in pool:
+        grouped.setdefault(spec.category, []).append(spec)
+    return grouped
+
+
+# 探索レベル (explore level) presets for the auto-exploration UI - a much
+# smaller, hand-picked allowlist than a full category (managing the
+# combinatorial explosion of "every enabled category's entire pool" is the
+# whole point of a level preset), independent of but combinable with the
+# category checkboxes via build_filtered_pool() below. Each tier is additive
+# over the previous one, per the user's 2026-07-10 spec.
+LEVEL_PRESETS: dict[str, list[str]] = {
+    "light": ["ema", "rsi", "atr", "higher_high", "higher_low"],
+}
+LEVEL_PRESETS["standard"] = LEVEL_PRESETS["light"] + [
+    "fvg_bullish", "fvg_bearish",
+    "liquidity_sweep_bullish", "liquidity_sweep_bearish",
+    "bos_bullish", "bos_bearish",
+    "choch_bullish", "choch_bearish",
+]
+LEVEL_PRESETS["advanced"] = (
+    LEVEL_PRESETS["standard"]
+    + ["order_block_bullish", "order_block_bearish"]
+    + [spec.name for spec in INDICATOR_POOL if spec.category == "chart_pattern"]
+)
+
+
+def build_filtered_pool(
+    categories: list[str] | None = None,
+    allowed_names: list[str] | None = None,
+) -> list[IndicatorSpec]:
+    """categories=None means every category is eligible (today's unfiltered
+    behavior, unchanged for every existing caller that doesn't pass this).
+    allowed_names, if given (a 探索レベル preset from LEVEL_PRESETS), is
+    applied AFTER the category filter, so combining a level with a category
+    selection can only narrow further - it never reintroduces a category the
+    user explicitly disabled."""
+    pool = INDICATOR_POOL
+    if categories is not None:
+        allowed = set(categories)
+        pool = [spec for spec in pool if spec.category in allowed]
+    if allowed_names is not None:
+        names = set(allowed_names)
+        pool = [spec for spec in pool if spec.name in names]
+    return pool

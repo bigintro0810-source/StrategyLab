@@ -1,31 +1,39 @@
 import { useState } from 'react'
-import { describeConditionTree } from '../conditionTreeUtils'
+import { describeConditionTreeJapanese } from '../conditionTreeUtils'
+import { toPips } from '../pipUtils'
 import EquityCurveChart from './EquityCurveChart'
 import DrawdownChart from './DrawdownChart'
 import TradeHistoryTable from './TradeHistoryTable'
 import YearlyPerformanceChart from './YearlyPerformanceChart'
-import MonthlyHeatmap from './MonthlyHeatmap'
 import StatsPanel from './StatsPanel'
-import type { BacktestResults, RankingRow } from '../types'
+import FavoriteButton from './FavoriteButton'
+import type { BacktestResults, IndicatorInfo, RankingRow } from '../types'
 
 interface Props {
+  // Short identity label for this panel (e.g. "Strat3") - shown instead of
+  // the old single-instance "選択中: rank N / 全体ベストに戻す" banner, since
+  // multiple instances of this component can now be mounted side by side
+  // (see StrategyDetailTabs.tsx) and "戻す" has no meaning per-panel anymore.
+  title: string
   displayResults: BacktestResults | undefined
   bestRow: RankingRow | undefined
-  selectedRank: number | null
   isRowLoading: boolean
   rowError: string | null
-  onResetSelection: () => void
+  indicators: IndicatorInfo[]
+  // ランキング一覧の⭐と同じ状態/操作(App.tsx::handleFavorite) - 共通の
+  // お気に入りボタンをストラテジー詳細画面にも置いてほしいという要望対応。
+  isFavorite: boolean
+  isPending: boolean
+  onFavorite: () => void
 }
 
 const TABS = [
-  { id: 'cond', label: '条件' },
   { id: 'equity', label: 'エクイティ' },
   { id: 'drawdown', label: 'ドローダウン' },
-  { id: 'trades', label: '取引履歴' },
   { id: 'yearly', label: '年別成績' },
-  { id: 'monthly', label: '月別成績' },
-  { id: 'stats', label: '統計情報' },
+  { id: 'trades', label: '取引履歴' },
   { id: 'mc', label: 'モンテカルロ' },
+  { id: 'cond', label: '条件' },
   { id: 'params', label: 'パラメータ' },
 ] as const
 
@@ -54,33 +62,46 @@ function formatParamValue(v: unknown): string {
   return String(v)
 }
 
+// モンテカルロのDD統計値(engine/monte_carlo.py)も他の"pips"表記と同じ生の
+// 価格差なので、他の指標同様に通貨ペアのpip_sizeで割ってから表示する。
+function fmtPips(v: unknown, symbol: string | undefined): string {
+  const n = Number(v)
+  if (v === undefined || Number.isNaN(n)) return '-'
+  return toPips(n, symbol).toFixed(2)
+}
+
 export default function AutoExplorationDetail({
+  title,
   displayResults,
   bestRow,
-  selectedRank,
   isRowLoading,
   rowError,
-  onResetSelection,
+  indicators,
+  isFavorite,
+  isPending,
+  onFavorite,
 }: Props) {
-  const [tab, setTab] = useState<TabId>('cond')
+  const [tab, setTab] = useState<TabId>('equity')
 
   const mc = displayResults?.monte_carlo_summary?.[0] as Record<string, unknown> | undefined
   const presentParams = PARAM_FIELDS.filter((f) => bestRow && f.key in bestRow)
+  const symbol = bestRow?.symbol as string | undefined
 
   return (
     <div className="flex h-full flex-col">
-      {selectedRank !== null && (
-        <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-          <span className={rowError ? 'text-red-400' : undefined}>
-            {rowError ? `エラー: ${rowError}` : isRowLoading ? '再計算中…' : `選択中: rank ${selectedRank}`}
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="flex items-center gap-1.5 font-semibold text-gray-200">
+          {title}
+          <FavoriteButton isFavorite={isFavorite} isPending={isPending} onClick={onFavorite} />
+        </span>
+        {(isRowLoading || rowError) && (
+          <span className={rowError ? 'text-red-400' : 'text-gray-400'}>
+            {rowError ? `エラー: ${rowError}` : '再計算中…'}
           </span>
-          {!isRowLoading && (
-            <button onClick={onResetSelection} className="text-emerald-400 hover:underline">
-              全体ベストに戻す
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
+
+      <StatsPanel row={bestRow} symbol={symbol} />
 
       <div className="mb-2 flex gap-1 overflow-x-auto border-b border-white/10 text-xs">
         {TABS.map((t) => (
@@ -103,18 +124,16 @@ export default function AutoExplorationDetail({
         {tab === 'cond' &&
           (bestRow?.condition_tree ? (
             <p className="whitespace-pre-wrap font-mono text-xs text-gray-300">
-              {describeConditionTree(bestRow.condition_tree)}
+              {describeConditionTreeJapanese(bestRow.condition_tree, indicators)}
             </p>
           ) : (
             <div className="text-sm text-gray-500">この行に条件ツリーがありません</div>
           ))}
 
-        {tab === 'equity' && <EquityCurveChart points={displayResults?.equity_curve ?? []} />}
-        {tab === 'drawdown' && <DrawdownChart points={displayResults?.equity_curve ?? []} />}
-        {tab === 'trades' && <TradeHistoryTable rows={displayResults?.trade_log ?? []} />}
+        {tab === 'equity' && <EquityCurveChart points={displayResults?.equity_curve ?? []} symbol={symbol} />}
+        {tab === 'drawdown' && <DrawdownChart points={displayResults?.equity_curve ?? []} symbol={symbol} />}
+        {tab === 'trades' && <TradeHistoryTable rows={displayResults?.trade_log ?? []} symbol={symbol} />}
         {tab === 'yearly' && <YearlyPerformanceChart rows={displayResults?.yearly_analysis ?? []} />}
-        {tab === 'monthly' && <MonthlyHeatmap rows={displayResults?.monthly_analysis ?? []} />}
-        {tab === 'stats' && <StatsPanel row={bestRow} />}
 
         {tab === 'mc' &&
           (mc ? (
@@ -122,10 +141,10 @@ export default function AutoExplorationDetail({
               {[
                 { label: '評価', value: String(mc.rating ?? '-') },
                 { label: 'シミュレーション回数', value: String(mc.simulations ?? '-') },
-                { label: '平均最大DD', value: String(mc.avg_max_dd ?? '-') },
-                { label: '中央値DD', value: String(mc.median_max_dd ?? '-') },
-                { label: 'DD95%', value: String(mc.dd_95 ?? '-') },
-                { label: '最悪ケース最大DD', value: String(mc.worst_max_dd ?? '-') },
+                { label: '平均最大DD(pips)', value: fmtPips(mc.avg_max_dd, symbol) },
+                { label: '中央値DD(pips)', value: fmtPips(mc.median_max_dd, symbol) },
+                { label: 'DD95%(pips)', value: fmtPips(mc.dd_95, symbol) },
+                { label: '最悪ケース最大DD(pips)', value: fmtPips(mc.worst_max_dd, symbol) },
               ].map((s) => (
                 <div key={s.label} className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
                   <div className="text-xs text-gray-400">{s.label}</div>
