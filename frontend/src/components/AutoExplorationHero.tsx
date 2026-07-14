@@ -86,7 +86,7 @@ function CompactHero({ progress, isRunning }: Props) {
                 ) : (
                   <b className="font-semibold text-gray-100">候補を検証中</b>
                 )}
-                <span className="text-emerald-400">●実行中</span>
+                <span className="running-glow text-emerald-400">●実行中</span>
               </>
             ) : (
               <span className="text-gray-400">{isRunning ? '準備中…' : '待機中'}</span>
@@ -184,7 +184,7 @@ export default function AutoExplorationHero({ progress, isRunning, compact }: Pr
           ) : (
             <b className="font-semibold text-gray-100">候補を検証中</b>
           )}
-          <span className="text-emerald-400">● 実行中</span>
+          <span className="running-glow text-emerald-400">● 実行中</span>
         </div>
         <div className="grid grid-cols-4 gap-2">
           <div>

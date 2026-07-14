@@ -38,6 +38,11 @@ export async function fetchBacktestStatus(jobId: string): Promise<BacktestStatus
   return res.data
 }
 
+export async function stopBacktest(jobId: string): Promise<{ status: string }> {
+  const res = await client.post<{ status: string }>(`/backtests/${jobId}/stop`)
+  return res.data
+}
+
 export async function fetchBacktestResults(jobId: string): Promise<BacktestResults> {
   const res = await client.get<BacktestResults>(`/backtests/${jobId}/results`)
   return res.data

@@ -587,6 +587,16 @@ def write_progress_file(
     (OUTPUT_DIR / "progress.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def stop_requested() -> bool:
+    """api_server.py's stop endpoint drops a stop.flag file into this run's
+    output dir - this is the only channel available to signal a running
+    subprocess, same reasoning as write_progress_file above. Checked between
+    batches/generations so a stop lands as soon as the in-flight candidates
+    finish, keeping whatever results were already completed instead of
+    discarding them."""
+    return (OUTPUT_DIR / "stop.flag").exists()
+
+
 def calc_profit_factor(profits: pd.Series) -> float:
     gross_profit = profits[profits > 0].sum()
     gross_loss = profits[profits < 0].sum()
@@ -915,6 +925,13 @@ def main() -> None:
 
     OUTPUT_DIR = resolve_output_dir(args.symbol, args.timeframe)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # A stop.flag left over from a previous run stopped in this same
+    # symbol/timeframe output dir would otherwise halt this new run
+    # immediately (see stop_requested() above). stopped.flag is this run's
+    # own "was I stopped early" marker (see below) - clear it too so a
+    # previous run's stop doesn't look like it applies to this fresh one.
+    (OUTPUT_DIR / "stop.flag").unlink(missing_ok=True)
+    (OUTPUT_DIR / "stopped.flag").unlink(missing_ok=True)
 
     # --optimizer structure/structure_genetic用の追加設定(自動探索画面から
     # api_server.pyが生成するJSON)。個別CLIフラグを増やしすぎない設計として
@@ -1038,6 +1055,7 @@ def main() -> None:
         param_space = build_parameter_space(args.mode, args.symbol)
 
     start_time = time.time()
+    stopped_early = False
 
     if args.optimizer == "bayesian":
         print(f"最適化方式: {args.optimizer} (optuna TPE)")
@@ -1086,11 +1104,17 @@ def main() -> None:
             progress_total: int | None = None,
             generation: int | None = None,
             generations_total: int | None = None,
-        ) -> list[dict]:
+        ) -> tuple[list[dict], bool]:
+            """Returns (results_so_far, stopped). stopped=True means a stop
+            was requested mid-batch: not-yet-started futures were cancelled
+            and the caller should stop launching further batches/generations,
+            but everything that had already finished is still in
+            results_so_far."""
             tasks = list(enumerate(param_dicts, start=id_offset))
             futures = [executor.submit(run_one_backtest, task) for task in tasks]
 
             batch_results = []
+            stopped = False
             for completed, future in enumerate(as_completed(futures), start=1):
                 result = future.result()
                 batch_results.append(result)
@@ -1110,7 +1134,16 @@ def main() -> None:
                         generations_total=generations_total,
                     )
 
-            return batch_results
+                if stop_requested():
+                    print(f"停止要求を検知: {completed}/{len(tasks)}件が完了した時点で打ち切ります")
+                    stopped = True
+                    break
+
+            if stopped:
+                for f in futures:
+                    f.cancel()
+
+            return batch_results, stopped
 
         results = []
 
@@ -1134,7 +1167,7 @@ def main() -> None:
             initargs=(df,),
         ) as executor:
             if args.optimizer in ("grid", "random", "structure"):
-                results = run_batch(executor, parameter_list, id_offset=1, progress_total=total_tasks)
+                results, stopped_early = run_batch(executor, parameter_list, id_offset=1, progress_total=total_tasks)
             elif args.optimizer == "structure_genetic":
                 # base_defaults supplies every non-tree field (rr/session/
                 # exit rules/etc) as plain scalars, extracted once from the
@@ -1166,7 +1199,7 @@ def main() -> None:
                 for generation in range(1, args.generations + 1):
                     print(f"[構造遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
                     task_params = [{**base_defaults, **ind} for ind in population]
-                    generation_results = run_batch(
+                    generation_results, stopped_early = run_batch(
                         executor,
                         task_params,
                         id_offset=next_id,
@@ -1177,6 +1210,9 @@ def main() -> None:
                     )
                     next_id += len(population)
                     results.extend(generation_results)
+
+                    if stopped_early:
+                        break
 
                     # Fitness must penalize low trade counts BEFORE selection,
                     # not just at the final ranking step (see
@@ -1223,15 +1259,28 @@ def main() -> None:
 
                 for generation in range(1, args.generations + 1):
                     print(f"[遺伝的アルゴリズム] 世代 {generation}/{args.generations}")
-                    generation_results = run_batch(executor, population, id_offset=next_id)
+                    generation_results, stopped_early = run_batch(executor, population, id_offset=next_id)
                     next_id += len(population)
                     results.extend(generation_results)
+
+                    if stopped_early:
+                        break
 
                     scored_population = [
                         (result["profit_factor"], {key: result[key] for key in param_space})
                         for result in generation_results
                     ]
                     population = search.next_population(scored_population)
+
+    if stopped_early:
+        print(f"停止要求により打ち切り: {len(results)}件が完了した時点までの結果を集計します")
+        (OUTPUT_DIR / "stop.flag").unlink(missing_ok=True)
+        (OUTPUT_DIR / "stopped.flag").write_text("1", encoding="utf-8")
+        if not results:
+            raise ValueError(
+                "停止のタイミングが早すぎたため、完了した候補が1件もありませんでした。"
+                "もう少し待ってから停止するか、再度実行してください。"
+            )
 
     result_df = pd.DataFrame(results)
 

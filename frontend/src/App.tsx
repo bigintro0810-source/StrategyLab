@@ -11,6 +11,7 @@ import {
   fetchStrategyDetail,
   rerunRankingRow,
   saveRankingRow,
+  stopBacktest,
   toggleStrategyFavorite,
 } from './api'
 import type {
@@ -391,6 +392,7 @@ export default function App() {
   const [timeframe, setTimeframe] = useState('15m')
   const [mode, setMode] = useState('dev')
   const [jobId, setJobId] = useState<string | null>(null)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
 
   // ストラテジー詳細タブの状態。openTabRanks=開いているタブ(最大20、rank自体を
   // IDとして使う - RankingRow.rankは列ソートで表示順が変わっても値は変わらない
@@ -734,6 +736,11 @@ export default function App() {
       setSaveJobIds({})
       setPendingSaveRanks(new Set())
     },
+  })
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopBacktest(jobId as string),
+    onSuccess: () => setShowStopConfirm(false),
   })
 
   const statusQuery = useQuery({
@@ -1228,21 +1235,33 @@ export default function App() {
                 onChange={(e) => setEndDate(e.target.value)}
               />
             </div>
-            <button
-              type="button"
-              onClick={() => runMutation.mutate()}
-              disabled={
-                runMutation.isPending ||
-                Boolean(isRunning) ||
-                (subTab === 'auto' && categories.length === 0)
-              }
-              className="glow-button h-9 w-[136px] flex-none rounded-lg text-sm font-semibold text-white transition-shadow disabled:opacity-40"
-            >
-              {isRunning ? '実行中...' : 'バックテスト実行'}
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={() => setShowStopConfirm(true)}
+                disabled={statusQuery.data?.stop_requested}
+                className="stop-button h-9 w-[136px] flex-none rounded-lg text-sm font-semibold text-white transition-shadow disabled:opacity-40"
+              >
+                {statusQuery.data?.stop_requested ? '停止処理中...' : '停止'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => runMutation.mutate()}
+                disabled={runMutation.isPending || (subTab === 'auto' && categories.length === 0)}
+                className="run-button h-9 w-[136px] flex-none rounded-lg text-sm font-semibold text-white transition-shadow disabled:opacity-40"
+              >
+                バックテスト実行
+              </button>
+            )}
             <div className="ml-[35px] min-w-0 flex-1">
               <AutoExplorationHero progress={statusQuery.data?.progress} isRunning={isRunning} compact />
             </div>
+            {statusQuery.data?.status === 'done' && statusQuery.data.stopped && (
+              <div className="flex-none rounded-lg border border-amber-500/20 bg-amber-950/30 px-2.5 py-1 text-xs text-amber-300">
+                途中で停止しました(そこまでの結果を表示中)
+              </div>
+            )}
           </div>
         )}
 
@@ -1961,6 +1980,35 @@ export default function App() {
             setSaveAsName={setSaveAsName}
             statusData={statusQuery.data}
           />
+        )}
+
+        {showStopConfirm && isRunning && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
+              <h2 className="text-sm font-semibold text-gray-100">バックテストを停止しますか?</h2>
+              <p className="mt-2 text-xs leading-relaxed text-gray-400">
+                ここまでに完了した候補の結果だけが「結果」タブに反映されます。まだ実行中の候補は破棄されます。
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowStopConfirm(false)}
+                  disabled={stopMutation.isPending}
+                  className="glass-input rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-200 disabled:opacity-40"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                  className="stop-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+                >
+                  {stopMutation.isPending ? '停止中...' : '停止する'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

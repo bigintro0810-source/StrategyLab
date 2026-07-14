@@ -235,6 +235,13 @@ export interface BacktestStatus {
   // structure/structure_genetic runs (main.py writes progress.json for
   // those two optimizers only - see main.py::write_progress_file).
   progress: BacktestProgress | null
+  // True once a stop has been requested via POST .../stop, until the
+  // subprocess actually exits (status becomes "done"/"error").
+  stop_requested: boolean
+  // Only meaningful once status is "done": true if this run was cut short
+  // by a stop request, so /results reflects only the candidates that had
+  // completed at that point rather than a full run.
+  stopped: boolean
 }
 
 export interface RankingRow {

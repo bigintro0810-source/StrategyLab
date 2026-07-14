@@ -436,6 +436,28 @@ async def create_backtest(req: BacktestRequest) -> dict:
     return {"job_id": job_id}
 
 
+@app.post("/api/backtests/{job_id}/stop")
+async def stop_backtest(job_id: str) -> dict:
+    """Drops a stop.flag file into the job's output dir - main.py polls for
+    it between batches/generations (see main.py::stop_requested) and, once
+    seen, stops launching new candidates and finishes the run using only
+    whatever completed so far. The subprocess then exits normally (same
+    "done" status as a full run), so no other endpoint needs to change for
+    the partial results to show up in /results."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] not in ("queued", "running"):
+        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not running")
+
+    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "stop.flag").write_text("1", encoding="utf-8")
+    job["stop_requested"] = True
+
+    return {"status": "stopping"}
+
+
 @app.post("/api/backtests/{job_id}/rows/{rank}")
 async def rerun_ranking_row(job_id: str, rank: int) -> dict:
     """Re-runs one specific ranking_total.csv row from an already-completed
@@ -558,12 +580,17 @@ async def get_backtest_status(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="job not found")
 
     error = job["stderr"][-2000:] if job["status"] == "error" else None
+    stopped = False
+    if job["status"] == "done":
+        stopped = (resolve_output_dir(job["symbol"], job["timeframe"]) / "stopped.flag").exists()
     return {
         "status": job["status"],
         "stdout_tail": job["stdout"][-2000:],
         "error": error,
         "error_summary": _extract_friendly_error(error) if error else None,
         "progress": _read_progress(job["symbol"], job["timeframe"]) if job["status"] == "running" else None,
+        "stop_requested": job.get("stop_requested", False),
+        "stopped": stopped,
     }
 
 
