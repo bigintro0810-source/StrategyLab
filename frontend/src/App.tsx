@@ -2,14 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createBacktest,
+  createCollection,
+  deleteCollection,
   deleteStrategy,
   fetchBacktestResults,
   fetchBacktestStatus,
+  fetchCollections,
   fetchIndicators,
   fetchSaveResult,
   fetchStrategies,
-  fetchStrategyDetail,
+  fetchStrategiesFiltered,
   fetchStrategyResults,
+  removeStrategyFromCollection,
+  renameCollection,
   renameStrategy,
   rerunRankingRow,
   saveRankingRow,
@@ -45,6 +50,7 @@ import LibraryDetailTabs, { type LibraryTabData } from './components/LibraryDeta
 import CompareScreen from './components/CompareScreen'
 import CompareView from './components/CompareView'
 import CompositeDetail from './components/CompositeDetail'
+import AddToCollectionModal from './components/AddToCollectionModal'
 import CsvImportScreen from './components/CsvImportScreen'
 import DataValidatorScreen from './components/DataValidatorScreen'
 import SettingsScreen from './components/SettingsScreen'
@@ -286,6 +292,7 @@ export default function App() {
   // isn't needed since only one subTab bar is ever visible at a time).
   const [mainTab, setMainTab] = useState<MainTab>('explore')
   const [subTab, setSubTab] = useState('manual')
+  const queryClient = useQueryClient()
 
   // ランキング一覧は画面に収まる固定高さの枠内で自分だけスクロールする
   // (RankingTable.tsx参照)。ストラテジー詳細タブと行き来するとその枠の
@@ -315,6 +322,91 @@ export default function App() {
   const [compareIds, setCompareIds] = useState<string[]>([])
   const toggleCompareId = (id: string) => {
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]))
+  }
+
+  // ライブラリのサブタブ表示順(固定タブ+ユーザー定義タブ=コレクション)。
+  // ドラッグ&ドロップで並び替えられ、ブラウザだけ閉じ直しても復元できる
+  // よう永続化する(jobId等と同じlocalStorageパターン)。実際に存在する
+  // タブ集合(固定5個+その時点のコレクション一覧)との差分は、下の
+  // useEffectで都度すり合わせる - 削除されたコレクションのidはここから
+  // 落ち、新しく作られたコレクションのidは末尾に追加される。
+  const LIBRARY_TAB_ORDER_KEY = 'strategylab:libraryTabOrder'
+  const FIXED_LIBRARY_TAB_IDS = MAIN_TABS.find((t) => t.id === 'library')?.subTabs.map((t) => t.id) ?? []
+  const [libraryTabOrder, setLibraryTabOrder] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem(LIBRARY_TAB_ORDER_KEY)
+      if (stored) return JSON.parse(stored)
+    } catch {
+      // localStorageが使えない環境でも固定タブだけで動作は継続する。
+    }
+    return FIXED_LIBRARY_TAB_IDS
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIBRARY_TAB_ORDER_KEY, JSON.stringify(libraryTabOrder))
+    } catch {
+      // 上と同じ理由で無視してよい。
+    }
+  }, [libraryTabOrder])
+
+  const collectionsQuery = useQuery({ queryKey: ['collections'], queryFn: fetchCollections })
+
+  useEffect(() => {
+    if (!collectionsQuery.data) return
+    const validIds = new Set([...FIXED_LIBRARY_TAB_IDS, ...collectionsQuery.data.map((c) => c.id)])
+    setLibraryTabOrder((prev) => {
+      const kept = prev.filter((id) => validIds.has(id))
+      const missing = Array.from(validIds).filter((id) => !kept.includes(id))
+      if (missing.length === 0 && kept.length === prev.length) return prev
+      return [...kept, ...missing]
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectionsQuery.data])
+
+  const [newCollectionDraft, setNewCollectionDraft] = useState<string | null>(null)
+  const [collectionRenameId, setCollectionRenameId] = useState<string | null>(null)
+  const [deleteCollectionConfirm, setDeleteCollectionConfirm] = useState<{ id: string; name: string } | null>(null)
+  const [addToCollectionTarget, setAddToCollectionTarget] = useState<string | null>(null)
+  const [draggedLibraryTabId, setDraggedLibraryTabId] = useState<string | null>(null)
+
+  const createCollectionMutation = useMutation({
+    mutationFn: (name: string) => createCollection(name),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['collections'] })
+      setLibraryTabOrder((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]))
+      setMainTab('library')
+      setSubTab(created.id)
+    },
+  })
+
+  const renameCollectionMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => renameCollection(id, name),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['collections'] }),
+  })
+
+  const deleteCollectionMutation = useMutation({
+    mutationFn: (id: string) => deleteCollection(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['collections'] })
+      setLibraryTabOrder((prev) => prev.filter((tabId) => tabId !== id))
+      if (subTab === id) setSubTab('saved')
+      setDeleteCollectionConfirm(null)
+    },
+  })
+
+  const handleLibraryTabDrop = (targetId: string) => {
+    if (!draggedLibraryTabId || draggedLibraryTabId === targetId) {
+      setDraggedLibraryTabId(null)
+      return
+    }
+    setLibraryTabOrder((prev) => {
+      const next = prev.filter((id) => id !== draggedLibraryTabId)
+      const targetIndex = next.indexOf(targetId)
+      next.splice(targetIndex, 0, draggedLibraryTabId)
+      return next
+    })
+    setDraggedLibraryTabId(null)
   }
   // Detail settings (n-candidates/max-depth/.../mutation-rate) start collapsed -
   // a first-time user shouldn't have to parse 8 unfamiliar fields just to
@@ -413,7 +505,9 @@ export default function App() {
 
   const [symbol, setSymbol] = useState('USDJPY')
   const [timeframe, setTimeframe] = useState('15m')
-  const [mode, setMode] = useState('dev')
+  // 'full'モードへの切替UIは無い(以前はライブラリの「読み込む」経由でのみ
+  // 到達可能だったが、そのボタン自体を削除した) - dev固定で残す。
+  const [mode] = useState('dev')
   const [jobId, setJobId] = useState<string | null>(() => {
     try {
       return localStorage.getItem(JOB_ID_STORAGE_KEY)
@@ -585,80 +679,7 @@ export default function App() {
   const [tpFixedPips, setTpFixedPips] = useState(20.0)
   const [exitConditionTree, setExitConditionTree] = useState<GroupNode>(defaultTree())
 
-  const queryClient = useQueryClient()
-
   const indicatorsQuery = useQuery({ queryKey: ['indicators'], queryFn: fetchIndicators })
-  const loadStrategyMutation = useMutation({
-    mutationFn: fetchStrategyDetail,
-    onSuccess: (detail) => {
-      setSymbol(detail.symbol)
-      setTimeframe(detail.timeframe)
-      setMode(detail.mode)
-      if (detail.params.direction) setDirection(detail.params.direction)
-      if (detail.params.long_condition_tree || detail.params.short_condition_tree) {
-        setDualDirectionMode(true)
-        if (detail.params.long_condition_tree) setLongTree(detail.params.long_condition_tree)
-        if (detail.params.short_condition_tree) setShortTree(detail.params.short_condition_tree)
-      } else {
-        setDualDirectionMode(false)
-        if (detail.params.condition_tree) setTree(detail.params.condition_tree as GroupNode)
-      }
-      if (typeof detail.params.rr === 'number') setRr(detail.params.rr)
-      if (typeof detail.params.use_weekend_exit === 'boolean') setUseWeekendExit(detail.params.use_weekend_exit)
-      if (typeof detail.params.weekend_exit_hour === 'number') setWeekendExitHour(detail.params.weekend_exit_hour)
-      if (typeof detail.params.use_daily_exit === 'boolean') setUseDailyExit(detail.params.use_daily_exit)
-      if (typeof detail.params.daily_exit_hour === 'number') setDailyExitHour(detail.params.daily_exit_hour)
-      if (typeof detail.params.spread_pips === 'number') setSpreadPips(detail.params.spread_pips)
-      if (typeof detail.params.slippage_pips === 'number') setSlippagePips(detail.params.slippage_pips)
-      if (typeof detail.params.commission_per_trade === 'number') setCommissionPerTrade(detail.params.commission_per_trade)
-      if (typeof detail.params.use_atr_trailing_stop === 'boolean') setUseAtrTrailingStop(detail.params.use_atr_trailing_stop)
-      if (typeof detail.params.atr_trailing_length === 'number') setAtrTrailingLength(detail.params.atr_trailing_length)
-      if (typeof detail.params.atr_trailing_multiplier === 'number') setAtrTrailingMultiplier(detail.params.atr_trailing_multiplier)
-      if (typeof detail.params.use_max_dd_stop === 'boolean') setUseMaxDdStop(detail.params.use_max_dd_stop)
-      if (typeof detail.params.max_dd_stop_pips === 'number') setMaxDdStopPips(detail.params.max_dd_stop_pips)
-      if (typeof detail.params.use_consecutive_loss_stop === 'boolean') setUseConsecutiveLossStop(detail.params.use_consecutive_loss_stop)
-      if (typeof detail.params.consecutive_loss_stop_count === 'number') setConsecutiveLossStopCount(detail.params.consecutive_loss_stop_count)
-      if (typeof detail.params.consecutive_loss_stop_bars === 'number') setConsecutiveLossStopBars(detail.params.consecutive_loss_stop_bars)
-      if (detail.params.entry_method === 'market' || detail.params.entry_method === 'limit' || detail.params.entry_method === 'stop') {
-        setEntryMethod(detail.params.entry_method)
-      }
-      if (typeof detail.params.entry_offset_pips === 'number') setEntryOffsetPips(detail.params.entry_offset_pips)
-      if (typeof detail.params.use_position_sizing === 'boolean') setUsePositionSizing(detail.params.use_position_sizing)
-      if (
-        detail.params.position_sizing_method === 'risk_percent' ||
-        detail.params.position_sizing_method === 'fixed_lot' ||
-        detail.params.position_sizing_method === 'compounding'
-      ) {
-        setPositionSizingMethod(detail.params.position_sizing_method)
-      }
-      if (typeof detail.params.initial_capital === 'number') setInitialCapital(detail.params.initial_capital)
-      if (detail.params.account_currency === 'JPY' || detail.params.account_currency === 'USD') {
-        setAccountCurrency(detail.params.account_currency)
-      }
-      if (typeof detail.params.risk_percent === 'number') setRiskPercent(detail.params.risk_percent)
-      if (typeof detail.params.fixed_lot_size === 'number') setFixedLotSize(detail.params.fixed_lot_size)
-      if (typeof detail.params.conversion_rate === 'number') setConversionRate(detail.params.conversion_rate)
-      if (typeof detail.params.use_breakeven_stop === 'boolean') setUseBreakevenStop(detail.params.use_breakeven_stop)
-      if (typeof detail.params.breakeven_trigger_rr === 'number') setBreakevenTriggerRr(detail.params.breakeven_trigger_rr)
-      if (typeof detail.params.use_partial_tp === 'boolean') setUsePartialTp(detail.params.use_partial_tp)
-      if (Array.isArray(detail.params.partial_tp_levels) && detail.params.partial_tp_levels.length > 0) {
-        setPartialTpLevels(detail.params.partial_tp_levels as PartialTpLevel[])
-      } else if (typeof detail.params.partial_tp_rr === 'number' && typeof detail.params.partial_tp_fraction === 'number') {
-        setPartialTpLevels([{ rr: detail.params.partial_tp_rr, fraction: detail.params.partial_tp_fraction }])
-      }
-      if (detail.params.sl_basis === 'signal_candle' || detail.params.sl_basis === 'atr' || detail.params.sl_basis === 'fixed_pips') {
-        setSlBasis(detail.params.sl_basis)
-      }
-      if (typeof detail.params.sl_atr_length === 'number') setSlAtrLength(detail.params.sl_atr_length)
-      if (typeof detail.params.sl_atr_multiplier === 'number') setSlAtrMultiplier(detail.params.sl_atr_multiplier)
-      if (typeof detail.params.sl_fixed_pips === 'number') setSlFixedPips(detail.params.sl_fixed_pips)
-      if (detail.params.tp_basis === 'rr' || detail.params.tp_basis === 'fixed_pips' || detail.params.tp_basis === 'custom') {
-        setTpBasis(detail.params.tp_basis)
-      }
-      if (typeof detail.params.tp_fixed_pips === 'number') setTpFixedPips(detail.params.tp_fixed_pips)
-      if (detail.params.exit_condition_tree) setExitConditionTree(detail.params.exit_condition_tree as GroupNode)
-    },
-  })
 
   const runMutation = useMutation({
     mutationFn: () => {
@@ -1310,7 +1331,109 @@ export default function App() {
             </button>
           ))}
         </div>
-        {mainTab !== 'explore' && (
+        {mainTab === 'library' && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-white/5 px-4 py-2 text-xs">
+          {libraryTabOrder.map((id) => {
+            const fixed = MAIN_TABS.find((t) => t.id === 'library')?.subTabs.find((t) => t.id === id)
+            const collection = collectionsQuery.data?.find((c) => c.id === id)
+            const label = fixed?.label ?? collection?.name
+            if (!label) return null
+            const isActive = subTab === id
+            const isRenaming = collectionRenameId === id
+            return (
+              <div
+                key={id}
+                role="button"
+                tabIndex={0}
+                draggable={!isRenaming}
+                onDragStart={() => setDraggedLibraryTabId(id)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => handleLibraryTabDrop(id)}
+                onClick={() => !isRenaming && handleSubTabClick(id)}
+                onKeyDown={(e) => {
+                  if (!isRenaming && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault()
+                    handleSubTabClick(id)
+                  }
+                }}
+                title={collection ? 'ドラッグで並び替え、ダブルクリックで名前変更' : 'ドラッグで並び替え'}
+                className={`flex cursor-grab items-center gap-1 rounded-full px-3 py-1 ${
+                  isActive ? 'bg-blue-500/20 font-semibold text-blue-100' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                }`}
+              >
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    defaultValue={label}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      const name = e.currentTarget.value.trim()
+                      if (name && name !== label) renameCollectionMutation.mutate({ id, name })
+                      setCollectionRenameId(null)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur()
+                      if (e.key === 'Escape') setCollectionRenameId(null)
+                    }}
+                    className="w-24 rounded bg-black/30 px-1 py-0.5 text-xs text-gray-100"
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={(e) => {
+                      if (!collection) return
+                      e.stopPropagation()
+                      setCollectionRenameId(id)
+                    }}
+                  >
+                    {label}
+                  </span>
+                )}
+                {collection && !isRenaming && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeleteCollectionConfirm({ id, name: label })
+                    }}
+                    title="このタブを削除(中のストラテジー自体は消えません)"
+                    className="text-gray-500 hover:text-red-400"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            )
+          })}
+          {newCollectionDraft !== null ? (
+            <input
+              autoFocus
+              value={newCollectionDraft}
+              onChange={(e) => setNewCollectionDraft(e.target.value)}
+              onBlur={() => setNewCollectionDraft(null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing && newCollectionDraft.trim()) {
+                  createCollectionMutation.mutate(newCollectionDraft.trim())
+                  setNewCollectionDraft(null)
+                }
+                if (e.key === 'Escape') setNewCollectionDraft(null)
+              }}
+              placeholder="新しいタブ名"
+              className="glass-input w-28 rounded-full px-3 py-1 text-xs"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNewCollectionDraft('')}
+              title="新しいタブを作成"
+              className="rounded-full px-2.5 py-1 text-gray-500 hover:bg-white/5 hover:text-gray-200"
+            >
+              + 新規タブ
+            </button>
+          )}
+        </div>
+        )}
+        {mainTab !== 'explore' && mainTab !== 'library' && (
         <div className="flex items-center gap-4 border-t border-white/5 px-4 py-2 text-xs">
           {(MAIN_TABS.find((t) => t.id === mainTab)?.subTabs ?? []).map((st) => (
             <button
@@ -1349,9 +1472,10 @@ export default function App() {
         )}
         {mainTab === 'library' && (subTab === 'saved' || subTab === 'favorites') && (
           <LibraryScreen
-            favoritesOnly={subTab === 'favorites'}
-            onLoad={(id) => loadStrategyMutation.mutate(id)}
-            isLoading={loadStrategyMutation.isPending}
+            title={subTab === 'favorites' ? 'お気に入りの戦略' : '保存済みストラテジー'}
+            emptyMessage={subTab === 'favorites' ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
+            queryKey={['strategies', subTab === 'favorites']}
+            queryFn={() => fetchStrategiesFiltered(subTab === 'favorites')}
             compareIds={compareIds}
             onToggleCompare={toggleCompareId}
             onGoToCompare={() => {
@@ -1363,8 +1487,46 @@ export default function App() {
             onToggleChecked={toggleLibraryChecked}
             compositeIds={libraryCompositeIds}
             onToggleComposite={toggleLibraryComposite}
+            deleteMode="delete"
+            onDelete={async (ids) => {
+              await Promise.all(ids.map((id) => deleteStrategy(id)))
+              queryClient.invalidateQueries({ queryKey: ['strategies'] })
+            }}
           />
         )}
+        {(() => {
+          const activeCollection = collectionsQuery.data?.find((c) => c.id === subTab)
+          if (mainTab !== 'library' || !activeCollection) return null
+          return (
+            <LibraryScreen
+              key={activeCollection.id}
+              title={activeCollection.name}
+              emptyMessage="このタブにはまだストラテジーがありません。「+ ストラテジーを追加」から追加してください。"
+              queryKey={['strategies', 'collection', activeCollection.id, activeCollection.strategy_ids.join(',')]}
+              queryFn={async () => {
+                const all = await fetchStrategies()
+                return all.filter((s) => activeCollection.strategy_ids.includes(s.id))
+              }}
+              compareIds={compareIds}
+              onToggleCompare={toggleCompareId}
+              onGoToCompare={() => {
+                setMainTab('library')
+                setSubTab('compare')
+              }}
+              indicators={indicatorsQuery.data ?? []}
+              openIds={libraryOpenIds}
+              onToggleChecked={toggleLibraryChecked}
+              compositeIds={libraryCompositeIds}
+              onToggleComposite={toggleLibraryComposite}
+              deleteMode="remove"
+              onDelete={async (ids) => {
+                await Promise.all(ids.map((id) => removeStrategyFromCollection(activeCollection.id, id)))
+                queryClient.invalidateQueries({ queryKey: ['collections'] })
+              }}
+              onAddClick={() => setAddToCollectionTarget(activeCollection.id)}
+            />
+          )
+        })()}
         {mainTab === 'library' && subTab === 'detail' && (
           <LibraryDetailTabs
             openTabs={libraryStrategyTabs}
@@ -2327,6 +2489,44 @@ export default function App() {
                   className="run-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
                 >
                   実行する
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {addToCollectionTarget && collectionsQuery.data?.find((c) => c.id === addToCollectionTarget) && (
+          <AddToCollectionModal
+            collection={collectionsQuery.data.find((c) => c.id === addToCollectionTarget)!}
+            onClose={() => setAddToCollectionTarget(null)}
+          />
+        )}
+
+        {deleteCollectionConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+            <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
+              <h2 className="text-sm font-semibold text-gray-100">
+                「{deleteCollectionConfirm.name}」タブを削除しますか?
+              </h2>
+              <p className="mt-2 text-xs leading-relaxed text-gray-400">
+                タブ自体を削除するだけで、中のストラテジーはライブラリに残ります。
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteCollectionConfirm(null)}
+                  disabled={deleteCollectionMutation.isPending}
+                  className="glass-input rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-200 disabled:opacity-40"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteCollectionMutation.mutate(deleteCollectionConfirm.id)}
+                  disabled={deleteCollectionMutation.isPending}
+                  className="rounded-lg bg-red-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40"
+                >
+                  {deleteCollectionMutation.isPending ? '削除中...' : '削除する'}
                 </button>
               </div>
             </div>

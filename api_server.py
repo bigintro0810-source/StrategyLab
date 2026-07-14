@@ -46,6 +46,14 @@ from engine.strategy_registry import (
     set_memo,
     toggle_favorite,
 )
+from engine.collection_registry import (
+    add_strategy as add_strategy_to_collection,
+    create_collection,
+    delete_collection,
+    load_collections,
+    remove_strategy as remove_strategy_from_collection,
+    rename_collection,
+)
 from main import SUPPORTED_SYMBOLS, find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
 
 app = FastAPI(title="Strategy Lab API")
@@ -1981,6 +1989,61 @@ async def rename_strategy_endpoint(strategy_id: str, req: RenameRequest) -> dict
         return rename_strategy(strategy_id, req.name)
     except KeyError:
         raise HTTPException(status_code=404, detail="strategy not found")
+
+
+# ライブラリ画面のユーザー定義タブ(「合成」の横の+で作る、保存済みストラテジー/
+# お気に入りとは別にユーザーが任意で分類できるフォルダ相当)。strategy_registry.py
+# の保存済みストラテジー自体はここでは複製せず、id参照(strategy_ids)だけを持つ -
+# 1つのストラテジーが複数のタブに同時に入っていても実体は1つのまま。
+@app.get("/api/collections")
+async def get_collections() -> list[dict]:
+    return load_collections()
+
+
+class CreateCollectionRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/collections")
+async def create_collection_endpoint(req: CreateCollectionRequest) -> dict:
+    return create_collection(req.name)
+
+
+@app.post("/api/collections/{collection_id}/rename")
+async def rename_collection_endpoint(collection_id: str, req: RenameRequest) -> dict:
+    try:
+        return rename_collection(collection_id, req.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+
+@app.delete("/api/collections/{collection_id}")
+async def delete_collection_endpoint(collection_id: str) -> dict:
+    try:
+        delete_collection(collection_id)
+        return {"status": "deleted"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+
+class AddStrategyToCollectionRequest(BaseModel):
+    strategy_id: str
+
+
+@app.post("/api/collections/{collection_id}/strategies")
+async def add_strategy_to_collection_endpoint(collection_id: str, req: AddStrategyToCollectionRequest) -> dict:
+    try:
+        return add_strategy_to_collection(collection_id, req.strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+
+@app.delete("/api/collections/{collection_id}/strategies/{strategy_id}")
+async def remove_strategy_from_collection_endpoint(collection_id: str, strategy_id: str) -> dict:
+    try:
+        return remove_strategy_from_collection(collection_id, strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
 
 
 def _read_csv_df(path: Path) -> pd.DataFrame:

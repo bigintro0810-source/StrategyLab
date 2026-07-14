@@ -1,21 +1,19 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  addStrategyTags,
-  deleteStrategy,
-  fetchStrategiesFiltered,
-  removeStrategyTag,
-  renameStrategy,
-  toggleStrategyFavorite,
-} from '../api'
+import { renameStrategy, toggleStrategyFavorite } from '../api'
 import FavoriteButton from './FavoriteButton'
 import { buildMetricColumns, type MetricRowLike } from '../rankingColumns'
 import type { IndicatorInfo, StrategyDetail } from '../types'
 
 interface Props {
-  favoritesOnly: boolean
-  onLoad: (id: string) => void
-  isLoading: boolean
+  title: string
+  emptyMessage: string
+  // react-queryのキャッシュキー/取得関数を呼び出し側から渡す方式にして、
+  // 保存済み/お気に入り(fetchStrategiesFiltered)とユーザー定義タブ
+  // (コレクションのstrategy_idsで絞り込んだ一覧)の両方でこのコンポーネントを
+  // そのまま使い回せるようにしている。
+  queryKey: unknown[]
+  queryFn: () => Promise<StrategyDetail[]>
   compareIds: string[]
   onToggleCompare: (id: string) => void
   onGoToCompare: () => void
@@ -26,6 +24,13 @@ interface Props {
   // 合成タブ(App.tsx側のlibraryCompositeIds)でチェックしたid一覧。
   compositeIds: string[]
   onToggleComposite: (id: string) => void
+  // 保存済み/お気に入りでは完全削除、ユーザー定義タブでは「このタブから外す」
+  // だけ(ストラテジー自体はライブラリに残る)- ダイアログの文言もこれで変える。
+  deleteMode: 'delete' | 'remove'
+  onDelete: (ids: string[]) => Promise<unknown>
+  // ユーザー定義タブだけ: ヘッダーに"+"ボタンを出してストラテジー追加picker
+  // (App.tsx側のAddToCollectionModal)を開く。
+  onAddClick?: () => void
 }
 
 // entry.metrics(strategy_registry.pyのMETRIC_COLUMNS)はexpected_valueを
@@ -52,9 +57,8 @@ function toMetricRow(entry: StrategyDetail): MetricRowLike {
 }
 
 // ランキング一覧(RankingTable.tsx)の「名称」セルと同じ見た目・操作:
-// クリックで名称をインライン編集。詳細/比較/合成のチェックボックスと
-// 🔖(常に保存済みなので押すとライブラリから削除)/⭐は専用の列に分離済み
-// (renderの各<td>参照)。
+// クリックで名称をインライン編集。詳細/比較/合成/削除のチェックボックスと
+// ⭐は専用の列に分離済み(renderの各<td>参照)。
 function NameText({
   id,
   name,
@@ -107,9 +111,10 @@ function NameText({
 }
 
 export default function LibraryScreen({
-  favoritesOnly,
-  onLoad,
-  isLoading,
+  title,
+  emptyMessage,
+  queryKey,
+  queryFn,
   compareIds,
   onToggleCompare,
   onGoToCompare,
@@ -118,9 +123,11 @@ export default function LibraryScreen({
   onToggleChecked,
   compositeIds,
   onToggleComposite,
+  deleteMode,
+  onDelete,
+  onAddClick,
 }: Props) {
   const queryClient = useQueryClient()
-  const [tagDraft, setTagDraft] = useState<Record<string, string>>({})
   const [sortKey, setSortKey] = useState<string>('profit_factor')
   const [sortAsc, setSortAsc] = useState(false)
   // 一括削除用のチェック(詳細/比較/合成とは別、削除専用)。
@@ -136,10 +143,7 @@ export default function LibraryScreen({
     })
   }
 
-  const strategiesQuery = useQuery({
-    queryKey: ['strategies', favoritesOnly],
-    queryFn: () => fetchStrategiesFiltered(favoritesOnly),
-  })
+  const strategiesQuery = useQuery({ queryKey, queryFn })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['strategies'] })
 
@@ -153,26 +157,12 @@ export default function LibraryScreen({
     onSuccess: invalidate,
   })
 
-  // 単体削除(🔖クリック)も一括削除(下のチェック+「選択した◯件を削除」)も
-  // 同じミューテーションを使う - 単体はids=[id]で呼ぶだけ。専用の一括削除
-  // APIは無いので、対象数分のDELETEを並列に投げる。
   const deleteMutation = useMutation({
-    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => deleteStrategy(id))),
+    mutationFn: (ids: string[]) => onDelete(ids),
     onSuccess: () => {
-      invalidate()
       setSelectedForDelete(new Set())
       setDeleteConfirm(null)
     },
-  })
-
-  const addTagMutation = useMutation({
-    mutationFn: ({ id, tag }: { id: string; tag: string }) => addStrategyTags(id, [tag]),
-    onSuccess: invalidate,
-  })
-
-  const removeTagMutation = useMutation({
-    mutationFn: ({ id, tag }: { id: string; tag: string }) => removeStrategyTag(id, tag),
-    onSuccess: invalidate,
   })
 
   const strategies = strategiesQuery.data ?? []
@@ -198,13 +188,23 @@ export default function LibraryScreen({
       return sortAsc ? av - bv : bv - av
     })
 
+  const deleteColumnLabel = deleteMode === 'delete' ? '削除' : '除外'
+  const deleteActionLabel = deleteMode === 'delete' ? '削除' : 'このタブから外す'
+
   return (
     <div className="glass-panel rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold text-gray-200">
-          {favoritesOnly ? 'お気に入りの戦略' : '保存済みストラテジー'}
-        </div>
+        <div className="text-sm font-semibold text-gray-200">{title}</div>
         <div className="flex items-center gap-2">
+          {onAddClick && (
+            <button
+              type="button"
+              onClick={onAddClick}
+              className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              + ストラテジーを追加
+            </button>
+          )}
           {compareIds.length > 0 && (
             <button
               type="button"
@@ -226,16 +226,14 @@ export default function LibraryScreen({
               }
               className="rounded-lg bg-red-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500"
             >
-              選択した{selectedForDelete.size}件を削除
+              選択した{selectedForDelete.size}件を{deleteActionLabel}
             </button>
           )}
         </div>
       </div>
 
       {strategies.length === 0 ? (
-        <div className="p-4 text-sm text-gray-500">
-          {favoritesOnly ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
-        </div>
+        <div className="p-4 text-sm text-gray-500">{emptyMessage}</div>
       ) : (
         <div className="overflow-auto">
           <table className="w-full text-left text-xs">
@@ -244,8 +242,7 @@ export default function LibraryScreen({
                 <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
-                <th className="whitespace-nowrap px-1 py-1 font-medium">削除</th>
-                <th className="px-1 py-1 font-medium" />
+                <th className="whitespace-nowrap px-1 py-1 font-medium">{deleteColumnLabel}</th>
                 <th className="px-1 py-1 font-medium" />
                 <th className="whitespace-nowrap px-1 py-1 font-medium">名称</th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">通貨/時間足</th>
@@ -262,8 +259,6 @@ export default function LibraryScreen({
                     {sortKey === col.key && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
                   </th>
                 ))}
-                <th className="whitespace-nowrap px-1 py-1 font-medium">タグ</th>
-                <th className="px-1 py-1 font-medium" />
               </tr>
             </thead>
             <tbody>
@@ -290,18 +285,8 @@ export default function LibraryScreen({
                         type="checkbox"
                         checked={selectedForDelete.has(s.id)}
                         onChange={() => toggleSelectedForDelete(s.id)}
-                        title="一括削除の対象に含める"
+                        title={`一括${deleteActionLabel}の対象に含める`}
                       />
-                    </td>
-                    <td className="px-1 py-1">
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirm({ ids: [s.id], names: [s.name] })}
-                        title="クリックしてライブラリから削除"
-                        className="grayscale-0 opacity-100 transition-all hover:opacity-70"
-                      >
-                        🔖
-                      </button>
                     </td>
                     <td className="px-1 py-1">
                       <FavoriteButton
@@ -326,7 +311,7 @@ export default function LibraryScreen({
                           title={col.key === 'condition_tree' ? text : undefined}
                           className={
                             col.key === 'condition_tree'
-                              ? 'max-w-[120px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
+                              ? 'max-w-[160px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
                               : `whitespace-nowrap px-1 py-1 ${colorClass}`
                           }
                         >
@@ -334,52 +319,6 @@ export default function LibraryScreen({
                         </td>
                       )
                     })}
-                    <td className="px-1 py-1">
-                      {/* 結果のランキング一覧と行の高さを揃えるため折り返させない
-                          (タグが多い行だけ縦に伸びると表全体の行高が揃わなくなる) -
-                          収まりきらない分はこのセル内だけ横スクロール。 */}
-                      <div className="flex max-w-[70px] flex-nowrap items-center gap-1 overflow-x-auto">
-                        {s.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-gray-300"
-                          >
-                            {tag}
-                            <button
-                              type="button"
-                              onClick={() => removeTagMutation.mutate({ id: s.id, tag })}
-                              className="text-gray-500 hover:text-red-400"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                        <input
-                          type="text"
-                          placeholder="+タグ"
-                          value={tagDraft[s.id] ?? ''}
-                          onChange={(e) => setTagDraft((d) => ({ ...d, [s.id]: e.target.value }))}
-                          onKeyDown={(e) => {
-                            const value = tagDraft[s.id]?.trim()
-                            if (e.key === 'Enter' && value) {
-                              addTagMutation.mutate({ id: s.id, tag: value })
-                              setTagDraft((d) => ({ ...d, [s.id]: '' }))
-                            }
-                          }}
-                          className="glass-input w-16 rounded px-1 py-0.5 text-[10px]"
-                        />
-                      </div>
-                    </td>
-                    <td className="px-1 py-1">
-                      <button
-                        type="button"
-                        disabled={isLoading}
-                        onClick={() => onLoad(s.id)}
-                        className="whitespace-nowrap rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300 hover:bg-white/10 disabled:opacity-40"
-                      >
-                        読み込む
-                      </button>
-                    </td>
                   </tr>
                 )
               })}
@@ -392,14 +331,18 @@ export default function LibraryScreen({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
           <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
             <h2 className="text-sm font-semibold text-gray-100">
-              {deleteConfirm.ids.length === 1
-                ? '本当に削除しますか?'
-                : `選択した${deleteConfirm.ids.length}件を本当に削除しますか?`}
+              {deleteMode === 'delete'
+                ? deleteConfirm.ids.length === 1
+                  ? '本当に削除しますか?'
+                  : `選択した${deleteConfirm.ids.length}件を本当に削除しますか?`
+                : deleteConfirm.ids.length === 1
+                  ? 'このタブから外しますか?'
+                  : `選択した${deleteConfirm.ids.length}件をこのタブから外しますか?`}
             </h2>
             <p className="mt-2 max-h-32 overflow-y-auto text-xs leading-relaxed text-gray-400">
               {deleteConfirm.names.join('、')}
             </p>
-            <p className="mt-2 text-xs text-red-300">この操作は取り消せません。</p>
+            {deleteMode === 'delete' && <p className="mt-2 text-xs text-red-300">この操作は取り消せません。</p>}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
@@ -415,7 +358,7 @@ export default function LibraryScreen({
                 disabled={deleteMutation.isPending}
                 className="rounded-lg bg-red-500/80 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40"
               >
-                {deleteMutation.isPending ? '削除中...' : '削除する'}
+                {deleteMutation.isPending ? '処理中...' : deleteActionLabel}
               </button>
             </div>
           </div>

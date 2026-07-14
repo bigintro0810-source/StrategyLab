@@ -182,6 +182,44 @@ export async function renameStrategy(strategyId: string, name: string): Promise<
   return res.data
 }
 
+// ライブラリ画面のユーザー定義タブ(保存済みストラテジー/お気に入りとは別に
+// 任意で分類できるフォルダ)。strategy_idsは参照のみ - ストラテジー本体は
+// strategy_registry.py側の1箇所にしかない。
+export interface Collection {
+  id: string
+  name: string
+  strategy_ids: string[]
+}
+
+export async function fetchCollections(): Promise<Collection[]> {
+  const res = await client.get<Collection[]>('/collections')
+  return res.data
+}
+
+export async function createCollection(name: string): Promise<Collection> {
+  const res = await client.post<Collection>('/collections', { name })
+  return res.data
+}
+
+export async function renameCollection(collectionId: string, name: string): Promise<Collection> {
+  const res = await client.post<Collection>(`/collections/${collectionId}/rename`, { name })
+  return res.data
+}
+
+export async function deleteCollection(collectionId: string): Promise<void> {
+  await client.delete(`/collections/${collectionId}`)
+}
+
+export async function addStrategyToCollection(collectionId: string, strategyId: string): Promise<Collection> {
+  const res = await client.post<Collection>(`/collections/${collectionId}/strategies`, { strategy_id: strategyId })
+  return res.data
+}
+
+export async function removeStrategyFromCollection(collectionId: string, strategyId: string): Promise<Collection> {
+  const res = await client.delete<Collection>(`/collections/${collectionId}/strategies/${strategyId}`)
+  return res.data
+}
+
 export interface CompareEntry {
   id: string
   name: string
