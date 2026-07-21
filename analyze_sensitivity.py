@@ -16,12 +16,20 @@ ranking_total.csv).
 """
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 
 from engine.backtest_engine import compute_is_intraday, run_backtest
 from engine.params import reconstruct_params_from_row
-from main import SUPPORTED_SYMBOLS, build_parameter_space, find_data_file, load_price_data, resolve_output_dir
+from engine.strategy_config_loader import load_strategy_config
+from main import (
+    build_grid_from_space,
+    build_parameter_space,
+    find_data_file,
+    load_price_data,
+    resolve_output_dir,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,9 +37,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
-        help="通貨ペア (main.pyの--symbolと合わせる。デフォルト: USDJPY)",
+        help="通貨ペア (main.pyの--symbolと合わせる。デフォルト: USDJPY。data/rawに取り込み済みならどの名前でも可)",
     )
 
     parser.add_argument(
@@ -52,6 +59,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="ranking_total.csv内のどの行(rank)を分析対象にするか (デフォルト: 1=全体ベスト)",
+    )
+    parser.add_argument(
+        "--strategy-config",
+        default=None,
+        help="strategy_configs/*.json のパスを指定すると、--rankの代わりにこの設定(ライブラリの"
+        "保存済みストラテジー等)を分析対象にする(walk_forward.pyの--strategy-configと同じ仕組み)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="結果の出力先を指定すると、通常のresolve_output_dir()の代わりにこちらへ書き出す"
+        "(ライブラリのストラテジーごとに結果を分けて永続化するため)",
     )
 
     return parser.parse_args()
@@ -158,10 +177,16 @@ def rate_sensitivity(summary_df: pd.DataFrame) -> tuple[float, str]:
 def main() -> None:
     args = parse_args()
 
-    output_dir = resolve_output_dir(args.symbol, args.timeframe)
+    output_dir = Path(args.output_dir) if args.output_dir else resolve_output_dir(args.symbol, args.timeframe)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    best_row = load_ranking_row(output_dir, args.rank)
-    base_params = reconstruct_params_from_row(best_row)
+    if args.strategy_config:
+        base_params = build_grid_from_space(load_strategy_config(Path(args.strategy_config)))[0]
+        baseline_label = args.strategy_config
+    else:
+        best_row = load_ranking_row(resolve_output_dir(args.symbol, args.timeframe), args.rank)
+        base_params = reconstruct_params_from_row(best_row)
+        baseline_label = f"rank={args.rank} (PF={best_row.get('profit_factor')})"
     param_space = build_parameter_space(args.mode, args.symbol)
 
     data_path = find_data_file(args.timeframe, args.symbol)
@@ -171,8 +196,7 @@ def main() -> None:
     print(f"通貨ペア: {args.symbol}")
     print(f"時間足: {args.timeframe}")
     print(f"モード: {args.mode}")
-    print(f"対象rank: {args.rank}")
-    print(f"ベースラインPF: {best_row.get('profit_factor')}")
+    print(f"対象: {baseline_label}")
     print()
 
     detail_df = analyze_param_sensitivity(df, base_params, param_space, is_intraday)

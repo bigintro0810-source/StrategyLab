@@ -13,11 +13,12 @@ output directory every other script in this project uses.
 """
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 
 from engine.robustness import compute_confidence_score
-from main import SUPPORTED_SYMBOLS, resolve_output_dir
+from main import resolve_output_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,9 +26,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
-        help="main.pyで使った通貨ペアに合わせる (デフォルト: USDJPY)",
+        help="main.pyで使った通貨ペアに合わせる (デフォルト: USDJPY。data/rawに取り込み済みならどの名前でも可)",
     )
 
     parser.add_argument(
@@ -35,13 +35,19 @@ def parse_args() -> argparse.Namespace:
         default="15m",
         help="main.pyで使った時間足に合わせる (デフォルト: 15m)",
     )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="集計対象を指定すると、通常のresolve_output_dir()の代わりにこちらから読み書きする"
+        "(ライブラリのストラテジーごとに結果を分けて永続化するため)",
+    )
 
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    output_dir = resolve_output_dir(args.symbol, args.timeframe)
+    output_dir = Path(args.output_dir) if args.output_dir else resolve_output_dir(args.symbol, args.timeframe)
 
     result = compute_confidence_score(output_dir)
 

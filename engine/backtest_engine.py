@@ -521,6 +521,11 @@ def run_backtest(
         # V-next generic condition engine (engine/conditions.py) - additive path,
         # selected only when a strategy explicitly supplies a condition_tree. The
         # existing entry_trigger/use_X_filter path below is untouched otherwise.
+        # mandatory_conditions(自動探索の「必須固定条件」)をAND付加する -
+        # 以前は_run_limit_stop_backtest()にしかこの処理が無く、自動探索が
+        # 実際に使う成行(market)エントリーの経路(このrun_backtest本体)では
+        # 必須固定条件が黙って無視されていた(実際に踏んだ不具合)。
+        condition_tree = wrap_with_mandatory_conditions(condition_tree, p.get("mandatory_conditions"))
         candidate_signal = evaluate_condition_tree(
             condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
         )
@@ -602,6 +607,7 @@ def run_backtest(
             use_daily_exit=use_daily_exit,
             daily_exit_hour=daily_exit_hour,
             return_trades=return_trades,
+            use_confirmation=condition_tree is None,
         )
 
     profits: list[float] = []
@@ -615,6 +621,12 @@ def run_backtest(
 
     sl = 0.0
     tp = 0.0
+
+    # MAE/MFE(最大逆行幅/最大追い風幅)の追跡用 - ポジション保有中に見た
+    # 最悪値/最良値の価格そのもの(entry_priceとの差はexit時にdirection別に
+    # 計算する。engine/numba_fast_backtest.pyの高速パスと全く同じ規則)。
+    mae_extreme_price = 0.0
+    mfe_extreme_price = 0.0
 
     signal_low = np.nan
     signal_high = np.nan
@@ -680,6 +692,8 @@ def run_backtest(
                 sl = stop_price
                 tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                 in_position = True
+                mae_extreme_price = entry_price
+                mfe_extreme_price = entry_price
 
                 breakeven_trigger_price = (
                     entry_price - risk_distance * breakeven_trigger_rr
@@ -721,6 +735,22 @@ def run_backtest(
             pending_signal_time = None
 
         if in_position:
+            # このバーのhigh/lowを使って保有中の最悪値/最良値を更新する
+            # (エントリーしたバー自身も含む - 同じバーでエントリーと決済が
+            # 両方起きるケースがあるため)。short/longで不利な方向/有利な
+            # 方向が逆になる(engine/numba_fast_backtest.pyの高速パスと
+            # 全く同じ規則)。
+            if direction == "short":
+                if high_price > mae_extreme_price:
+                    mae_extreme_price = high_price
+                if low_price < mfe_extreme_price:
+                    mfe_extreme_price = low_price
+            else:
+                if low_price < mae_extreme_price:
+                    mae_extreme_price = low_price
+                if high_price > mfe_extreme_price:
+                    mfe_extreme_price = high_price
+
             # Tighten (never loosen) the stop based on the ATR as of the
             # last CLOSED bar, before checking whether this bar's range
             # hits it - mirrors the entry mechanism's own "confirm on
@@ -841,6 +871,13 @@ def run_backtest(
                 profits.append(profit)
                 cumulative_equity += profit
 
+                if direction == "short":
+                    mae = mae_extreme_price - entry_price
+                    mfe = entry_price - mfe_extreme_price
+                else:
+                    mae = entry_price - mae_extreme_price
+                    mfe = mfe_extreme_price - entry_price
+
                 if use_max_dd_stop:
                     running_peak_equity = max(running_peak_equity, cumulative_equity)
                     current_dd = running_peak_equity - cumulative_equity
@@ -876,6 +913,8 @@ def run_backtest(
                             "tp": round(tp, 5),
                             "profit": round(profit, 5),
                             "exit_reason": exit_reason,
+                            "mae": round(mae, 5),
+                            "mfe": round(mfe, 5),
                             "signal_time": position_signal_time,
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
@@ -931,47 +970,67 @@ def run_backtest(
             # confirmation window based on years-old price levels.
             continue
 
-        if signal_bar is not None:
-            bars_from_signal = i - signal_bar
-            within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
+        if condition_tree is None:
+            # 旧来のブレイクアウト確認方式(condition_treeを使わない自動探索
+            # のstructure系向け) - 条件成立(signal_bar)後、後続バーの終値が
+            # そのバーの高値/安値を上抜け/下抜けするのを確認してからエント
+            # リー(lookahead_bars以内)。
+            if signal_bar is not None:
+                bars_from_signal = i - signal_bar
+                within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
 
-            confirmation = (
-                close_price < float(signal_low)
-                if direction == "short"
-                else close_price > float(signal_high)
-            )
-            if within_bars and confirmation:
-                pending_entry = True
+                confirmation = (
+                    close_price < float(signal_low)
+                    if direction == "short"
+                    else close_price > float(signal_high)
+                )
+                if within_bars and confirmation:
+                    pending_entry = True
 
-                pending_signal_low = signal_low
-                pending_signal_high = signal_high
-                pending_signal_bar = signal_bar
-                pending_signal_time = signal_time
+                    pending_signal_low = signal_low
+                    pending_signal_high = signal_high
+                    pending_signal_bar = signal_bar
+                    pending_signal_time = signal_time
 
-                signal_low = np.nan
-                signal_high = np.nan
-                signal_bar = None
-                signal_time = None
+                    signal_low = np.nan
+                    signal_high = np.nan
+                    signal_bar = None
+                    signal_time = None
 
+                    continue
+
+                expired = bars_from_signal > lookahead_bars
+                if expired:
+                    signal_low = np.nan
+                    signal_high = np.nan
+                    signal_bar = None
+                    signal_time = None
+
+            if signal_bar is not None:
                 continue
 
-            expired = bars_from_signal > lookahead_bars
-            if expired:
-                signal_low = np.nan
-                signal_high = np.nan
-                signal_bar = None
-                signal_time = None
+            if not candidate_signal[i]:
+                continue
 
-        if signal_bar is not None:
-            continue
-
-        if not candidate_signal[i]:
-            continue
-
-        signal_low = low_price
-        signal_high = high_price
-        signal_bar = i
-        signal_time = dt
+            signal_low = low_price
+            signal_high = high_price
+            signal_bar = i
+            signal_time = dt
+        else:
+            # condition_tree(手動条件ビルダー/自動探索の全モード)向けの
+            # 即時エントリー - 確認待ちなし。「条件が成立したバーの次の
+            # バーの始値でそのままエントリー」で、画面に見えている条件
+            # だけが動作を決める(ユーザー要望:「画面上に見えていることが
+            # 全て。EMA200＞終値と設定したらこの条件が満たされたら次の足
+            # の始値で即エントリー」)。既存のpending_entryの仕組み(この
+            # バーで武装→次のバーの始値で消費)をそのまま再利用しているだけ
+            # なので、confirmation方式と全く同じ1バー分のラグで実行される。
+            if candidate_signal[i]:
+                pending_entry = True
+                pending_signal_low = low_price
+                pending_signal_high = high_price
+                pending_signal_bar = i
+                pending_signal_time = dt
 
     profits_arr = np.array(profits, dtype=float)
 
@@ -1225,6 +1284,11 @@ def _run_limit_stop_backtest(
     sl = 0.0
     tp = 0.0
 
+    # MAE/MFE(最大逆行幅/最大追い風幅)の追跡用 - run_backtest()の
+    # マーケット注文パスと全く同じ規則。
+    mae_extreme_price = 0.0
+    mfe_extreme_price = 0.0
+
     order_active = False
     order_price = 0.0
     order_bar: int | None = None
@@ -1291,6 +1355,8 @@ def _run_limit_stop_backtest(
                             sl = stop_price
                             tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                             in_position = True
+                            mae_extreme_price = entry_price
+                            mfe_extreme_price = entry_price
 
                             breakeven_trigger_price = (
                                 entry_price - risk_distance * breakeven_trigger_rr
@@ -1319,6 +1385,17 @@ def _run_limit_stop_backtest(
                         order_active = False
 
         if in_position:
+            if direction == "short":
+                if high_price > mae_extreme_price:
+                    mae_extreme_price = high_price
+                if low_price < mfe_extreme_price:
+                    mfe_extreme_price = low_price
+            else:
+                if low_price < mae_extreme_price:
+                    mae_extreme_price = low_price
+                if high_price > mfe_extreme_price:
+                    mfe_extreme_price = high_price
+
             if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
                 trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
                 if direction == "short":
@@ -1420,6 +1497,13 @@ def _run_limit_stop_backtest(
                 profits.append(profit)
                 cumulative_equity += profit
 
+                if direction == "short":
+                    mae = mae_extreme_price - entry_price
+                    mfe = entry_price - mfe_extreme_price
+                else:
+                    mae = entry_price - mae_extreme_price
+                    mfe = mfe_extreme_price - entry_price
+
                 if use_max_dd_stop:
                     running_peak_equity = max(running_peak_equity, cumulative_equity)
                     current_dd = running_peak_equity - cumulative_equity
@@ -1455,6 +1539,8 @@ def _run_limit_stop_backtest(
                             "tp": round(tp, 5),
                             "profit": round(profit, 5),
                             "exit_reason": exit_reason,
+                            "mae": round(mae, 5),
+                            "mfe": round(mfe, 5),
                             "signal_time": position_signal_time,
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
@@ -1680,8 +1766,17 @@ def _run_dual_direction_backtest(
     use_partial_tp = bool(p.get("use_partial_tp", False))
     partial_tp_levels = _resolve_partial_tp_levels(p)
 
+    # mandatory_conditions(自動探索の「必須固定条件」)を両サイドにAND付加する
+    # - run_backtest()の成行(市場)パスと同じ規則(実際に踏んだ不具合: 以前は
+    # _run_limit_stop_backtest()にしかこの処理が無く、市場エントリーの経路
+    # では黙って無視されていた)。
+    mandatory_conditions = p.get("mandatory_conditions")
     long_tree = p.get("long_condition_tree")
     short_tree = p.get("short_condition_tree")
+    if long_tree is not None:
+        long_tree = wrap_with_mandatory_conditions(long_tree, mandatory_conditions)
+    if short_tree is not None:
+        short_tree = wrap_with_mandatory_conditions(short_tree, mandatory_conditions)
     long_candidate = (
         evaluate_condition_tree(long_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
         if long_tree is not None
@@ -1712,19 +1807,21 @@ def _run_dual_direction_backtest(
     sl = 0.0
     tp = 0.0
 
+    # MAE/MFE(最大逆行幅/最大追い風幅)の追跡用 - run_backtest()の
+    # マーケット注文パスと全く同じ規則(direction相当はposition_direction)。
+    mae_extreme_price = 0.0
+    mfe_extreme_price = 0.0
+
     position_signal_low = np.nan
     position_signal_high = np.nan
     position_signal_bar = None
     position_signal_time = None
 
-    # Per-direction signal/confirmation/pending tracking - each side is an
-    # independent copy of run_backtest()'s single-direction state.
+    # Per-direction pending-entry tracking - each side is armed directly by
+    # condition_tree confirmation-less entry (immediate: 「画面上に見えて
+    # いることが全て」), consumed at the top of the next bar's iteration.
     side_state = {
         "long": {
-            "signal_low": np.nan,
-            "signal_high": np.nan,
-            "signal_bar": None,
-            "signal_time": None,
             "pending_entry": False,
             "pending_signal_low": np.nan,
             "pending_signal_high": np.nan,
@@ -1732,10 +1829,6 @@ def _run_dual_direction_backtest(
             "pending_signal_time": None,
         },
         "short": {
-            "signal_low": np.nan,
-            "signal_high": np.nan,
-            "signal_bar": None,
-            "signal_time": None,
             "pending_entry": False,
             "pending_signal_low": np.nan,
             "pending_signal_high": np.nan,
@@ -1751,13 +1844,6 @@ def _run_dual_direction_backtest(
         state["pending_signal_high"] = np.nan
         state["pending_signal_bar"] = None
         state["pending_signal_time"] = None
-
-    def clear_signal(side: str) -> None:
-        state = side_state[side]
-        state["signal_low"] = np.nan
-        state["signal_high"] = np.nan
-        state["signal_bar"] = None
-        state["signal_time"] = None
 
     # Circuit breaker state - only tracked/consulted when the corresponding
     # use_* flag is on, so this is a no-op when both are off.
@@ -1818,6 +1904,8 @@ def _run_dual_direction_backtest(
                     sl = stop_price
                     tp = _resolve_tp(tp_basis, side, entry_price, risk_distance, rr, tp_fixed_pips, pip)
                     in_position = True
+                    mae_extreme_price = entry_price
+                    mfe_extreme_price = entry_price
 
                     breakeven_trigger_price = (
                         entry_price - risk_distance * breakeven_trigger_rr
@@ -1852,6 +1940,17 @@ def _run_dual_direction_backtest(
             clear_pending("short")
 
         if in_position:
+            if position_direction == "short":
+                if high_price > mae_extreme_price:
+                    mae_extreme_price = high_price
+                if low_price < mfe_extreme_price:
+                    mfe_extreme_price = low_price
+            else:
+                if low_price < mae_extreme_price:
+                    mae_extreme_price = low_price
+                if high_price > mfe_extreme_price:
+                    mfe_extreme_price = high_price
+
             if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
                 trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
                 if position_direction == "short":
@@ -1950,6 +2049,13 @@ def _run_dual_direction_backtest(
                 profits.append(profit)
                 cumulative_equity += profit
 
+                if position_direction == "short":
+                    mae = mae_extreme_price - entry_price
+                    mfe = entry_price - mfe_extreme_price
+                else:
+                    mae = entry_price - mae_extreme_price
+                    mfe = mfe_extreme_price - entry_price
+
                 if use_max_dd_stop:
                     running_peak_equity = max(running_peak_equity, cumulative_equity)
                     current_dd = running_peak_equity - cumulative_equity
@@ -1986,6 +2092,8 @@ def _run_dual_direction_backtest(
                             "tp": round(tp, 5),
                             "profit": round(profit, 5),
                             "exit_reason": exit_reason,
+                            "mae": round(mae, 5),
+                            "mfe": round(mfe, 5),
                             "signal_time": position_signal_time,
                             "signal_bar_index": position_signal_bar,
                             "signal_low": round(float(position_signal_low), 5),
@@ -2037,41 +2145,22 @@ def _run_dual_direction_backtest(
             # naturally reads as expired once the pause lifts.
             continue
 
+        # condition_tree(long_condition_tree/short_condition_tree)向けの即時
+        # エントリー - 確認待ちなし。dual-directionはcondition_treeを使わない
+        # 旧来のブレイクアウト方式に相当するものが存在しない(long_tree/
+        # short_treeが無ければ候補シグナル自体が常にFalseになるだけ)ので、
+        # 常にこちらの方式を使う(ユーザー要望:「画面上に見えていることが
+        # 全て」)。条件が成立したバーの次のバーの始値でそのままエントリー
+        # - 既存のpending_entryの仕組み(このバーで武装→次のバーの始値で
+        # 消費)をそのまま再利用している。
         for side, candidate_signal in (("long", long_candidate), ("short", short_candidate)):
-            state = side_state[side]
-
-            if state["signal_bar"] is not None:
-                bars_from_signal = i - state["signal_bar"]
-                within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
-
-                confirmation = (
-                    close_price < float(state["signal_low"])
-                    if side == "short"
-                    else close_price > float(state["signal_high"])
-                )
-                if within_bars and confirmation:
-                    state["pending_entry"] = True
-                    state["pending_signal_low"] = state["signal_low"]
-                    state["pending_signal_high"] = state["signal_high"]
-                    state["pending_signal_bar"] = state["signal_bar"]
-                    state["pending_signal_time"] = state["signal_time"]
-                    clear_signal(side)
-                    continue
-
-                expired = bars_from_signal > lookahead_bars
-                if expired:
-                    clear_signal(side)
-
-            if state["signal_bar"] is not None:
-                continue
-
-            if not candidate_signal[i]:
-                continue
-
-            state["signal_low"] = low_price
-            state["signal_high"] = high_price
-            state["signal_bar"] = i
-            state["signal_time"] = dt
+            if candidate_signal[i]:
+                state = side_state[side]
+                state["pending_entry"] = True
+                state["pending_signal_low"] = low_price
+                state["pending_signal_high"] = high_price
+                state["pending_signal_bar"] = i
+                state["pending_signal_time"] = dt
 
     profits_arr = np.array(profits, dtype=float)
 

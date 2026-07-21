@@ -254,7 +254,7 @@ def test_three_candle_patterns() -> list[str]:
             {"open": 103.0, "high": 108.0, "low": 102.5, "close": 107.5},
         ]
     )
-    soldiers = cdl.three_white_soldiers(df3["open"], df3["close"])
+    soldiers = cdl.three_white_soldiers(df3["open"], df3["high"], df3["low"], df3["close"])
     failures.append(_check("three_white_soldiers fires on bar 2", bool(soldiers.iloc[2])))
 
     df4 = _make_df(
@@ -264,7 +264,7 @@ def test_three_candle_patterns() -> list[str]:
             {"open": 104.5, "high": 105.0, "low": 98.5, "close": 99.0},
         ]
     )
-    crows = cdl.three_black_crows(df4["open"], df4["close"])
+    crows = cdl.three_black_crows(df4["open"], df4["high"], df4["low"], df4["close"])
     failures.append(_check("three_black_crows fires on bar 2", bool(crows.iloc[2])))
 
     return [f for f in failures if f]

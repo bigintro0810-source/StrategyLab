@@ -74,6 +74,8 @@ from engine.smc_indicators import (
     liquidity_sweep_bullish,
     mitigation_block_bearish,
     mitigation_block_bullish,
+    mss_bearish,
+    mss_bullish,
 )
 import engine.candlestick_patterns as _cdl
 import engine.chart_patterns as _chart
@@ -152,18 +154,40 @@ def _donchian_mid(df: pd.DataFrame, length: int = 20) -> np.ndarray:
     return (_highest_high(df, length) + _lowest_low(df, length)) / 2
 
 
-def _bollinger_upper(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> np.ndarray:
-    upper, _middle, _lower = bollinger_bands(df["close"], period, num_std)
+# ボリンジャーバンドのSource選択用 - close固定だったのをTradingView同様
+# open/high/low/hl2(Median Price)/hlc3(Typical Price)/ohlc4(Average Price)
+# へも切り替えられるようにする(ユーザー要望: レビューNo.14)。他の指標
+# (EMA/SMA/RSI等)は依然close固定のまま - Strategy Lab全体でSource選択に
+# 対応するかは別途検討事項(ボリンジャーバンドのみ先行対応)。
+_PRICE_SOURCES: dict[str, Any] = {
+    "close": lambda df: df["close"],
+    "open": lambda df: df["open"],
+    "high": lambda df: df["high"],
+    "low": lambda df: df["low"],
+    "hl2": lambda df: (df["high"] + df["low"]) / 2,
+    "hlc3": lambda df: (df["high"] + df["low"] + df["close"]) / 3,
+    "ohlc4": lambda df: (df["open"] + df["high"] + df["low"] + df["close"]) / 4,
+}
+
+
+def _resolve_price_source(df: pd.DataFrame, source: str) -> pd.Series:
+    if source not in _PRICE_SOURCES:
+        raise ValueError(f"未対応のsourceです: {source}(対応: {', '.join(_PRICE_SOURCES)})")
+    return _PRICE_SOURCES[source](df)
+
+
+def _bollinger_upper(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, source: str = "close") -> np.ndarray:
+    upper, _middle, _lower = bollinger_bands(_resolve_price_source(df, source), period, num_std)
     return upper.to_numpy(dtype=float)
 
 
-def _bollinger_middle(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> np.ndarray:
-    _upper, middle, _lower = bollinger_bands(df["close"], period, num_std)
+def _bollinger_middle(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, source: str = "close") -> np.ndarray:
+    _upper, middle, _lower = bollinger_bands(_resolve_price_source(df, source), period, num_std)
     return middle.to_numpy(dtype=float)
 
 
-def _bollinger_lower(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> np.ndarray:
-    _upper, _middle, lower = bollinger_bands(df["close"], period, num_std)
+def _bollinger_lower(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, source: str = "close") -> np.ndarray:
+    _upper, _middle, lower = bollinger_bands(_resolve_price_source(df, source), period, num_std)
     return lower.to_numpy(dtype=float)
 
 
@@ -175,6 +199,11 @@ def _macd_line(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9
 def _macd_signal(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> np.ndarray:
     _line, signal_line, _hist = macd(df["close"], fast, slow, signal)
     return signal_line.to_numpy(dtype=float)
+
+
+def _macd_histogram(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> np.ndarray:
+    _line, _signal_line, hist = macd(df["close"], fast, slow, signal)
+    return hist.to_numpy(dtype=float)
 
 
 def _stochastic_k(
@@ -192,17 +221,21 @@ def _stochastic_d(
 
 
 def _adx_line(df: pd.DataFrame, length: int = 14) -> np.ndarray:
-    line, _plus_di, _minus_di = _adx(df["high"], df["low"], df["close"], length)
+    # engine/technical_indicators.py::adx()はcode(plus_di, minus_di, adx_line)の
+    # 順で返す - 以前はここを(line, plus_di, minus_di)の順だと誤って解釈しており、
+    # adx/plus_di/minus_diの3値が三つ巴で取り違えられていた(独立した第三者的な
+    # 検算で発見、実際に踏んだ不具合)。
+    _plus_di, _minus_di, line = _adx(df["high"], df["low"], df["close"], length)
     return line.to_numpy(dtype=float)
 
 
 def _plus_di(df: pd.DataFrame, length: int = 14) -> np.ndarray:
-    _line, plus_di, _minus_di = _adx(df["high"], df["low"], df["close"], length)
+    plus_di, _minus_di, _line = _adx(df["high"], df["low"], df["close"], length)
     return plus_di.to_numpy(dtype=float)
 
 
 def _minus_di(df: pd.DataFrame, length: int = 14) -> np.ndarray:
-    _line, _plus_di, minus_di = _adx(df["high"], df["low"], df["close"], length)
+    _plus_di, minus_di, _line = _adx(df["high"], df["low"], df["close"], length)
     return minus_di.to_numpy(dtype=float)
 
 
@@ -234,7 +267,13 @@ def _local_hour(datetime_series: pd.Series, tz: str) -> np.ndarray:
 
 
 def _in_hour_range(hour_arr: np.ndarray, start: int, end: int) -> np.ndarray:
-    return (hour_arr >= start) & (hour_arr < end)
+    """start<end: normal same-day range (e.g. 8-10). start>=end: wraps past
+    midnight (e.g. 22-2 means 22:00-23:59 or 0:00-1:59) - none of this
+    module's 4 fixed Kill Zone presets currently wrap, but this helper
+    needs to handle it correctly for any future/custom range that does."""
+    if start < end:
+        return (hour_arr >= start) & (hour_arr < end)
+    return (hour_arr >= start) | (hour_arr < end)
 
 
 # ICT/SMC "Kill Zone" time windows - fixed in each city's OWN local time
@@ -377,19 +416,22 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "highest_close": lambda df, length=20, **p: _highest_close(df, int(length)),
     "lowest_close": lambda df, length=20, **p: _lowest_close(df, int(length)),
     "donchian_mid": lambda df, length=20, **p: _donchian_mid(df, int(length)),
-    "bollinger_upper": lambda df, period=20, num_std=2.0, **p: _bollinger_upper(
-        df, int(period), float(num_std)
+    "bollinger_upper": lambda df, period=20, num_std=2.0, source="close", **p: _bollinger_upper(
+        df, int(period), float(num_std), str(source)
     ),
-    "bollinger_middle": lambda df, period=20, num_std=2.0, **p: _bollinger_middle(
-        df, int(period), float(num_std)
+    "bollinger_middle": lambda df, period=20, num_std=2.0, source="close", **p: _bollinger_middle(
+        df, int(period), float(num_std), str(source)
     ),
-    "bollinger_lower": lambda df, period=20, num_std=2.0, **p: _bollinger_lower(
-        df, int(period), float(num_std)
+    "bollinger_lower": lambda df, period=20, num_std=2.0, source="close", **p: _bollinger_lower(
+        df, int(period), float(num_std), str(source)
     ),
     "macd_line": lambda df, fast=12, slow=26, signal=9, **p: _macd_line(
         df, int(fast), int(slow), int(signal)
     ),
     "macd_signal": lambda df, fast=12, slow=26, signal=9, **p: _macd_signal(
+        df, int(fast), int(slow), int(signal)
+    ),
+    "macd_histogram": lambda df, fast=12, slow=26, signal=9, **p: _macd_histogram(
         df, int(fast), int(slow), int(signal)
     ),
     "stochastic_k": lambda df, k_period=14, d_period=3, smooth=3, **p: _stochastic_k(
@@ -421,17 +463,17 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "liquidity_sweep_bearish": lambda df, length=5, **p: liquidity_sweep_bearish(
         df["high"], df["low"], df["close"], int(length)
     ).astype(float),
-    "bos_bullish": lambda df, length=5, **p: bos_choch_bullish(
-        df["high"], df["low"], df["close"], int(length)
+    "bos_bullish": lambda df, length=5, break_basis="close", **p: bos_choch_bullish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
     )[0].astype(float),
-    "choch_bullish": lambda df, length=5, **p: bos_choch_bullish(
-        df["high"], df["low"], df["close"], int(length)
+    "choch_bullish": lambda df, length=5, break_basis="close", **p: bos_choch_bullish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
     )[1].astype(float),
-    "bos_bearish": lambda df, length=5, **p: bos_choch_bearish(
-        df["high"], df["low"], df["close"], int(length)
+    "bos_bearish": lambda df, length=5, break_basis="close", **p: bos_choch_bearish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
     )[0].astype(float),
-    "choch_bearish": lambda df, length=5, **p: bos_choch_bearish(
-        df["high"], df["low"], df["close"], int(length)
+    "choch_bearish": lambda df, length=5, break_basis="close", **p: bos_choch_bearish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
     )[1].astype(float),
     "breaker_block_bullish": lambda df, **p: breaker_block_bullish(
         df["open"], df["high"], df["low"], df["close"]
@@ -540,9 +582,15 @@ INDICATOR_REGISTRY: dict[str, Any] = {
         df["open"], df["high"], df["low"], df["close"],
         float(body_ratio_max), float(upper_wick_ratio_min), float(lower_wick_ratio_max),
     ).to_numpy(dtype=float),
-    "engulfing_bullish": lambda df, **p: _cdl.engulfing_bullish(df["open"], df["close"]).to_numpy(dtype=float),
-    "engulfing_bearish": lambda df, **p: _cdl.engulfing_bearish(df["open"], df["close"]).to_numpy(dtype=float),
-    "inside_bar": lambda df, **p: _cdl.inside_bar(df["high"], df["low"]).to_numpy(dtype=float),
+    "engulfing_bullish": lambda df, tolerance_pct=0.0, **p: _cdl.engulfing_bullish(
+        df["open"], df["close"], float(tolerance_pct)
+    ).to_numpy(dtype=float),
+    "engulfing_bearish": lambda df, tolerance_pct=0.0, **p: _cdl.engulfing_bearish(
+        df["open"], df["close"], float(tolerance_pct)
+    ).to_numpy(dtype=float),
+    "inside_bar": lambda df, min_mother_range_atr_mult=0.0, **p: _cdl.inside_bar(
+        df["high"], df["low"], df["close"], float(min_mother_range_atr_mult)
+    ).to_numpy(dtype=float),
     "outside_bar": lambda df, **p: _cdl.outside_bar(df["high"], df["low"]).to_numpy(dtype=float),
     "tweezer_top": lambda df, tolerance_pct=0.1, **p: _cdl.tweezer_top(
         df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
@@ -550,23 +598,35 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "tweezer_bottom": lambda df, tolerance_pct=0.1, **p: _cdl.tweezer_bottom(
         df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
     ).to_numpy(dtype=float),
-    "harami_bullish": lambda df, **p: _cdl.harami_bullish(df["open"], df["close"]).to_numpy(dtype=float),
-    "harami_bearish": lambda df, **p: _cdl.harami_bearish(df["open"], df["close"]).to_numpy(dtype=float),
-    "gap_up": lambda df, **p: _cdl.gap_up(df["open"], df["high"]).to_numpy(dtype=float),
-    "gap_down": lambda df, **p: _cdl.gap_down(df["open"], df["low"]).to_numpy(dtype=float),
-    "morning_star": lambda df, small_body_ratio=0.3, **p: _cdl.morning_star(
-        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    "harami_bullish": lambda df, containment_tolerance=0.0, **p: _cdl.harami_bullish(
+        df["open"], df["close"], float(containment_tolerance)
     ).to_numpy(dtype=float),
-    "evening_star": lambda df, small_body_ratio=0.3, **p: _cdl.evening_star(
-        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
+    "harami_bearish": lambda df, containment_tolerance=0.0, **p: _cdl.harami_bearish(
+        df["open"], df["close"], float(containment_tolerance)
     ).to_numpy(dtype=float),
-    "three_white_soldiers": lambda df, **p: _cdl.three_white_soldiers(df["open"], df["close"]).to_numpy(dtype=float),
-    "three_black_crows": lambda df, **p: _cdl.three_black_crows(df["open"], df["close"]).to_numpy(dtype=float),
-    "rising_three_methods": lambda df, **p: _cdl.rising_three_methods(
-        df["open"], df["high"], df["low"], df["close"]
+    "gap_up": lambda df, min_gap_atr_mult=0.0, **p: _cdl.gap_up(
+        df["open"], df["high"], df["low"], df["close"], float(min_gap_atr_mult)
     ).to_numpy(dtype=float),
-    "falling_three_methods": lambda df, **p: _cdl.falling_three_methods(
-        df["open"], df["high"], df["low"], df["close"]
+    "gap_down": lambda df, min_gap_atr_mult=0.0, **p: _cdl.gap_down(
+        df["open"], df["low"], df["high"], df["close"], float(min_gap_atr_mult)
+    ).to_numpy(dtype=float),
+    "morning_star": lambda df, small_body_ratio=0.3, close_position_ratio=0.5, require_gap=0, **p: _cdl.morning_star(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio), float(close_position_ratio), bool(int(require_gap))
+    ).to_numpy(dtype=float),
+    "evening_star": lambda df, small_body_ratio=0.3, close_position_ratio=0.5, require_gap=0, **p: _cdl.evening_star(
+        df["open"], df["high"], df["low"], df["close"], float(small_body_ratio), float(close_position_ratio), bool(int(require_gap))
+    ).to_numpy(dtype=float),
+    "three_white_soldiers": lambda df, min_body_ratio=0.0, **p: _cdl.three_white_soldiers(
+        df["open"], df["high"], df["low"], df["close"], float(min_body_ratio)
+    ).to_numpy(dtype=float),
+    "three_black_crows": lambda df, min_body_ratio=0.0, **p: _cdl.three_black_crows(
+        df["open"], df["high"], df["low"], df["close"], float(min_body_ratio)
+    ).to_numpy(dtype=float),
+    "rising_three_methods": lambda df, max_middle_body_ratio=1.0, **p: _cdl.rising_three_methods(
+        df["open"], df["high"], df["low"], df["close"], float(max_middle_body_ratio)
+    ).to_numpy(dtype=float),
+    "falling_three_methods": lambda df, max_middle_body_ratio=1.0, **p: _cdl.falling_three_methods(
+        df["open"], df["high"], df["low"], df["close"], float(max_middle_body_ratio)
     ).to_numpy(dtype=float),
     "consecutive_bullish_candles": lambda df, n=3, **p: _cdl.consecutive_bullish_candles(
         df["open"], df["close"], int(n)
@@ -598,11 +658,11 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "spinning_top": lambda df, body_ratio_max=0.3, wick_ratio_min=0.3, **p: _cdl.spinning_top(
         df["open"], df["high"], df["low"], df["close"], float(body_ratio_max), float(wick_ratio_min)
     ).to_numpy(dtype=float),
-    "kicker_bullish": lambda df, body_ratio_threshold=0.7, **p: _cdl.kicker_bullish(
-        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    "kicker_bullish": lambda df, body_ratio_threshold=0.7, require_gap=1, **p: _cdl.kicker_bullish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold), bool(int(require_gap))
     ).to_numpy(dtype=float),
-    "kicker_bearish": lambda df, body_ratio_threshold=0.7, **p: _cdl.kicker_bearish(
-        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold)
+    "kicker_bearish": lambda df, body_ratio_threshold=0.7, require_gap=1, **p: _cdl.kicker_bearish(
+        df["open"], df["high"], df["low"], df["close"], float(body_ratio_threshold), bool(int(require_gap))
     ).to_numpy(dtype=float),
     "belt_hold_bullish": lambda df, lower_wick_ratio_max=0.05, body_ratio_min=0.7, **p: _cdl.belt_hold_bullish(
         df["open"], df["high"], df["low"], df["close"], float(lower_wick_ratio_max), float(body_ratio_min)
@@ -616,24 +676,24 @@ INDICATOR_REGISTRY: dict[str, Any] = {
     "abandoned_baby_bearish": lambda df, small_body_ratio=0.1, **p: _cdl.abandoned_baby_bearish(
         df["open"], df["high"], df["low"], df["close"], float(small_body_ratio)
     ).to_numpy(dtype=float),
-    "three_inside_up": lambda df, **p: _cdl.three_inside_up(
-        df["open"], df["high"], df["low"], df["close"]
+    "three_inside_up": lambda df, containment_tolerance=0.0, **p: _cdl.three_inside_up(
+        df["open"], df["high"], df["low"], df["close"], float(containment_tolerance)
     ).to_numpy(dtype=float),
-    "three_inside_down": lambda df, **p: _cdl.three_inside_down(
-        df["open"], df["high"], df["low"], df["close"]
+    "three_inside_down": lambda df, containment_tolerance=0.0, **p: _cdl.three_inside_down(
+        df["open"], df["high"], df["low"], df["close"], float(containment_tolerance)
     ).to_numpy(dtype=float),
-    "three_outside_up": lambda df, **p: _cdl.three_outside_up(
-        df["open"], df["high"], df["low"], df["close"]
+    "three_outside_up": lambda df, tolerance_pct=0.0, **p: _cdl.three_outside_up(
+        df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
     ).to_numpy(dtype=float),
-    "three_outside_down": lambda df, **p: _cdl.three_outside_down(
-        df["open"], df["high"], df["low"], df["close"]
+    "three_outside_down": lambda df, tolerance_pct=0.0, **p: _cdl.three_outside_down(
+        df["open"], df["high"], df["low"], df["close"], float(tolerance_pct)
     ).to_numpy(dtype=float),
     # ラウンドナンバー(キリ番)までの距離 - engine/technical_indicators.pyの
     # round_number_distance_pipsは旧filters.pyでは使われていたが、条件ツリー
     # エンジンにはまだ繋がれていなかった。pip_sizeは通貨ペアごとに違うため
     # (JPYペアは0.01、それ以外は0.0001)、条件側のparamsで明示指定する。
-    "dist_to_round_number": lambda df, pip_size=0.01, **p: _round_number_distance_pips(
-        df["close"], float(pip_size)
+    "dist_to_round_number": lambda df, pip_size=0.01, round_interval=1.0, **p: _round_number_distance_pips(
+        df["close"], float(pip_size), float(round_interval)
     ).to_numpy(dtype=float),
 }
 
@@ -643,6 +703,7 @@ INDICATOR_REGISTRY: dict[str, Any] = {
 # docstring for why it's a separate file.
 INDICATOR_REGISTRY.update(_derived.DISTANCE_INDICATORS)
 INDICATOR_REGISTRY.update(_derived.SLOPE_INDICATORS)
+INDICATOR_REGISTRY.update(_derived.CONSECUTIVE_SLOPE_INDICATORS)
 INDICATOR_REGISTRY.update({
     # SMC zone distance
     "dist_order_block_bullish": _derived.dist_to_order_block_bullish,
@@ -657,6 +718,7 @@ INDICATOR_REGISTRY.update({
     # 傾き系 extras (rising/falling for 7 series already merged in via
     # SLOPE_INDICATORS above)
     "ema_slope_degrees": _derived.ema_slope_degrees,
+    "ema_slope": _derived.ema_slope,
     "ema_roc": _derived.ema_roc,
     "atr_roc": _derived.atr_roc,
     "higher_high": _derived.higher_high,
@@ -667,6 +729,7 @@ INDICATOR_REGISTRY.update({
     "bb_percent_b": _derived.bb_percent_b,
     "donchian_percent_position": _derived.donchian_percent_position,
     "dist_to_ema_atr_ratio": _derived.dist_to_ema_atr_ratio,
+    "dist_close_ema_pct": _derived.dist_close_ema_pct,
     "today_range_pct_of_adr": _derived.today_range_pct_of_adr,
     "prev_day_mid": _derived.prev_day_mid,
     "today_range_position": _derived.today_range_position,
@@ -683,6 +746,7 @@ INDICATOR_REGISTRY.update({
     "atr_rolling_mean": _derived.atr_rolling_mean,
     "atr_deviation": _derived.atr_deviation,
     "close_rolling_std": _derived.close_rolling_std,
+    "historical_volatility": _derived.historical_volatility,
     "rsi_rolling_mean": _derived.rsi_rolling_mean,
     "rsi_deviation": _derived.rsi_deviation,
     "adx_rolling_mean": _derived.adx_rolling_mean,
@@ -787,6 +851,10 @@ INDICATOR_REGISTRY.update({
     "woodie_s1": lambda df, **p: _woodie_column(df, "s1"),
     "woodie_r2": lambda df, **p: _woodie_column(df, "r2"),
     "woodie_s2": lambda df, **p: _woodie_column(df, "s2"),
+    "woodie_r3": lambda df, **p: _woodie_column(df, "r3"),
+    "woodie_s3": lambda df, **p: _woodie_column(df, "s3"),
+    "woodie_r4": lambda df, **p: _woodie_column(df, "r4"),
+    "woodie_s4": lambda df, **p: _woodie_column(df, "s4"),
     "camarilla_r1": lambda df, **p: _camarilla_column(df, "r1"),
     "camarilla_r2": lambda df, **p: _camarilla_column(df, "r2"),
     "camarilla_r3": lambda df, **p: _camarilla_column(df, "r3"),
@@ -865,6 +933,50 @@ INDICATOR_REGISTRY.update({
     "diamond_formation_breakout_bullish": lambda df, **p: _chart.diamond_formation_breakout_bullish(df["high"], df["low"], df["close"], **p),
     "diamond_formation_breakout_bearish": lambda df, **p: _chart.diamond_formation_breakout_bearish(df["high"], df["low"], df["close"], **p),
     "cup_with_handle_breakout": lambda df, **p: _chart.cup_with_handle_breakout(df["high"], df["low"], df["close"], **p),
+})
+
+# 2026-07-19追加(レビュー対応、未実装だった指標): Bull Bear Power/Chaikin
+# Oscillator/CMO/Connors RSI/Coppock Curve/相関係数/相関オシレーター/
+# Bollinger Band Width%
+INDICATOR_REGISTRY.update({
+    "bull_power": _derived.bull_power,
+    "bear_power": _derived.bear_power,
+    "chaikin_oscillator": _derived.chaikin_oscillator,
+    "cmo": _derived.cmo,
+    "connors_rsi": _derived.connors_rsi,
+    "coppock_curve": _derived.coppock_curve,
+    "correlation_close_ema": _derived.correlation_close_ema,
+    "correlation_oscillator": _derived.correlation_oscillator,
+    "bb_width_percent": _derived.bb_width_percent,
+})
+
+# 2026-07-19追加(レビュー対応、未実装だった新規パターン): Equal High/Low、
+# MSS、Three Line Strike、Tasuki Gap。
+INDICATOR_REGISTRY.update({
+    "equal_high": lambda df, swing_lookback=5, tolerance_atr_mult=0.3, **p: _chart.equal_high(
+        df["high"], df["low"], df["close"], int(swing_lookback), float(tolerance_atr_mult)
+    ),
+    "equal_low": lambda df, swing_lookback=5, tolerance_atr_mult=0.3, **p: _chart.equal_low(
+        df["high"], df["low"], df["close"], int(swing_lookback), float(tolerance_atr_mult)
+    ),
+    "mss_bullish": lambda df, length=5, break_basis="close", **p: mss_bullish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
+    ).astype(float),
+    "mss_bearish": lambda df, length=5, break_basis="close", **p: mss_bearish(
+        df["high"], df["low"], df["close"], int(length), str(break_basis)
+    ).astype(float),
+    "three_line_strike_bullish": lambda df, **p: _cdl.three_line_strike_bullish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "three_line_strike_bearish": lambda df, **p: _cdl.three_line_strike_bearish(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "tasuki_gap_upside": lambda df, **p: _cdl.tasuki_gap_upside(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
+    "tasuki_gap_downside": lambda df, **p: _cdl.tasuki_gap_downside(
+        df["open"], df["high"], df["low"], df["close"]
+    ).to_numpy(dtype=float),
 })
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}

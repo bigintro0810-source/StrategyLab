@@ -48,11 +48,26 @@ def load_registry() -> list[dict]:
 
 
 def _write_registry(entries: list[dict]) -> None:
+    """Writes via a temp file + atomic rename rather than REGISTRY_FILE.
+    write_text() directly - a plain write_text() truncates-then-writes in
+    place, so two concurrent saves (e.g. the same row's 🔖 clicked twice in
+    quick succession, or a save racing a rename/delete) can interleave
+    mid-write and leave registry.json as a corrupted hybrid of both writes
+    (invalid JSON, breaking every /api/strategies read - actually hit this:
+    a rapid double-save left the file with an extra stray ']' followed by
+    a truncated second document, losing several entries until manually
+    recovered from each entry's own saved_strategies/{id}/ranking_total.csv
+    snapshot). Path.replace() is an atomic rename on both POSIX and Windows,
+    so any concurrent writer's version fully wins rather than interleaving -
+    a "last write wins" race can still drop one writer's update, but the
+    file itself can never end up corrupted/unparseable."""
     REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    REGISTRY_FILE.write_text(
+    tmp_path = REGISTRY_FILE.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    tmp_path.replace(REGISTRY_FILE)
 
 
 def save_strategy(

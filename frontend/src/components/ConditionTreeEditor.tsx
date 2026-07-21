@@ -1,5 +1,7 @@
 import type { ConditionNode, GroupNode, IndicatorInfo, TreeNode } from '../types'
 import { isGroup } from '../types'
+import { simplifyConditionTree } from '../conditionTreeUtils'
+import { groupIndicatorsByGenre } from '../conditionGenres'
 import ConditionRow, { defaultParamsFor } from './ConditionRow'
 
 interface Props {
@@ -10,8 +12,13 @@ interface Props {
   depth?: number
 }
 
+// 新しい条件のデフォルト指標は、生のindicators配列の先頭(たまたま「終値」
+// など価格データ側になっていた)ではなく、一番上のジャンル「インジケーター」
+// の先頭(EMAなど)にする(ユーザー報告:「インジケーター等ジャンルを選択する
+// 際に最初価格データが選択されてる。一番上がインジケーターだから
+// インジケーターを選択していてほしい」)。
 function defaultCondition(indicators: IndicatorInfo[]): ConditionNode {
-  const first = indicators[0]
+  const first = groupIndicatorsByGenre(indicators)[0]?.items[0] ?? indicators[0]
   return {
     indicator: first?.id ?? 'close',
     operator: '>',
@@ -28,38 +35,53 @@ function defaultGroup(indicators: IndicatorInfo[]): GroupNode {
 export default function ConditionTreeEditor({ node, indicators, onChange, onRemove, depth = 0 }: Props) {
   const isNot = node.op === 'NOT'
 
+  // グループの追加・削除を繰り返すと、子が1つだけの無意味な入れ子グループ
+  // (AND(OR(AND(...)))など)が残ってしまうことがある(ユーザー報告:
+  // 「グループをたくさん追加してから削除した際に画像のようにORの中に
+  // ANDの中にANDが残ってしまう」)。ネストした各ConditionTreeEditorの
+  // onChangeは最終的に全て一番外側(depth===0)のonChangeへ伝播するため、
+  // そこだけで畳み込めば、ツリーのどの階層で行った操作でも自動的に整理
+  // される。
+  const emit = (next: GroupNode) => {
+    onChange(depth === 0 ? (simplifyConditionTree(next) as GroupNode) : next)
+  }
+
   const updateChild = (index: number, child: TreeNode) => {
     const children = node.children.slice()
     children[index] = child
-    onChange({ ...node, children })
+    emit({ ...node, children })
   }
 
   const removeChild = (index: number) => {
     const children = node.children.slice()
     children.splice(index, 1)
-    onChange({ ...node, children })
+    emit({ ...node, children })
   }
 
   const addCondition = () => {
     if (isNot && node.children.length >= 1) return
-    onChange({ ...node, children: [...node.children, defaultCondition(indicators)] })
+    emit({ ...node, children: [...node.children, defaultCondition(indicators)] })
   }
 
   const addGroup = () => {
     if (isNot && node.children.length >= 1) return
-    onChange({ ...node, children: [...node.children, defaultGroup(indicators)] })
+    emit({ ...node, children: [...node.children, defaultGroup(indicators)] })
   }
 
   return (
     <div
-      className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-2"
+      // ANDのグループだけ枠で囲む(標準的な演算子の優先順位と同じ感覚 - ANDは
+      // ORより強く結びつくので、その部分だけ括弧のように視覚的にまとめる)。
+      // OR/NOTは枠なしにする(ユーザー要望:「AandBは囲ってAorBとAnotBは
+      // 囲わないで」)。
+      className={`space-y-2 rounded-lg p-2 ${node.op === 'AND' ? 'border border-white/10 bg-white/[0.02]' : ''}`}
       style={{ marginLeft: depth > 0 ? 12 : 0 }}
     >
       <div className="flex items-center gap-2">
         <select
           className="glass-input rounded-lg px-2 py-1 text-sm font-semibold"
           value={node.op}
-          onChange={(e) => onChange({ ...node, op: e.target.value as GroupNode['op'] })}
+          onChange={(e) => emit({ ...node, op: e.target.value as GroupNode['op'] })}
         >
           <option value="AND">AND</option>
           <option value="OR">OR</option>

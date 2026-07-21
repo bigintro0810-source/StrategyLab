@@ -19,11 +19,13 @@ import json
 import os
 import re
 import sys
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,10 +33,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine.conditions import INDICATOR_REGISTRY
+from engine.conditions import INDICATOR_REGISTRY, _infer_timeframe_label, _resolve_series
 from engine.indicator_pool import CATEGORIES, INDICATOR_POOL, LEVEL_PRESETS
 from engine.params import reconstruct_params_from_row
 from engine.pdf_report import export_pdf_report
+from engine.pine_generator import generate_pine_script
+from engine.monte_carlo import run_monte_carlo as _run_monte_carlo_sim
 from engine.strategy_registry import (
     add_tags,
     delete_strategy,
@@ -42,6 +46,7 @@ from engine.strategy_registry import (
     list_strategies,
     remove_tag,
     rename_strategy,
+    save_strategy,
     set_memo,
     toggle_favorite,
 )
@@ -53,7 +58,7 @@ from engine.collection_registry import (
     remove_strategy as remove_strategy_from_collection,
     rename_collection,
 )
-from main import SUPPORTED_SYMBOLS, find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
+from main import DATA_DIRS, find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
 
 app = FastAPI(title="Strategy Lab API")
 
@@ -320,7 +325,133 @@ def _extract_friendly_error(stderr: str) -> str:
     )
 
 
-async def _run_job(job_id: str, cmd: list[str]) -> None:
+# JOBS(下)はこのプロセスのメモリ上にしかないため、api-server自体が再起動
+# されると全て消える - main.py/reverse_strategies.pyが書き出すCSV自体は
+# ディスクに残っているのに、job_idベースのAPIだけがJOBS.get(job_id)==Noneで
+# 404を返すようになってしまう(結果/反転ストラテジー両タブが再起動のたびに
+# 消えて見える原因)。output/_state/配下の小さなポインタファイルに「最後に
+# 開始した探索ジョブ」「今セッション中の反転バッチ一覧」を書いておき、
+# JOBSに無いjob_idでもこのポインタと一致すればディスクの中身から結果を
+# 復元できるようにする(_resolve_job_or_restore/get_reverse_current_results
+# 参照)。新しい探索を実行した時だけ上書き/クリアする(create_backtest内)。
+STATE_DIR = Path("output") / "_state"
+LAST_BACKTEST_FILE = STATE_DIR / "last_backtest.json"
+REVERSE_BATCHES_FILE = STATE_DIR / "reverse_batches.json"
+
+
+def _write_last_backtest_pointer(
+    job_id: str,
+    symbol: str,
+    timeframe: str,
+    mode: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    LAST_BACKTEST_FILE.write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "mode": mode,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _read_last_backtest_pointer() -> dict | None:
+    if not LAST_BACKTEST_FILE.exists():
+        return None
+    try:
+        return json.loads(LAST_BACKTEST_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _read_all_reverse_batches() -> dict[str, list[str]]:
+    if not REVERSE_BATCHES_FILE.exists():
+        return {}
+    try:
+        data = json.loads(REVERSE_BATCHES_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    # 旧形式(フラットなlist)との後方互換 - resultsタブ由来として扱う。
+    if isinstance(data, list):
+        return {"results": data}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_reverse_batches(origin: str) -> list[str]:
+    """originは'results'(結果のランキング一覧由来)または'library'
+    (保存済みストラテジー/お気に入り由来) - 反転ストラテジータブを結果側
+    とライブラリ側で別々のデータにするため、バッチ一覧自体をorigin別に
+    分けて持つ。"""
+    return _read_all_reverse_batches().get(origin, [])
+
+
+def _append_reverse_batch(job_id: str, origin: str) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    data = _read_all_reverse_batches()
+    batches = data.get(origin, [])
+    if job_id not in batches:
+        batches.append(job_id)
+    data[origin] = batches
+    REVERSE_BATCHES_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _clear_reverse_batches() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    REVERSE_BATCHES_FILE.write_text(json.dumps({"results": [], "library": []}), encoding="utf-8")
+
+
+def _resolve_job_or_restore(job_id: str) -> dict | None:
+    """JOBSにこのjob_idが無くても、output/_state/last_backtest.jsonの
+    ポインタと一致すれば、そのsymbol/timeframeのranking_total.csvが実在する
+    かどうかからstatusを組み立てて返す(api-server自体を再起動した後でも
+    結果タブが復元できるようにするための代替経路 - 通常はJOBS.get(job_id)
+    がそのまま返る)。"""
+    job = JOBS.get(job_id)
+    if job is not None:
+        return job
+
+    pointer = _read_last_backtest_pointer()
+    if pointer is None or pointer.get("job_id") != job_id:
+        return None
+
+    pointer_symbol = pointer.get("symbol", "USDJPY")
+    pointer_timeframe = pointer.get("timeframe", "15m")
+    ranking_path = resolve_output_dir(pointer_symbol, pointer_timeframe) / "ranking_total.csv"
+    if ranking_path.exists():
+        return {
+            "status": "done",
+            "symbol": pointer_symbol,
+            "timeframe": pointer_timeframe,
+            "mode": pointer.get("mode", "dev"),
+            "start_date": pointer.get("start_date"),
+            "end_date": pointer.get("end_date"),
+            "stdout": "",
+            "stderr": "",
+            "stop_requested": False,
+        }
+    return {
+        "status": "error",
+        "symbol": pointer_symbol,
+        "timeframe": pointer_timeframe,
+        "mode": pointer.get("mode", "dev"),
+        "start_date": pointer.get("start_date"),
+        "end_date": pointer.get("end_date"),
+        "stdout": "",
+        "stderr": "バックエンドの再起動により、この実行の進捗を復元できませんでした。もう一度実行してください。",
+        "stop_requested": False,
+    }
+
+
+async def _run_job(job_id: str, cmd: list[str], on_done: Optional[Callable[[], None]] = None) -> None:
     JOBS[job_id]["status"] = "running"
 
     # Without an explicit UTF-8 override, main.py's own stdout/stderr encoding
@@ -347,6 +478,9 @@ async def _run_job(job_id: str, cmd: list[str]) -> None:
     JOBS[job_id]["stdout"] = stdout.decode("utf-8", errors="replace")
     JOBS[job_id]["stderr"] = stderr.decode("utf-8", errors="replace")
     JOBS[job_id]["status"] = "done" if process.returncode == 0 else "error"
+
+    if on_done is not None and JOBS[job_id]["status"] == "done":
+        on_done()
 
 
 @app.post("/api/backtests")
@@ -434,9 +568,24 @@ async def create_backtest(req: BacktestRequest) -> dict:
         "symbol": req.symbol,
         "timeframe": req.timeframe,
         "mode": req.mode,
+        # ランキング行の再実行/保存(rerun_ranking_row/save_ranking_row)が
+        # この期間指定を引き継ぐために必要(実際に踏んだ不具合: 期間指定
+        # ありで実行した結果を保存すると、保存されるtrade_log.csv等が
+        # 期間指定なし(全期間)で再計算されてしまい、登録簿の成績と
+        # 実際の中身が食い違っていた)。
+        "start_date": req.start_date,
+        "end_date": req.end_date,
         "stdout": "",
         "stderr": "",
     }
+
+    # 新しい探索を開始した瞬間に「最後の探索」ポインタを上書きし、反転
+    # バッチの一覧もクリアする - 結果/反転ストラテジー両タブがソフトの
+    # 再起動では消えず、新しい探索を実行した時だけ消えるようにするため
+    # (このポインタはJOBS(メモリ上)と違ってディスク上に残るので、再起動後も
+    # _resolve_job_or_restoreがここから結果を復元できる)。
+    _write_last_backtest_pointer(job_id, req.symbol, req.timeframe, req.mode, req.start_date, req.end_date)
+    _clear_reverse_batches()
 
     asyncio.create_task(_run_job(job_id, cmd))
 
@@ -472,8 +621,14 @@ async def rerun_ranking_row(job_id: str, rank: int) -> dict:
     curve/trade history/stats, not just the auto-run top-ranked one. Returns
     a NEW job_id, pollable through the exact same /api/backtests/{job_id}
     and /api/backtests/{job_id}/results endpoints as any other backtest -
-    no new frontend polling logic needed beyond what already exists."""
-    job = JOBS.get(job_id)
+    no new frontend polling logic needed beyond what already exists.
+
+    Uses _resolve_job_or_restore rather than a raw JOBS.get() - unlike the
+    read-only status/results endpoints, this one used to 404 forever after
+    an api-server restart (JOBS is in-memory only) even though the ranking
+    table itself still displayed fine via the same restore path, which made
+    詳細/比較/合成 checkboxes silently get stuck re-running indefinitely."""
+    job = _resolve_job_or_restore(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["status"] != "done":
@@ -486,6 +641,10 @@ async def rerun_ranking_row(job_id: str, rank: int) -> dict:
         "--timeframe", job["timeframe"],
         "--rank", str(rank),
     ]
+    if job.get("start_date"):
+        cmd += ["--start-date", job["start_date"]]
+    if job.get("end_date"):
+        cmd += ["--end-date", job["end_date"]]
 
     JOBS[new_job_id] = {
         "status": "queued",
@@ -516,7 +675,7 @@ async def save_ranking_row(job_id: str, rank: int, req: SaveRowRequest) -> dict:
     only way to read the resulting entry back out of a fire-and-forget
     subprocess is the SAVE_RESULT_JSON: stdout marker (see
     _extract_friendly_error's own precedent for stdout-marker parsing)."""
-    job = JOBS.get(job_id)
+    job = _resolve_job_or_restore(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["status"] != "done":
@@ -533,6 +692,10 @@ async def save_ranking_row(job_id: str, rank: int, req: SaveRowRequest) -> dict:
     ]
     if req.favorite:
         cmd.append("--favorite")
+    if job.get("start_date"):
+        cmd += ["--start-date", job["start_date"]]
+    if job.get("end_date"):
+        cmd += ["--end-date", job["end_date"]]
 
     JOBS[new_job_id] = {
         "status": "queued",
@@ -582,7 +745,7 @@ def _read_progress(symbol: str, timeframe: str) -> dict | None:
 
 @app.get("/api/backtests/{job_id}")
 async def get_backtest_status(job_id: str) -> dict:
-    job = JOBS.get(job_id)
+    job = _resolve_job_or_restore(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
@@ -613,20 +776,28 @@ def _read_csv_records(path: Path) -> list[dict]:
     df = pd.read_csv(path)
     records = json.loads(df.to_json(orient="records", date_format="iso"))
 
-    # condition_tree cells are Python repr strings (single-quoted, True/
-    # False/None) - main.py writes the params dict straight to CSV via
-    # pandas, it doesn't go through json.dumps anywhere in that pipeline.
-    # Parse them back into real nested objects here so the frontend can
-    # render the actual tree (engine/structure_generator.py's auto-generated
-    # ones especially) instead of an opaque string. ast.literal_eval is safe
-    # here (unlike eval) since it only ever evaluates Python literals, never
+    # condition_tree/long_condition_tree/short_condition_tree cells are Python
+    # repr strings (single-quoted, True/False/None) - main.py writes the
+    # params dict straight to CSV via pandas, it doesn't go through
+    # json.dumps anywhere in that pipeline. Parse them back into real nested
+    # objects here so the frontend can render the actual tree
+    # (engine/structure_generator.py's auto-generated ones especially, and
+    # 双方向(dual-direction) strategies' long/short trees) instead of an
+    # opaque string - long_condition_tree/short_condition_tree were missing
+    # here originally, which meant the frontend received the raw repr string
+    # for dual-direction rows and crashed trying to treat it as a tree object
+    # (actual bug hit: ランキング一覧全体が「条件」列のレンダリングで丸ごと
+    # クラッシュし、画面が真っ白になった). ast.literal_eval is safe here
+    # (unlike eval) since it only ever evaluates Python literals, never
     # arbitrary expressions - and this file is one we generated ourselves.
-    if "condition_tree" in df.columns:
+    for tree_col in ("condition_tree", "long_condition_tree", "short_condition_tree"):
+        if tree_col not in df.columns:
+            continue
         for record in records:
-            raw = record.get("condition_tree")
+            raw = record.get(tree_col)
             if isinstance(raw, str):
                 try:
-                    record["condition_tree"] = ast.literal_eval(raw)
+                    record[tree_col] = ast.literal_eval(raw)
                 except (ValueError, SyntaxError):
                     pass
 
@@ -635,7 +806,7 @@ def _read_csv_records(path: Path) -> list[dict]:
 
 @app.get("/api/backtests/{job_id}/results")
 async def get_backtest_results(job_id: str) -> dict:
-    job = JOBS.get(job_id)
+    job = _resolve_job_or_restore(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["status"] != "done":
@@ -697,6 +868,7 @@ INDICATOR_LABELS: dict[str, str] = {
     "bollinger_lower": "ボリンジャー下限",
     "macd_line": "MACDライン",
     "macd_signal": "MACDシグナル",
+    "macd_histogram": "MACDヒストグラム",
     "stochastic_k": "ストキャスティクス%K",
     "stochastic_d": "ストキャスティクス%D",
     "adx": "ADX",
@@ -836,7 +1008,31 @@ INDICATOR_LABELS: dict[str, str] = {
     "macd_falling": "MACD下降中",
     "atr_rising": "ATR増加中",
     "atr_falling": "ATR減少中",
+    "obv_rising": "OBV上昇中",
+    "obv_falling": "OBV下降中",
+    "mfi_rising": "MFI上昇中",
+    "mfi_falling": "MFI下降中",
+    # 「N本連続で上昇/下降」版(上のrising/fallingは直前バーとの比較のみ)
+    "ema_consecutive_rising": "EMAがN本連続で上昇",
+    "ema_consecutive_falling": "EMAがN本連続で下降",
+    "vwap_consecutive_rising": "VWAPがN本連続で上昇",
+    "vwap_consecutive_falling": "VWAPがN本連続で下降",
+    "supertrend_consecutive_rising": "SuperTrendラインがN本連続で上昇",
+    "supertrend_consecutive_falling": "SuperTrendラインがN本連続で下降",
+    "rsi_consecutive_rising": "RSIがN本連続で上昇",
+    "rsi_consecutive_falling": "RSIがN本連続で下降",
+    "adx_consecutive_rising": "ADXがN本連続で上昇",
+    "adx_consecutive_falling": "ADXがN本連続で下降",
+    "macd_consecutive_rising": "MACDがN本連続で上昇",
+    "macd_consecutive_falling": "MACDがN本連続で下降",
+    "atr_consecutive_rising": "ATRがN本連続で増加",
+    "atr_consecutive_falling": "ATRがN本連続で減少",
+    "obv_consecutive_rising": "OBVがN本連続で上昇",
+    "obv_consecutive_falling": "OBVがN本連続で下降",
+    "mfi_consecutive_rising": "MFIがN本連続で上昇",
+    "mfi_consecutive_falling": "MFIがN本連続で下降",
     "ema_slope_degrees": "EMA傾き(角度)",
+    "ema_slope": "EMA傾き(値差)",
     "ema_roc": "EMA変化率(%)",
     "atr_roc": "ATR変化率(%)",
     "higher_high": "Higher High(切り上がる高値)",
@@ -847,6 +1043,7 @@ INDICATOR_LABELS: dict[str, str] = {
     "bb_percent_b": "ボリンジャー%B(0=下限,0.5=中央,1=上限)",
     "donchian_percent_position": "ドンチアン内位置(0=下限,1=上限)",
     "dist_to_ema_atr_ratio": "EMAからの距離(ATR倍数)",
+    "dist_close_ema_pct": "EMAからの距離(%)",
     "today_range_pct_of_adr": "本日レンジのADR比率(%)",
     "prev_day_mid": "前日レンジ中央値",
     "today_range_position": "本日レンジ内位置(0=安値,1=高値)",
@@ -863,6 +1060,7 @@ INDICATOR_LABELS: dict[str, str] = {
     "atr_rolling_mean": "ATRの移動平均",
     "atr_deviation": "ATRの移動平均からの乖離",
     "close_rolling_std": "終値の標準偏差(ヒストリカルボラティリティ)",
+    "historical_volatility": "ヒストリカルボラティリティ(正式・年率換算%)",
     "rsi_rolling_mean": "RSIの移動平均",
     "rsi_deviation": "RSIの移動平均からの乖離",
     "adx_rolling_mean": "ADXの移動平均",
@@ -878,6 +1076,7 @@ INDICATOR_LABELS: dict[str, str] = {
     "is_max_rsi_of_n": "過去N本でRSI最高",
     # エントリー専用イベント
     "bb_width": "ボリンジャーバンド幅",
+    "bb_width_percent": "ボリンジャーバンド幅(%表示)",
     "bb_squeeze": "ボリンジャースクイーズ発生中",
     "bb_expansion": "ボリンジャーエクスパンション開始",
     "supertrend_flip_bullish": "SuperTrend買い転換",
@@ -951,11 +1150,23 @@ INDICATOR_LABELS: dict[str, str] = {
     "ad_line": "A/Dライン(蓄積/分配)",
     "mfi": "MFI(マネーフローインデックス)",
     "cmf": "CMF(チャイキンマネーフロー)",
+    "bull_power": "Bull Power(買い圧力)",
+    "bear_power": "Bear Power(売り圧力)",
+    "chaikin_oscillator": "Chaikin Oscillator",
+    "cmo": "CMO(チャンデ・モメンタム・オシレーター)",
+    "connors_rsi": "Connors RSI",
+    "coppock_curve": "Coppock Curve",
+    "correlation_close_ema": "終値とEMAの相関係数",
+    "correlation_oscillator": "相関オシレーター(価格とトレンドの一貫性)",
     "woodie_pivot": "Woodieピボット",
     "woodie_r1": "Woodie R1",
     "woodie_s1": "Woodie S1",
     "woodie_r2": "Woodie R2",
     "woodie_s2": "Woodie S2",
+    "woodie_r3": "Woodie R3",
+    "woodie_s3": "Woodie S3",
+    "woodie_r4": "Woodie R4",
+    "woodie_s4": "Woodie S4",
     "camarilla_r1": "Camarilla R1",
     "camarilla_r2": "Camarilla R2",
     "camarilla_r3": "Camarilla R3",
@@ -1019,6 +1230,14 @@ INDICATOR_LABELS: dict[str, str] = {
     "diamond_formation_breakout_bullish": "ダイヤモンドフォーメーション 上抜けブレイク",
     "diamond_formation_breakout_bearish": "ダイヤモンドフォーメーション 下抜けブレイク",
     "cup_with_handle_breakout": "カップウィズハンドル ブレイクアウト",
+    "equal_high": "Equal High(直近高値がほぼ同水準に並ぶ、流動性プール)",
+    "equal_low": "Equal Low(直近安値がほぼ同水準に並ぶ、流動性プール)",
+    "mss_bullish": "MSS(強気/Market Structure Shift)",
+    "mss_bearish": "MSS(弱気/Market Structure Shift)",
+    "three_line_strike_bullish": "Three Line Strike(強気)",
+    "three_line_strike_bearish": "Three Line Strike(弱気)",
+    "tasuki_gap_upside": "上放れタスキ型",
+    "tasuki_gap_downside": "下放れタスキ型",
 }
 
 # Per-indicator adjustable parameters, in the exact order/names/defaults
@@ -1032,6 +1251,26 @@ INDICATOR_LABELS: dict[str, str] = {
 # param instead. type="choice" (fib's ratio) renders a <select> of the
 # listed values rather than a free-entry number field, since only specific
 # conventional ratios are meaningful.
+
+# ボリンジャーバンドのsource選択肢 - engine/conditions.py::_PRICE_SOURCESの
+# キーと1対1対応(そちらを追加/変更したらここも合わせる)。
+_BOLLINGER_SOURCE_CHOICES: list[dict] = [
+    {"value": "close", "label": "終値(Close)"},
+    {"value": "open", "label": "始値(Open)"},
+    {"value": "high", "label": "高値(High)"},
+    {"value": "low", "label": "安値(Low)"},
+    {"value": "hl2", "label": "HL2((高値+安値)/2)"},
+    {"value": "hlc3", "label": "HLC3((高値+安値+終値)/3)"},
+    {"value": "ohlc4", "label": "OHLC4((始値+高値+安値+終値)/4)"},
+]
+
+# BOS/CHoCHのブレイク判定基準 - engine/smc_indicators.py::bos_choch_bullish/
+# bearishのbreak_basisパラメータと1対1対応。
+_BREAK_BASIS_CHOICES: list[dict] = [
+    {"value": "close", "label": "終値ブレイク"},
+    {"value": "wick", "label": "ヒゲ(高値/安値)ブレイク"},
+]
+
 INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     "ema": [{"name": "length", "label": "期間", "default": 200, "type": "int"}],
     "sma": [{"name": "length", "label": "期間", "default": 200, "type": "int"}],
@@ -1045,14 +1284,17 @@ INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     "bollinger_upper": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
         {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
+        {"name": "source", "label": "Source", "default": "close", "type": "string_choice", "string_choices": _BOLLINGER_SOURCE_CHOICES},
     ],
     "bollinger_middle": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
         {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
+        {"name": "source", "label": "Source", "default": "close", "type": "string_choice", "string_choices": _BOLLINGER_SOURCE_CHOICES},
     ],
     "bollinger_lower": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
         {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
+        {"name": "source", "label": "Source", "default": "close", "type": "string_choice", "string_choices": _BOLLINGER_SOURCE_CHOICES},
     ],
     "macd_line": [
         {"name": "fast", "label": "短期", "default": 12, "type": "int"},
@@ -1060,6 +1302,11 @@ INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
         {"name": "signal", "label": "シグナル期間", "default": 9, "type": "int"},
     ],
     "macd_signal": [
+        {"name": "fast", "label": "短期", "default": 12, "type": "int"},
+        {"name": "slow", "label": "長期", "default": 26, "type": "int"},
+        {"name": "signal", "label": "シグナル期間", "default": 9, "type": "int"},
+    ],
+    "macd_histogram": [
         {"name": "fast", "label": "短期", "default": 12, "type": "int"},
         {"name": "slow", "label": "長期", "default": 26, "type": "int"},
         {"name": "signal", "label": "シグナル期間", "default": 9, "type": "int"},
@@ -1087,10 +1334,22 @@ INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     ],
     "liquidity_sweep_bullish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
     "liquidity_sweep_bearish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
-    "bos_bullish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
-    "bos_bearish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
-    "choch_bullish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
-    "choch_bearish": [{"name": "length", "label": "期間", "default": 5, "type": "int"}],
+    "bos_bullish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
+    "bos_bearish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
+    "choch_bullish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
+    "choch_bearish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
     "adr": [{"name": "adr_period", "label": "期間", "default": 14, "type": "int"}],
     "ichimoku_tenkan": [
         {"name": "tenkan_period", "label": "転換線期間", "default": 9, "type": "int"},
@@ -1192,9 +1451,34 @@ INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     ],
     "morning_star": [
         {"name": "small_body_ratio", "label": "中央実体率上限", "default": 0.3, "type": "choice", "choices": [0.2, 0.3, 0.4]},
+        {"name": "close_position_ratio", "label": "押し戻し位置(1本目実体に対する比率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.7, 1.0]},
+        {"name": "require_gap", "label": "Gap必須(1=必須/0=不要、FXは0推奨)", "default": 0, "type": "choice", "choices": [0, 1]},
     ],
     "evening_star": [
         {"name": "small_body_ratio", "label": "中央実体率上限", "default": 0.3, "type": "choice", "choices": [0.2, 0.3, 0.4]},
+        {"name": "close_position_ratio", "label": "押し戻し位置(1本目実体に対する比率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.7, 1.0]},
+        {"name": "require_gap", "label": "Gap必須(1=必須/0=不要、FXは0推奨)", "default": 0, "type": "choice", "choices": [0, 1]},
+    ],
+    "three_white_soldiers": [
+        {"name": "min_body_ratio", "label": "各足の実体率下限(0=問わない)", "default": 0.0, "type": "choice", "choices": [0.0, 0.3, 0.5, 0.7]},
+    ],
+    "three_black_crows": [
+        {"name": "min_body_ratio", "label": "各足の実体率下限(0=問わない)", "default": 0.0, "type": "choice", "choices": [0.0, 0.3, 0.5, 0.7]},
+    ],
+    "rising_three_methods": [
+        {"name": "max_middle_body_ratio", "label": "中間3本の実体率上限(1.0=問わない)", "default": 1.0, "type": "choice", "choices": [0.3, 0.5, 0.7, 1.0]},
+    ],
+    "falling_three_methods": [
+        {"name": "max_middle_body_ratio", "label": "中間3本の実体率上限(1.0=問わない)", "default": 1.0, "type": "choice", "choices": [0.3, 0.5, 0.7, 1.0]},
+    ],
+    "gap_up": [
+        {"name": "min_gap_atr_mult", "label": "最小Gapサイズ(ATR倍率、0=問わない)", "default": 0.0, "type": "choice", "choices": [0.0, 0.1, 0.25, 0.5]},
+    ],
+    "gap_down": [
+        {"name": "min_gap_atr_mult", "label": "最小Gapサイズ(ATR倍率、0=問わない)", "default": 0.0, "type": "choice", "choices": [0.0, 0.1, 0.25, 0.5]},
+    ],
+    "inside_bar": [
+        {"name": "min_mother_range_atr_mult", "label": "母足の最小レンジ(ATR倍率、0=問わない)", "default": 0.0, "type": "choice", "choices": [0.0, 0.3, 0.5, 1.0]},
     ],
     "consecutive_bullish_candles": [
         {"name": "n", "label": "連続本数", "default": 3, "type": "int"},
@@ -1271,6 +1555,10 @@ for _series, _spec in _SLOPE_PARAM_SPECS.items():
         INDICATOR_PARAM_SPECS[f"{_series}_{_direction}"] = [
             *_spec, {"name": "lookback", "label": "比較対象(Nバー前)", "default": 1, "type": "int"},
         ]
+    for _direction in ("consecutive_rising", "consecutive_falling"):
+        INDICATOR_PARAM_SPECS[f"{_series}_{_direction}"] = [
+            *_spec, {"name": "n", "label": "連続本数", "default": 3, "type": "int"},
+        ]
 
 INDICATOR_PARAM_SPECS.update({
     "dist_order_block_bullish": [],
@@ -1286,6 +1574,10 @@ INDICATOR_PARAM_SPECS.update({
         {"name": "lookback", "label": "比較対象(Nバー前)", "default": 5, "type": "int"},
     ],
     "ema_roc": [
+        {"name": "length", "label": "EMA期間", "default": 200, "type": "int"},
+        {"name": "lookback", "label": "比較対象(Nバー前)", "default": 5, "type": "int"},
+    ],
+    "ema_slope": [
         {"name": "length", "label": "EMA期間", "default": 200, "type": "int"},
         {"name": "lookback", "label": "比較対象(Nバー前)", "default": 5, "type": "int"},
     ],
@@ -1306,6 +1598,7 @@ INDICATOR_PARAM_SPECS.update({
         {"name": "ema_length", "label": "EMA期間", "default": 200, "type": "int"},
         {"name": "atr_length", "label": "ATR期間", "default": 14, "type": "int"},
     ],
+    "dist_close_ema_pct": [{"name": "length", "label": "EMA期間", "default": 200, "type": "int"}],
     "today_range_pct_of_adr": [{"name": "adr_period", "label": "ADR算出期間", "default": 14, "type": "int"}],
     "prev_day_mid": [],
     "today_range_position": [],
@@ -1318,10 +1611,22 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "rolling_mean_high": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "rolling_mean_low": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
-    "avg_body_size": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
-    "max_body_size": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
-    "min_body_size": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
-    "body_size_std": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
+    "avg_body_size": [
+        {"name": "length", "label": "期間", "default": 20, "type": "int"},
+        {"name": "exclude_current", "label": "現在バーを除外(1=除外/0=含む)", "default": 0, "type": "choice", "choices": [0, 1]},
+    ],
+    "max_body_size": [
+        {"name": "length", "label": "期間", "default": 20, "type": "int"},
+        {"name": "exclude_current", "label": "現在バーを除外(1=除外/0=含む、現在実体と比較するなら1推奨)", "default": 0, "type": "choice", "choices": [0, 1]},
+    ],
+    "min_body_size": [
+        {"name": "length", "label": "期間", "default": 20, "type": "int"},
+        {"name": "exclude_current", "label": "現在バーを除外(1=除外/0=含む、現在実体と比較するなら1推奨)", "default": 0, "type": "choice", "choices": [0, 1]},
+    ],
+    "body_size_std": [
+        {"name": "length", "label": "期間", "default": 20, "type": "int"},
+        {"name": "exclude_current", "label": "現在バーを除外(1=除外/0=含む)", "default": 0, "type": "choice", "choices": [0, 1]},
+    ],
     "avg_upper_wick": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "avg_lower_wick": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "atr_rolling_mean": [
@@ -1333,6 +1638,10 @@ INDICATOR_PARAM_SPECS.update({
         {"name": "window", "label": "移動平均期間", "default": 20, "type": "int"},
     ],
     "close_rolling_std": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
+    "historical_volatility": [
+        {"name": "period", "label": "期間", "default": 20, "type": "int"},
+        {"name": "annualization_factor", "label": "年率換算係数", "default": 252, "type": "int"},
+    ],
     "rsi_rolling_mean": [
         {"name": "rsi_length", "label": "RSI期間", "default": 14, "type": "int"},
         {"name": "window", "label": "移動平均期間", "default": 20, "type": "int"},
@@ -1376,6 +1685,34 @@ INDICATOR_PARAM_SPECS.update({
     "bb_width": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
         {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+    ],
+    "bb_width_percent": [
+        {"name": "period", "label": "期間", "default": 20, "type": "int"},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+    ],
+    "bull_power": [{"name": "length", "label": "EMA期間", "default": 13, "type": "int"}],
+    "bear_power": [{"name": "length", "label": "EMA期間", "default": 13, "type": "int"}],
+    "chaikin_oscillator": [
+        {"name": "short_length", "label": "短期EMA", "default": 3, "type": "int"},
+        {"name": "long_length", "label": "長期EMA", "default": 10, "type": "int"},
+    ],
+    "cmo": [{"name": "length", "label": "期間", "default": 14, "type": "int"}],
+    "connors_rsi": [
+        {"name": "rsi_length", "label": "RSI期間", "default": 3, "type": "int"},
+        {"name": "streak_length", "label": "Streak RSI期間", "default": 2, "type": "int"},
+        {"name": "percent_rank_length", "label": "Percent Rank期間", "default": 100, "type": "int"},
+    ],
+    "coppock_curve": [
+        {"name": "long_roc", "label": "長期ROC", "default": 14, "type": "int"},
+        {"name": "short_roc", "label": "短期ROC", "default": 11, "type": "int"},
+        {"name": "wma_length", "label": "WMA期間", "default": 10, "type": "int"},
+    ],
+    "correlation_close_ema": [
+        {"name": "length", "label": "相関算出期間", "default": 20, "type": "int"},
+        {"name": "ema_length", "label": "EMA期間", "default": 20, "type": "int"},
+    ],
+    "correlation_oscillator": [
+        {"name": "length", "label": "相関算出期間", "default": 20, "type": "int"},
     ],
     "bb_squeeze": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
@@ -1464,9 +1801,23 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "kicker_bullish": [
         {"name": "body_ratio_threshold", "label": "実体率下限", "default": 0.7, "type": "choice", "choices": [0.5, 0.6, 0.7, 0.8]},
+        {"name": "require_gap", "label": "Gap必須(1=必須/0=不要、株式等は1推奨・FXは0推奨)", "default": 1, "type": "choice", "choices": [1, 0]},
     ],
     "kicker_bearish": [
         {"name": "body_ratio_threshold", "label": "実体率下限", "default": 0.7, "type": "choice", "choices": [0.5, 0.6, 0.7, 0.8]},
+        {"name": "require_gap", "label": "Gap必須(1=必須/0=不要、株式等は1推奨・FXは0推奨)", "default": 1, "type": "choice", "choices": [1, 0]},
+    ],
+    "engulfing_bullish": [
+        {"name": "tolerance_pct", "label": "包み不足許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "engulfing_bearish": [
+        {"name": "tolerance_pct", "label": "包み不足許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "harami_bullish": [
+        {"name": "containment_tolerance", "label": "はみ出し許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "harami_bearish": [
+        {"name": "containment_tolerance", "label": "はみ出し許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
     ],
     "belt_hold_bullish": [
         {"name": "lower_wick_ratio_max", "label": "下ヒゲ率上限", "default": 0.05, "type": "choice", "choices": [0.02, 0.05, 0.1]},
@@ -1482,12 +1833,21 @@ INDICATOR_PARAM_SPECS.update({
     "abandoned_baby_bearish": [
         {"name": "small_body_ratio", "label": "中央実体率上限", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
     ],
-    "three_inside_up": [],
-    "three_inside_down": [],
-    "three_outside_up": [],
-    "three_outside_down": [],
+    "three_inside_up": [
+        {"name": "containment_tolerance", "label": "はみ出し許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "three_inside_down": [
+        {"name": "containment_tolerance", "label": "はみ出し許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "three_outside_up": [
+        {"name": "tolerance_pct", "label": "包み不足許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
+    "three_outside_down": [
+        {"name": "tolerance_pct", "label": "包み不足許容率", "default": 0.0, "type": "choice", "choices": [0.0, 0.05, 0.1, 0.2]},
+    ],
     "dist_to_round_number": [
         {"name": "pip_size", "label": "1pipのサイズ(JPYペア/XAUUSD=0.01, XAGUSD=0.001, それ以外=0.0001)", "default": 0.01, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
+        {"name": "round_interval", "label": "キリ番間隔(価格の生単位、例:USDJPYで0.5なら50銭刻み)", "default": 1.0, "type": "choice", "choices": [0.1, 0.5, 1.0, 5.0, 10.0]},
     ],
     "double_top_breakdown": [
         {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
@@ -1609,6 +1969,7 @@ INDICATOR_PARAM_SPECS.update({
     "mfi": [{"name": "period", "label": "期間", "default": 14, "type": "int"}],
     "cmf": [{"name": "period", "label": "期間", "default": 20, "type": "int"}],
     "woodie_pivot": [], "woodie_r1": [], "woodie_s1": [], "woodie_r2": [], "woodie_s2": [],
+    "woodie_r3": [], "woodie_s3": [], "woodie_r4": [], "woodie_s4": [],
     "camarilla_r1": [], "camarilla_r2": [], "camarilla_r3": [], "camarilla_r4": [],
     "camarilla_s1": [], "camarilla_s2": [], "camarilla_s3": [], "camarilla_s4": [],
     "fib_pivot": [], "fib_pivot_r1": [], "fib_pivot_r2": [], "fib_pivot_r3": [],
@@ -1779,6 +2140,29 @@ INDICATOR_PARAM_SPECS.update({
     ],
 })
 
+INDICATOR_PARAM_SPECS.update({
+    "equal_high": [
+        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
+        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.3, "type": "choice", "choices": [0.15, 0.3, 0.5]},
+    ],
+    "equal_low": [
+        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
+        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.3, "type": "choice", "choices": [0.15, 0.3, 0.5]},
+    ],
+    "mss_bullish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
+    "mss_bearish": [
+        {"name": "length", "label": "期間", "default": 5, "type": "int"},
+        {"name": "break_basis", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _BREAK_BASIS_CHOICES},
+    ],
+    "three_line_strike_bullish": [],
+    "three_line_strike_bearish": [],
+    "tasuki_gap_upside": [],
+    "tasuki_gap_downside": [],
+})
+
 
 _CATEGORY_LABELS: dict[str, str] = {
     "indicator": "インジケーター",
@@ -1789,6 +2173,20 @@ _CATEGORY_LABELS: dict[str, str] = {
 }
 
 _CATEGORY_BY_NAME: dict[str, str] = {spec.name: spec.category for spec in INDICATOR_POOL}
+# データ/チャートタブの指標オーバーレイで、価格軸に重ねるか別軸(オシレー
+# ター)にするかの判定に使う(_compute_indicator_series参照)。
+_KIND_BY_NAME: dict[str, str] = {spec.name: spec.kind for spec in INDICATOR_POOL}
+# 手動探索の条件ビルダーで「固定値」との比較を選べるかどうか(ConditionRow.
+# tsx参照) - price_level(EMA/SMA/高値/安値など)とvolatility(ATRなど)は、
+# シンボルごとに価格帯が違いすぎるため固定の数値と比較する意味がなく、
+# indicator_pool.pyでもliteral_range/literal_choicesがどちらも設定されて
+# いない(=指標同士の比較のみを意図した設計) - この2つに設定されていれば
+# 固定値との比較が可能(ユーザー要望:「EMAなどの固定値とは比較不可能な
+# ものを選択したときも固定値を設定するボックスが出るが、これが出現しない
+# ようにしてほしい」)。
+_ALLOW_LITERAL_BY_NAME: dict[str, bool] = {
+    spec.name: bool(spec.literal_range or spec.literal_choices) for spec in INDICATOR_POOL
+}
 
 
 @app.get("/api/indicators")
@@ -1799,6 +2197,11 @@ async def get_indicators() -> list[dict]:
             "label": INDICATOR_LABELS.get(name, name),
             "params": INDICATOR_PARAM_SPECS.get(name, []),
             "category": _CATEGORY_BY_NAME.get(name),
+            "allow_literal": _ALLOW_LITERAL_BY_NAME.get(name, True),
+            # ConditionRow.tsxが「EMA200より上」=「終値がEMA200より上」という
+            # 価格目線の自然な意味で演算子を解釈するために使う
+            # (kind=="price_level"の時だけ)。
+            "kind": _KIND_BY_NAME.get(name),
         }
         for name in INDICATOR_REGISTRY
     ]
@@ -1927,6 +2330,181 @@ async def get_saved_strategy_results(strategy_id: str) -> dict:
         "monthly_analysis": _read_csv_records(snapshot_dir / "monthly_analysis.csv"),
         "stability_analysis": _read_csv_records(snapshot_dir / "stability_analysis.csv"),
     }
+
+
+@app.get("/api/strategies/{strategy_id}/pine-script")
+async def get_strategy_pine_script(strategy_id: str) -> dict:
+    """condition_treeベースの保存済みストラテジーをPine Script(TradingView)に
+    変換する。対応範囲はengine/pine_generator.pyのコメント参照 - 対応外の
+    指標が含まれる場合はValueErrorのメッセージをそのまま400で返し、
+    フロント側でその文言を表示する(何が未対応か画面上で分かるように)。"""
+    entry = _get_saved_strategy_or_404(strategy_id)
+    params = entry["params"]
+    symbol = entry.get("symbol", "USDJPY")
+    timeframe = entry.get("timeframe", "15m")
+    title = f"StrategyLab {entry['name']}"
+
+    try:
+        script = generate_pine_script(params, symbol=symbol, timeframe=timeframe, strategy_title=title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"script": script, "filename": f"{strategy_id}.pine"}
+
+
+# データタブでストラテジーを選んだ時にチャート上へ重ねて表示する指標群 -
+# エントリー条件ツリーが実際に参照しているindicatorだけを動的に計算する
+# (~300種の指標を全部知っている必要はなく、ツリーを歩いて出てきたものだけ
+# engine.conditions._resolve_seriesに投げる、汎用エンジンの設計をそのまま
+# 流用)。'close'等の生の価格列はローソク足自体と重複するので除外する。
+_CHART_INDICATOR_SKIP = {"close", "open", "high", "low", "candle_body"}
+
+
+def _collect_chart_indicators(node: dict | None, out: dict[tuple, tuple]) -> None:
+    if not node:
+        return
+    if "children" in node:
+        for child in node["children"]:
+            _collect_chart_indicators(child, out)
+        return
+
+    indicator = node.get("indicator")
+    if indicator and indicator not in _CHART_INDICATOR_SKIP:
+        params = node.get("params") or {}
+        tf = node.get("timeframe")
+        key = (indicator, tuple(sorted(params.items())), tf)
+        out[key] = (indicator, params, tf)
+
+    value = node.get("value")
+    if isinstance(value, str) and value not in _CHART_INDICATOR_SKIP:
+        value_params = node.get("value_params") or {}
+        value_tf = node.get("value_timeframe")
+        key = (value, tuple(sorted(value_params.items())), value_tf)
+        out[key] = (value, value_params, value_tf)
+
+
+def _compute_indicator_series(df: pd.DataFrame, specs: list[tuple[str, dict, str | None]]) -> list[dict]:
+    """(indicator, params, timeframe)の組の列を、価格データに対して計算し
+    時系列で返す共通ロジック - 条件ツリーから抽出した組(_compute_chart_
+    indicators)か、データタブでユーザーが直接選んだ組(post_data_chart_
+    indicators)かを問わない。scaleは価格軸に重ねて意味のある値か(EMA/
+    ボリンジャー等)、別軸(RSI/MACD等)が要るかを、indicator_pool.pyの
+    kind("price_level"のみ価格軸、それ以外は別軸)で判定する - 以前は値の
+    絶対値の中央値をclose価格と比較する簡易ヒューリスティックだったが、
+    USDJPY(価格150前後)のRSI(0〜100)のように指標の値域が価格帯とたまたま
+    近い組み合わせで価格軸に誤判定される実バグがあったため、kindという
+    正確な分類済みメタデータを使うよう修正した。"""
+    cache: dict = {"__base_timeframe__": _infer_timeframe_label(df["datetime"])}
+    times = [t.isoformat() for t in df["datetime"]]
+
+    results = []
+    for indicator, ind_params, tf in specs:
+        if indicator not in INDICATOR_REGISTRY:
+            continue
+        try:
+            arr = np.asarray(_resolve_series(df, cache, indicator, ind_params, tf), dtype=float)
+        except Exception:
+            continue
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            continue
+        scale = "price" if _KIND_BY_NAME.get(indicator) == "price_level" else "oscillator"
+        values = [
+            {"time": t, "value": (float(v) if np.isfinite(v) else None)} for t, v in zip(times, arr)
+        ]
+        results.append(
+            {
+                "indicator": indicator,
+                "params": ind_params,
+                "timeframe": tf,
+                "scale": scale,
+                "values": values,
+            }
+        )
+
+    return results
+
+
+def _compute_chart_indicators(df: pd.DataFrame, trees: list[dict | None]) -> list[dict]:
+    """条件ツリーが実際に参照しているindicatorだけを抽出し、_compute_
+    indicator_seriesに渡す - 保存済みストラテジー由来(strategy_idで
+    ツリーを引く)か、未保存の候補行由来(結果のランキング一覧が呼び出し元
+    からツリーをそのまま渡す)かを問わない。"""
+    collected: dict[tuple, tuple] = {}
+    for tree in trees:
+        _collect_chart_indicators(tree, collected)
+    return _compute_indicator_series(df, list(collected.values()))
+
+
+@app.get("/api/strategies/{strategy_id}/chart-indicators")
+async def get_strategy_chart_indicators(strategy_id: str, limit: int = 20000) -> dict:
+    try:
+        entry = get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    symbol = entry["symbol"]
+    timeframe = entry["timeframe"]
+    df = load_price_data(find_data_file(timeframe, symbol))
+    df = df.tail(limit).reset_index(drop=True)
+
+    params = entry.get("params") or {}
+    trees = [
+        params.get("condition_tree"),
+        params.get("long_condition_tree"),
+        params.get("short_condition_tree"),
+    ]
+
+    return {"indicators": _compute_chart_indicators(df, trees)}
+
+
+class ChartIndicatorsRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    condition_tree: dict | None = None
+    long_condition_tree: dict | None = None
+    short_condition_tree: dict | None = None
+    limit: int = 20000
+
+
+@app.post("/api/chart-indicators")
+async def post_chart_indicators(req: ChartIndicatorsRequest) -> dict:
+    """GET /api/strategies/{id}/chart-indicatorsの、保存済みでない候補行
+    (結果のランキング一覧・反転ストラテジーなど、strategy_idを持たない行)
+    向けの版 - ストラテジー詳細のチャートタブは未保存行にも出したいため、
+    ツリー自体を呼び出し元(App.tsx)からそのまま受け取る。"""
+    df = load_price_data(find_data_file(req.timeframe, req.symbol))
+    df = df.tail(req.limit).reset_index(drop=True)
+
+    trees = [req.condition_tree, req.long_condition_tree, req.short_condition_tree]
+    return {"indicators": _compute_chart_indicators(df, trees)}
+
+
+class IndicatorSpecRequest(BaseModel):
+    indicator: str
+    params: dict = {}
+    timeframe: str | None = None
+
+
+class DataChartIndicatorsRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    indicators: list[IndicatorSpecRequest]
+    limit: int = 20000
+
+
+@app.post("/api/data-chart-indicators")
+async def post_data_chart_indicators(req: DataChartIndicatorsRequest) -> dict:
+    """データタブ用 - 条件ツリーを経由せず、ユーザーが直接選んだ指標
+    (indicator/params/timeframeの組)をそのまま計算する。ストラテジーを
+    選んでいない生の価格チャートに、任意の指標を自由に重ねたいという要望
+    向け(post_chart_indicators/get_strategy_chart_indicatorsはどちらも
+    条件ツリーが参照している指標しか出せない)。"""
+    df = load_price_data(find_data_file(req.timeframe, req.symbol))
+    df = df.tail(req.limit).reset_index(drop=True)
+
+    specs = [(i.indicator, i.params, i.timeframe) for i in req.indicators]
+    return {"indicators": _compute_indicator_series(df, specs)}
 
 
 @app.delete("/api/strategies/{strategy_id}")
@@ -2060,7 +2638,7 @@ async def get_report_pdf(job_id: str) -> FileResponse:
     for why it reuses the same dir). fpdf2 has no ProcessPoolExecutor/spawn
     concern like main.py's optimizer, so this runs in-process rather than as
     a subprocess."""
-    job = JOBS.get(job_id)
+    job = _resolve_job_or_restore(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["status"] != "done":
@@ -2098,46 +2676,53 @@ def _build_strategy_config_from_params(params: dict, prefix: str) -> Path:
     return config_path
 
 
-def _load_ranking_row(symbol: str, timeframe: str, rank: int) -> dict:
-    ranking_path = resolve_output_dir(symbol, timeframe) / "ranking_total.csv"
-    if not ranking_path.exists():
-        raise HTTPException(status_code=404, detail="ranking_total.csvが見つかりません。先にバックテストを実行してください。")
-    df = pd.read_csv(ranking_path)
-    matches = df[df["rank"] == rank]
-    if matches.empty:
-        raise HTTPException(status_code=404, detail=f"rank={rank} がranking_total.csvに見つかりません。")
-    return matches.iloc[0].to_dict()
+def _get_saved_strategy_or_404(strategy_id: str) -> dict:
+    try:
+        return get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+
+# 検証タブ(ValidationScreen)の全ツール共通: 結果側のrankではなく、ライブラリに
+# 保存済みのストラテジーを対象に検証する。各ツールの結果はそのストラテジー
+# 自身のsnapshot_dir(saved_strategies/{id}/)に書き出す - main.py実行のたびに
+# 上書きされる共有のoutput/ディレクトリと違い、バックエンドプロセスを再起動
+# しても、別のストラテジーを検証しても、ここに書いたファイルは消えたり
+# 混ざったりしない(confidence集計の「古い結果が混ざる」問題もこれで解消)。
+def _validation_dir(entry: dict) -> Path:
+    path = Path(entry["snapshot_dir"])
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class WalkForwardRequest(BaseModel):
-    symbol: str
-    timeframe: str
-    rank: int
+    strategy_id: str
 
 
 @app.post("/api/tools/walk-forward")
 async def run_walk_forward(req: WalkForwardRequest) -> dict:
-    """Walk-forward validates ONE already-selected ranking row (not a fresh
-    grid search) - the row's params get wrapped as a single-combination
-    strategy_config, so walk_forward.py's own train-window "optimize then
-    pick top N" step trivially resolves to that one strategy, and the test
-    windows show how it holds up out-of-sample without re-optimizing."""
-    row = _load_ranking_row(req.symbol, req.timeframe, req.rank)
-    params = reconstruct_params_from_row(row)
-    config_path = _build_strategy_config_from_params(params, "wf")
+    """Walk-forward validates ONE saved library strategy (not a fresh grid
+    search) - its params get wrapped as a single-combination strategy_config,
+    so walk_forward.py's own train-window "optimize then pick top N" step
+    trivially resolves to that one strategy, and the test windows show how
+    it holds up out-of-sample without re-optimizing."""
+    entry = _get_saved_strategy_or_404(req.strategy_id)
+    config_path = _build_strategy_config_from_params(entry["params"], "wf")
+    output_dir = _validation_dir(entry)
 
     job_id = uuid.uuid4().hex
     cmd = [
         sys.executable, "walk_forward.py",
-        "--symbol", req.symbol,
-        "--timeframe", req.timeframe,
+        "--symbol", entry["symbol"],
+        "--timeframe", entry["timeframe"],
         "--strategy-config", str(config_path),
+        "--output-dir", str(output_dir),
     ]
 
     JOBS[job_id] = {
         "status": "queued",
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
+        "symbol": entry["symbol"],
+        "timeframe": entry["timeframe"],
         "stdout": "",
         "stderr": "",
     }
@@ -2146,44 +2731,41 @@ async def run_walk_forward(req: WalkForwardRequest) -> dict:
     return {"job_id": job_id}
 
 
-@app.get("/api/tools/walk-forward/{job_id}/results")
-async def get_walk_forward_results(job_id: str) -> dict:
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job["status"] != "done":
-        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
-
-    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
-    return {"rows": _read_csv_records(output_dir / "walk_forward_results.csv")}
+@app.get("/api/tools/walk-forward/by-strategy/{strategy_id}")
+async def get_walk_forward_results(strategy_id: str) -> dict:
+    entry = _get_saved_strategy_or_404(strategy_id)
+    return {"rows": _read_csv_records(Path(entry["snapshot_dir"]) / "walk_forward_results.csv")}
 
 
 class MonteCarloRequest(BaseModel):
-    symbol: str
-    timeframe: str
-    rank: int
+    strategy_id: str
     simulations: int = 1000
 
 
 @app.post("/api/tools/monte-carlo")
 async def run_monte_carlo(req: MonteCarloRequest) -> dict:
-    """Re-runs rerun_ranking_row.py for this rank with a caller-chosen
-    simulation count - reuses the exact same job/results endpoints as any
-    other rank rerun (GET /api/backtests/{job_id}/results already returns
-    monte_carlo_summary from the same output_dir this overwrites)."""
+    """Re-runs rerun_ranking_row.py against this saved strategy's own params
+    with a caller-chosen simulation count, writing straight into its
+    snapshot_dir (GET .../by-strategy/{id} below reads monte_carlo_summary.csv
+    from there)."""
+    entry = _get_saved_strategy_or_404(req.strategy_id)
+    config_path = _build_strategy_config_from_params(entry["params"], "mc")
+    output_dir = _validation_dir(entry)
+
     job_id = uuid.uuid4().hex
     cmd = [
         sys.executable, "rerun_ranking_row.py",
-        "--symbol", req.symbol,
-        "--timeframe", req.timeframe,
-        "--rank", str(req.rank),
+        "--symbol", entry["symbol"],
+        "--timeframe", entry["timeframe"],
+        "--strategy-config", str(config_path),
+        "--output-dir", str(output_dir),
         "--simulations", str(req.simulations),
     ]
 
     JOBS[job_id] = {
         "status": "queued",
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
+        "symbol": entry["symbol"],
+        "timeframe": entry["timeframe"],
         "stdout": "",
         "stderr": "",
     }
@@ -2192,32 +2774,42 @@ async def run_monte_carlo(req: MonteCarloRequest) -> dict:
     return {"job_id": job_id}
 
 
+@app.get("/api/tools/monte-carlo/by-strategy/{strategy_id}")
+async def get_monte_carlo_results(strategy_id: str) -> dict:
+    entry = _get_saved_strategy_or_404(strategy_id)
+    records = _read_csv_records(Path(entry["snapshot_dir"]) / "monte_carlo_summary.csv")
+    return {"monte_carlo_summary": records}
+
+
 class SensitivityRequest(BaseModel):
-    symbol: str
-    timeframe: str
+    strategy_id: str
     mode: str = "full"
-    rank: int = 1
 
 
 @app.post("/api/tools/sensitivity")
 async def run_sensitivity(req: SensitivityRequest) -> dict:
-    """Runs analyze_sensitivity.py for one already-computed ranking row -
-    see that script's module docstring for what it measures. --mode should
-    match whatever mode originally produced ranking_total.csv (dev mode has
-    only one value per parameter, so there's nothing to vary)."""
+    """Runs analyze_sensitivity.py for one saved library strategy - see that
+    script's module docstring for what it measures. --mode should match
+    whatever mode originally produced this strategy (dev mode has only one
+    value per parameter, so there's nothing to vary)."""
+    entry = _get_saved_strategy_or_404(req.strategy_id)
+    config_path = _build_strategy_config_from_params(entry["params"], "sens")
+    output_dir = _validation_dir(entry)
+
     job_id = uuid.uuid4().hex
     cmd = [
         sys.executable, "analyze_sensitivity.py",
-        "--symbol", req.symbol,
-        "--timeframe", req.timeframe,
+        "--symbol", entry["symbol"],
+        "--timeframe", entry["timeframe"],
         "--mode", req.mode,
-        "--rank", str(req.rank),
+        "--strategy-config", str(config_path),
+        "--output-dir", str(output_dir),
     ]
 
     JOBS[job_id] = {
         "status": "queued",
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
+        "symbol": entry["symbol"],
+        "timeframe": entry["timeframe"],
         "stdout": "",
         "stderr": "",
     }
@@ -2226,41 +2818,38 @@ async def run_sensitivity(req: SensitivityRequest) -> dict:
     return {"job_id": job_id}
 
 
-@app.get("/api/tools/sensitivity/{job_id}/results")
-async def get_sensitivity_results(job_id: str) -> dict:
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job["status"] != "done":
-        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
-
-    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
-    return {"summary": _read_csv_records(output_dir / "sensitivity_summary.csv")}
+@app.get("/api/tools/sensitivity/by-strategy/{strategy_id}")
+async def get_sensitivity_results(strategy_id: str) -> dict:
+    entry = _get_saved_strategy_or_404(strategy_id)
+    return {"summary": _read_csv_records(Path(entry["snapshot_dir"]) / "sensitivity_summary.csv")}
 
 
 class ConfidenceRequest(BaseModel):
-    symbol: str
-    timeframe: str
+    strategy_id: str
 
 
 @app.post("/api/tools/confidence")
 async def run_confidence(req: ConfidenceRequest) -> dict:
-    """Runs analyze_confidence.py, which combines whatever stability/Monte
-    Carlo/walk-forward/sensitivity artifacts already sit in this symbol's
-    output_dir into one Confidence Score - see that script's module
-    docstring for the staleness caveat (it can't tell if those artifacts
-    came from the same underlying strategy)."""
+    """Runs analyze_confidence.py against whatever stability/Monte
+    Carlo/sensitivity artifacts already sit in this strategy's own
+    snapshot_dir (stability_analysis.csv comes from the save-time snapshot
+    itself; monte_carlo_summary.csv/sensitivity_summary.csv come from the
+    other tool cards above writing into the same directory)."""
+    entry = _get_saved_strategy_or_404(req.strategy_id)
+    output_dir = _validation_dir(entry)
+
     job_id = uuid.uuid4().hex
     cmd = [
         sys.executable, "analyze_confidence.py",
-        "--symbol", req.symbol,
-        "--timeframe", req.timeframe,
+        "--symbol", entry["symbol"],
+        "--timeframe", entry["timeframe"],
+        "--output-dir", str(output_dir),
     ]
 
     JOBS[job_id] = {
         "status": "queued",
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
+        "symbol": entry["symbol"],
+        "timeframe": entry["timeframe"],
         "stdout": "",
         "stderr": "",
     }
@@ -2269,44 +2858,41 @@ async def run_confidence(req: ConfidenceRequest) -> dict:
     return {"job_id": job_id}
 
 
-@app.get("/api/tools/confidence/{job_id}/results")
-async def get_confidence_results(job_id: str) -> dict:
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job["status"] != "done":
-        raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
-
-    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
-    records = _read_csv_records(output_dir / "confidence_summary.csv")
+@app.get("/api/tools/confidence/by-strategy/{strategy_id}")
+async def get_confidence_results(strategy_id: str) -> dict:
+    entry = _get_saved_strategy_or_404(strategy_id)
+    records = _read_csv_records(Path(entry["snapshot_dir"]) / "confidence_summary.csv")
     return records[0] if records else {}
 
 
 class OosRequest(BaseModel):
-    symbol: str
-    timeframe: str
-    rank: int = 1
+    strategy_id: str
     split_ratio: float = 0.7
 
 
 @app.post("/api/tools/oos")
 async def run_oos(req: OosRequest) -> dict:
-    """Runs run_oos_test.py for one already-computed ranking row - a single
-    in-sample/out-of-sample split of the SAME already-selected strategy
-    (no re-optimization), simpler than the multi-window walk-forward tool."""
+    """Runs run_oos_test.py for one saved library strategy - a single
+    in-sample/out-of-sample split of the SAME already-selected strategy (no
+    re-optimization), simpler than the multi-window walk-forward tool."""
+    entry = _get_saved_strategy_or_404(req.strategy_id)
+    config_path = _build_strategy_config_from_params(entry["params"], "oos")
+    output_dir = _validation_dir(entry)
+
     job_id = uuid.uuid4().hex
     cmd = [
         sys.executable, "run_oos_test.py",
-        "--symbol", req.symbol,
-        "--timeframe", req.timeframe,
-        "--rank", str(req.rank),
+        "--symbol", entry["symbol"],
+        "--timeframe", entry["timeframe"],
+        "--strategy-config", str(config_path),
+        "--output-dir", str(output_dir),
         "--split-ratio", str(req.split_ratio),
     ]
 
     JOBS[job_id] = {
         "status": "queued",
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
+        "symbol": entry["symbol"],
+        "timeframe": entry["timeframe"],
         "stdout": "",
         "stderr": "",
     }
@@ -2315,16 +2901,219 @@ async def run_oos(req: OosRequest) -> dict:
     return {"job_id": job_id}
 
 
-@app.get("/api/tools/oos/{job_id}/results")
-async def get_oos_results(job_id: str) -> dict:
+@app.get("/api/tools/oos/by-strategy/{strategy_id}")
+async def get_oos_results(strategy_id: str) -> dict:
+    entry = _get_saved_strategy_or_404(strategy_id)
+    return {"rows": _read_csv_records(Path(entry["snapshot_dir"]) / "oos_results.csv")}
+
+
+class ReverseTarget(BaseModel):
+    type: str  # "rank" (結果のランキング一覧由来) または "strategy" (ライブラリ由来)
+    symbol: str | None = None
+    timeframe: str | None = None
+    rank: int | None = None
+    strategy_id: str | None = None
+    name: str | None = None
+
+
+class ReverseRequest(BaseModel):
+    targets: list[ReverseTarget]
+
+
+def _reverse_batch_dir(job_id: str) -> Path:
+    return Path("output") / "reversed" / job_id
+
+
+@app.post("/api/tools/reverse")
+async def run_reverse(req: ReverseRequest) -> dict:
+    """Reverses each selected strategy's entry direction (swap long/short
+    condition trees, or flip the direction flag) and re-tests it as a new
+    candidate. Nothing is saved to the library here - reverse_strategies.py
+    writes full per-target analysis plus a combined ranking_total.csv into
+    output/reversed/{job_id}/, which the 反転ストラテジー tab reads
+    read-only (get_reverse_results/get_reverse_row_results below) until the
+    user explicitly saves one row (save_reverse_row further below)."""
+    job_id = uuid.uuid4().hex
+    cmd = [
+        sys.executable, "reverse_strategies.py",
+        "--job-id", job_id,
+        "--targets", json.dumps([t.model_dump() for t in req.targets], ensure_ascii=False),
+    ]
+
+    JOBS[job_id] = {
+        "status": "queued",
+        "symbol": "",
+        "timeframe": "",
+        "stdout": "",
+        "stderr": "",
+    }
+    # 結果のランキング一覧由来(type=='rank')かライブラリ由来(type=='strategy')
+    # かでバッチの帰属先を分ける - 結果の反転ストラテジータブとライブラリの
+    # 反転ストラテジータブを別々のデータにするため(get_reverse_current_results
+    # 参照)。実行元は常にどちらか一方に統一されている(handleReverseExecute
+    # FromResults/FromLibrary、App.tsx参照)。
+    origin = "library" if req.targets and req.targets[0].type == "strategy" else "results"
+    asyncio.create_task(_run_job(job_id, cmd, on_done=lambda: _append_reverse_batch(job_id, origin)))
+
+    return {"job_id": job_id}
+
+
+@app.get("/api/tools/reverse/current/results")
+async def get_reverse_current_results(origin: str = "results") -> dict:
+    """反転ストラテジータブが表示する「現在のセッションの反転結果」。
+    originごとに('results'=結果のランキング一覧由来、'library'=保存済み
+    ストラテジー/お気に入り由来)別々に管理しているreverse_batches.jsonの
+    バッチ一覧を連結し、rankをバッチ跨ぎで1..Nに振り直す。各行が元々どの
+    job_id/rankだったかは_source_job_id/_source_rankとして埋め込み、行
+    ごとの詳細取得・保存リクエストが正しいバッチを引けるようにする。パスの
+    並び順が重要 - FastAPI/Starletteはルートを登録順に評価するため、この
+    固定パスは/api/tools/reverse/{job_id}/results より前に置かないと
+    "current"がjob_idとして食われてしまう(実際に404で踏んだ)。"""
+    batch_ids = _read_reverse_batches(origin)
+    combined: list[dict] = []
+    next_rank = 1
+    for bid in batch_ids:
+        rows = _read_csv_records(_reverse_batch_dir(bid) / "ranking_total.csv")
+        for row in rows:
+            row = dict(row)
+            row["_source_job_id"] = bid
+            row["_source_rank"] = row.get("rank")
+            row["rank"] = next_rank
+            combined.append(row)
+            next_rank += 1
+    return {"ranking_total": combined}
+
+
+@app.get("/api/tools/reverse/{job_id}/results")
+async def get_reverse_results(job_id: str) -> dict:
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["status"] != "done":
         raise HTTPException(status_code=409, detail=f"job status is {job['status']}, not done")
 
-    output_dir = resolve_output_dir(job["symbol"], job["timeframe"])
-    return {"rows": _read_csv_records(output_dir / "oos_results.csv")}
+    return {"ranking_total": _read_csv_records(_reverse_batch_dir(job_id) / "ranking_total.csv")}
+
+
+@app.get("/api/tools/reverse/{job_id}/rows/{rank}/results")
+async def get_reverse_row_results(job_id: str, rank: int) -> dict:
+    """Read-only - unlike GET /api/backtests/{job_id}/rows/{rank} this never
+    triggers a rerun, since reverse_strategies.py already computed every
+    target's full analysis up front (a handful of hand-picked targets, not a
+    grid search, so there's no "only compute the row you're looking at"
+    concern that rerun_ranking_row.py exists for)."""
+    row_dir = _reverse_batch_dir(job_id) / str(rank)
+    if not row_dir.is_dir():
+        raise HTTPException(status_code=404, detail="reversed row not found")
+
+    return {
+        "trade_log": _read_csv_records(row_dir / "trade_log.csv"),
+        "equity_curve": _read_csv_records(row_dir / "equity_curve.csv"),
+        "monte_carlo_summary": _read_csv_records(row_dir / "monte_carlo_summary.csv"),
+        "yearly_analysis": _read_csv_records(row_dir / "yearly_analysis.csv"),
+        "monthly_analysis": _read_csv_records(row_dir / "monthly_analysis.csv"),
+        "stability_analysis": _read_csv_records(row_dir / "stability_analysis.csv"),
+    }
+
+
+class CompositeSaveRequest(BaseModel):
+    name: str
+    favorite: bool = False
+    # frontend/src/compositeUtils.ts::computeComposite()の出力(trade_log
+    # のprofitは各元ストラテジーのsymbolで既にpips換算済み)をそのまま渡す -
+    # ここではCSVへ書き出すだけで、金額の再計算はしない。
+    trade_log: list[dict]
+    equity_curve: list[dict]
+    metrics: dict
+    source_names: list[str] = []
+
+
+@app.post("/api/composite/save")
+async def save_composite(req: CompositeSaveRequest) -> dict:
+    """合成タブの結果をライブラリへ保存する。合成結果には元ジョブの
+    output_dirが存在しない(クライアント側でtrade_logをマージしただけの
+    仮想的な結果)ため、一時ディレクトリにtrade_log.csv/equity_curve.csvを
+    書き出してからsave_strategy()に渡す - 他の保存経路と同じコピー&
+    レジストリ登録ロジックを再利用する。symbol="COMPOSITE"は
+    pipUtils.ts側でpip_size=1として扱われ、既にpips換算済みの値を二重
+    変換しないようにする。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        pd.DataFrame(req.trade_log).to_csv(tmp_path / "trade_log.csv", index=False)
+        pd.DataFrame(req.equity_curve).to_csv(tmp_path / "equity_curve.csv", index=False)
+
+        saved_entry = save_strategy(
+            output_dir=tmp_path,
+            mode="composite",
+            timeframe="-",
+            best_row=req.metrics,
+            params={"composite_sources": req.source_names},
+            name=req.name,
+            tags=["composite"],
+            favorite=req.favorite,
+            symbol="COMPOSITE",
+        )
+    return saved_entry
+
+
+class CompositeMonteCarloRequest(BaseModel):
+    # frontend/src/compositeUtils.ts::computeComposite()のtradeLog(各要素は
+    # 最低限"profit"キーを持てばよい - engine.monte_carlo.run_monte_carloは
+    # それしか読まない)。値は既にpips換算済みなので、他のcomposite系
+    # エンドポイント同様ここでも再変換はしない。
+    trade_log: list[dict]
+    simulations: int = 1000
+
+
+@app.post("/api/composite/monte-carlo")
+async def composite_monte_carlo(req: CompositeMonteCarloRequest) -> dict:
+    """合成結果には保存済みストラテジーのようなsnapshot_dir/strategy_idが
+    無いため、既存の/api/tools/monte-carlo(rerun_ranking_row.py経由の
+    サブプロセス実行)は使えない。engine.monte_carlo.run_monte_carloは
+    trade_logのDataFrame(profit列)だけで完結する純粋関数なので、ここでは
+    サブプロセスを起こさずインプロセスで直接呼ぶ(numpyのシャッフルのみで
+    軽量なため同期実行で十分)。"""
+    trade_log_df = pd.DataFrame(req.trade_log)
+    _, summary_df = _run_monte_carlo_sim(trade_log_df, simulations=req.simulations)
+    return {"summary": json.loads(summary_df.to_json(orient="records"))}
+
+
+class SaveReverseRowRequest(BaseModel):
+    name: str
+    favorite: bool = False
+
+
+@app.post("/api/tools/reverse/{job_id}/rows/{rank}/save")
+async def save_reverse_row(job_id: str, rank: int, req: SaveReverseRowRequest) -> dict:
+    """Saves one already-computed reversed row into the library - a plain
+    synchronous file-copy + registry write (save_strategy() itself), not a
+    subprocess job, since reverse_strategies.py already did the only
+    expensive part (the backtest) up front."""
+    row_dir = _reverse_batch_dir(job_id) / str(rank)
+    ranking_path = _reverse_batch_dir(job_id) / "ranking_total.csv"
+    if not row_dir.is_dir() or not ranking_path.exists():
+        raise HTTPException(status_code=404, detail="reversed row not found")
+
+    ranking_total = pd.read_csv(ranking_path)
+    matches = ranking_total[ranking_total["rank"] == rank]
+    if matches.empty:
+        raise HTTPException(status_code=404, detail="reversed row not found")
+
+    row = matches.iloc[0].to_dict()
+    params = reconstruct_params_from_row(row)
+
+    saved_entry = save_strategy(
+        output_dir=row_dir,
+        mode="dev",
+        timeframe=str(row.get("timeframe", "")),
+        best_row=row,
+        params=params,
+        name=req.name,
+        tags=["reversed"],
+        favorite=req.favorite,
+        symbol=str(row.get("symbol", "USDJPY")),
+    )
+    return saved_entry
 
 
 # Approximate minutes per bar, used only for gap detection below (a "gap"
@@ -2336,6 +3125,53 @@ _TIMEFRAME_MINUTES: dict[str, int] = {
     "1m": 1, "5m": 5, "10m": 10, "15m": 15, "30m": 30,
     "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1mo": 43200,
 }
+
+
+@app.get("/api/data/symbols")
+async def get_data_symbols() -> list[str]:
+    """現在インポート済みの通貨/銘柄シンボル一覧 - DATA_DIRS
+    (engine/data_loader.py、main.py経由でfind_data_fileと同じ規約を共有)
+    配下の{symbol}_Dataフォルダをスキャンして動的に返す。以前は9通貨固定の
+    ハードコードリストをフロントエンド(App.tsx)に置いていたが、それだと
+    パッケージ配布後の別ユーザーが新しい通貨ペアを自由にインポートしても
+    ピッカーの選択肢にすら出てこない問題があったため、ディスク上の実態を
+    都度読み直す形にした。"""
+    symbols: set[str] = set()
+    for d in DATA_DIRS:
+        base = Path(d)
+        if not base.is_dir():
+            continue
+        for sub in base.iterdir():
+            if sub.is_dir() and sub.name.endswith("_Data"):
+                symbols.add(sub.name[: -len("_Data")])
+    return sorted(symbols)
+
+
+@app.get("/api/data/symbol-timeframes")
+async def get_data_symbol_timeframes() -> dict[str, list[str]]:
+    """通貨/銘柄ごとに実際にインポート済みの時間足一覧 - 探索/データ/Data
+    Validator画面の時間足ピッカーが、まだ取り込んでいない時間足を選べない
+    ようにするため(ユーザー要望:「CADJPYの月足〜1時間足を追加した。
+    それ以下の足はまだ追加してない...読み込んでいないデータは選択不可能に
+    してほしい」)。ファイル名{symbol}_2003_2026_{timeframe}.csvの
+    timeframe部分をそのまま拾うので、TIMEFRAMES定数にない時間足が将来
+    増えても自動的に対応する。"""
+    result: dict[str, set[str]] = {}
+    for d in DATA_DIRS:
+        base = Path(d)
+        if not base.is_dir():
+            continue
+        for sub in base.iterdir():
+            if not (sub.is_dir() and sub.name.endswith("_Data")):
+                continue
+            symbol = sub.name[: -len("_Data")]
+            prefix = f"{symbol}_2003_2026_"
+            for f in sub.glob(f"{prefix}*.csv"):
+                result.setdefault(symbol, set()).add(f.stem[len(prefix):])
+    return {
+        symbol: sorted(tfs, key=lambda tf: _TIMEFRAME_MINUTES.get(tf, 10**9))
+        for symbol, tfs in result.items()
+    }
 
 
 @app.get("/api/data/validate")
@@ -2383,6 +3219,33 @@ async def validate_data(symbol: str = "USDJPY", timeframe: str = "15m") -> dict:
     }
 
 
+@app.post("/api/browse-folder")
+def browse_folder() -> dict:
+    """CSVインポート画面の「参照...」ボタン用 - ブラウザのfile inputは
+    セキュリティ上の理由で実際の絶対パスを返さない(手打ちできないなら
+    フォルダを選べない)ため、代わりにこのサーバー自身(フロントエンドと
+    同じPC上で動くローカル専用アプリ)でtkinterのネイティブフォルダ選択
+    ダイアログを開き、選ばれた絶対パスをそのまま返す。同期的にダイアログを
+    出す(ユーザーが選び終わるまでブロックする)ため、asyncではなく同期def
+    にしてFastAPIのスレッドプールで実行させ、他のリクエストの処理を止めない
+    ようにしている。"""
+    try:
+        import tkinter
+        from tkinter import filedialog
+    except ImportError:
+        raise HTTPException(status_code=501, detail="このPCではフォルダ選択ダイアログを利用できません")
+
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        path = filedialog.askdirectory(title="CSVの取り込み元フォルダを選択")
+    finally:
+        root.destroy()
+
+    return {"path": path or None}
+
+
 class CsvImportRequest(BaseModel):
     source_root: str
     symbols: list[str]
@@ -2391,6 +3254,20 @@ class CsvImportRequest(BaseModel):
     # (engine/data_loader.py::DATA_DIRS) - overwrites whatever CSV is
     # currently there for each symbol/timeframe pair.
     dest_root: str = "data/raw"
+    # エラー後の「続きから再開」ボタン用(CsvImportScreen.tsx参照) - Trueの
+    # 時は出力先ファイルが既に存在する組み合わせを再変換せずスキップする
+    # (import_broker_csv.py::convert_symbolのskip_existing引数)。通常の
+    # 「インポート実行」では常にFalse(毎回上書き、従来通りの挙動)。
+    skip_existing: bool = False
+    # 取り込み元CSVのタイムゾーン(ユーザー要望:「もしもとからJSTのデータ
+    # でも勝手にEETって認識して変換しちゃうの?」への対応) -
+    # import_broker_csv.py::SOURCE_TZ_OPTIONSのキー(EET/JST/UTC)のいずれか。
+    source_timezone: str = "EET"
+    # ユーザー要望:「23年分は残したい」への対応 - Trueの時は出力先を丸ごと
+    # 置き換えず、既存データは保持したまま無い日時の行だけを追加する
+    # (import_broker_csv.py::merge_into_existing参照)。Falseの時は従来通り
+    # 丸ごと上書き。
+    merge: bool = False
 
 
 @app.post("/api/data/import")
@@ -2408,7 +3285,12 @@ async def import_csv(req: CsvImportRequest) -> dict:
         "--batch-dest", req.dest_root,
         "--symbols", ",".join(req.symbols),
         "--timeframes", ",".join(req.timeframes),
+        "--source-tz", req.source_timezone,
     ]
+    if req.skip_existing:
+        cmd.append("--skip-existing")
+    if req.merge:
+        cmd.append("--merge")
 
     JOBS[job_id] = {
         "status": "queued",

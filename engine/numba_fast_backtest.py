@@ -66,6 +66,7 @@ def _run_market_backtest_core(
     weekend_exit_hour: int,
     use_daily_exit: bool,
     daily_exit_hour: int,
+    use_confirmation: bool,
 ):
     n = len(open_arr)
 
@@ -77,6 +78,8 @@ def _run_market_backtest_core(
     tp_out = np.empty(n, dtype=np.float64)
     profit_out = np.empty(n, dtype=np.float64)
     reason_out = np.empty(n, dtype=np.int64)
+    mae_out = np.empty(n, dtype=np.float64)
+    mfe_out = np.empty(n, dtype=np.float64)
     trade_count = 0
 
     in_position = False
@@ -84,6 +87,10 @@ def _run_market_backtest_core(
     entry_bar_index = -1
     sl = 0.0
     tp = 0.0
+    # MAE/MFEの追跡用: ポジション保有中に見た最悪値/最良値の価格そのもの
+    # (entry_priceとの差はexit時にdirection別に計算する)。
+    mae_extreme_price = 0.0
+    mfe_extreme_price = 0.0
 
     signal_low = np.nan
     signal_high = np.nan
@@ -127,12 +134,29 @@ def _run_market_backtest_core(
                 else:
                     tp = entry_price + risk_distance * rr
                 in_position = True
+                mae_extreme_price = entry_price
+                mfe_extreme_price = entry_price
 
             pending_entry = False
             pending_signal_low = np.nan
             pending_signal_high = np.nan
 
         if in_position:
+            # このバーのhigh/lowを使って保有中の最悪値/最良値を更新する
+            # (エントリーしたバー自身も含む - 同じバーでエントリーと決済が
+            # 両方起きるケースがあるため)。short/longで不利な方向/有利な
+            # 方向が逆になる。
+            if direction_code == -1:
+                if high_price > mae_extreme_price:
+                    mae_extreme_price = high_price
+                if low_price < mfe_extreme_price:
+                    mfe_extreme_price = low_price
+            else:
+                if low_price < mae_extreme_price:
+                    mae_extreme_price = low_price
+                if high_price > mfe_extreme_price:
+                    mfe_extreme_price = high_price
+
             exit_reason = -1
             exit_price = 0.0
 
@@ -163,8 +187,12 @@ def _run_market_backtest_core(
             if exit_reason != -1:
                 if direction_code == -1:
                     profit = entry_price - exit_price
+                    mae = mae_extreme_price - entry_price
+                    mfe = entry_price - mfe_extreme_price
                 else:
                     profit = exit_price - entry_price
+                    mae = entry_price - mae_extreme_price
+                    mfe = mfe_extreme_price - entry_price
                 profit -= cost_per_trade
 
                 entry_bar[trade_count] = entry_bar_index
@@ -175,6 +203,8 @@ def _run_market_backtest_core(
                 tp_out[trade_count] = tp
                 profit_out[trade_count] = profit
                 reason_out[trade_count] = exit_reason
+                mae_out[trade_count] = mae
+                mfe_out[trade_count] = mfe
                 trade_count += 1
 
                 in_position = False
@@ -187,39 +217,56 @@ def _run_market_backtest_core(
 
             continue
 
-        if signal_bar != -1:
-            bars_from_signal = i - signal_bar
-            within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
+        if use_confirmation:
+            # 旧来のブレイクアウト確認方式(自動探索のstructure系向け) -
+            # 条件成立(signal_bar)後、後続バーの終値がそのバーの高値/安値を
+            # 上抜け/下抜けするのを確認してからエントリー(lookahead_bars以内)。
+            if signal_bar != -1:
+                bars_from_signal = i - signal_bar
+                within_bars = bars_from_signal > 0 and bars_from_signal <= lookahead_bars
 
-            if direction_code == -1:
-                confirmation = close_price < signal_low
-            else:
-                confirmation = close_price > signal_high
+                if direction_code == -1:
+                    confirmation = close_price < signal_low
+                else:
+                    confirmation = close_price > signal_high
 
-            if within_bars and confirmation:
-                pending_entry = True
-                pending_signal_low = signal_low
-                pending_signal_high = signal_high
-                signal_low = np.nan
-                signal_high = np.nan
-                signal_bar = -1
+                if within_bars and confirmation:
+                    pending_entry = True
+                    pending_signal_low = signal_low
+                    pending_signal_high = signal_high
+                    signal_low = np.nan
+                    signal_high = np.nan
+                    signal_bar = -1
+                    continue
+
+                expired = bars_from_signal > lookahead_bars
+                if expired:
+                    signal_low = np.nan
+                    signal_high = np.nan
+                    signal_bar = -1
+
+            if signal_bar != -1:
                 continue
 
-            expired = bars_from_signal > lookahead_bars
-            if expired:
-                signal_low = np.nan
-                signal_high = np.nan
-                signal_bar = -1
+            if not candidate_signal[i]:
+                continue
 
-        if signal_bar != -1:
-            continue
-
-        if not candidate_signal[i]:
-            continue
-
-        signal_low = low_price
-        signal_high = high_price
-        signal_bar = i
+            signal_low = low_price
+            signal_high = high_price
+            signal_bar = i
+        else:
+            # 条件ツリー(手動条件ビルダー/自動探索の全モード)向けの即時
+            # エントリー - 確認待ちなし。「条件が成立したバーの次のバーの
+            # 始値でそのままエントリー」で、画面に見えている条件だけが
+            # 動作を決める(ユーザー要望:「画面上に見えていることが全て。
+            # EMA200＞終値と設定したらこの条件が満たされたら次の足の始値で
+            # 即エントリー」)。既存のpending_entryの仕組み(このバーで武装
+            # →次のバーの始値で消費)をそのまま再利用しているだけなので、
+            # confirmation方式と全く同じ1バー分のラグで実行される。
+            if candidate_signal[i]:
+                pending_entry = True
+                pending_signal_low = low_price
+                pending_signal_high = high_price
 
     return (
         entry_bar[:trade_count],
@@ -230,6 +277,8 @@ def _run_market_backtest_core(
         tp_out[:trade_count],
         profit_out[:trade_count],
         reason_out[:trade_count],
+        mae_out[:trade_count],
+        mfe_out[:trade_count],
     )
 
 
@@ -253,13 +302,14 @@ def run_market_backtest_fast(
     use_daily_exit: bool,
     daily_exit_hour: int,
     return_trades: bool,
+    use_confirmation: bool = True,
 ):
     """Drop-in replacement for run_backtest()'s market-order result/trade_log
     shape - same result dict keys (plus **p spread), same trade_log columns
     (entry_time/entry_bar_index/entry_price/exit_time/exit_bar_index/
-    exit_price/sl/tp/profit/exit_reason) as the slow path's own trade_logs,
-    restricted to the subset needed downstream (see the confirmed column
-    audit in project memory) - signal_time/signal_bar_index/signal_low/
+    exit_price/sl/tp/profit/exit_reason/mae/mfe) as the slow path's own
+    trade_logs, restricted to the subset needed downstream (see the confirmed
+    column audit in project memory) - signal_time/signal_bar_index/signal_low/
     signal_high are omitted (debug-only fields, not read by any downstream
     consumer)."""
     direction_code = -1 if direction == "short" else 1
@@ -273,6 +323,8 @@ def run_market_backtest_fast(
         tp_arr,
         profit_arr,
         reason_arr,
+        mae_arr,
+        mfe_arr,
     ) = _run_market_backtest_core(
         open_arr.astype(np.float64),
         high_arr.astype(np.float64),
@@ -290,6 +342,7 @@ def run_market_backtest_fast(
         int(weekend_exit_hour),
         bool(use_daily_exit),
         int(daily_exit_hour),
+        bool(use_confirmation),
     )
 
     trades = int(len(profit_arr))
@@ -341,7 +394,7 @@ def run_market_backtest_fast(
             columns=[
                 "entry_time", "entry_bar_index", "entry_price",
                 "exit_time", "exit_bar_index", "exit_price",
-                "sl", "tp", "profit", "exit_reason",
+                "sl", "tp", "profit", "exit_reason", "mae", "mfe",
             ]
         )
         return result, trades_df
@@ -358,6 +411,8 @@ def run_market_backtest_fast(
             "tp": np.round(tp_arr, 5),
             "profit": np.round(profit_arr, 5),
             "exit_reason": [_EXIT_REASON_LABELS[r] for r in reason_arr],
+            "mae": np.round(mae_arr, 5),
+            "mfe": np.round(mfe_arr, 5),
         }
     )
 

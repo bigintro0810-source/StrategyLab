@@ -1,4 +1,5 @@
 import Plot from 'react-plotly.js'
+import { chartXAxisConfig } from '../chartTimeAxis'
 import { toPips } from '../pipUtils'
 import type { EquityPoint } from '../types'
 
@@ -24,7 +25,7 @@ export default function EquityCurveChart({ points, symbol }: Props) {
             y: points.map((p) => toPips(p.equity, symbol)),
             type: 'scatter',
             mode: 'lines+markers',
-            name: 'エクイティ',
+            name: '累積Pips',
             line: { color: '#22c55e', width: 1.5 },
             marker: { color: '#22c55e', size: 4, line: { width: 0 } },
           },
@@ -36,14 +37,7 @@ export default function EquityCurveChart({ points, symbol }: Props) {
           paper_bgcolor: 'transparent',
           plot_bgcolor: 'transparent',
           font: { color: '#d1d5db' },
-          // dtick: 'M12'で1年ごとに目盛り/グリッド線を必ず引く(Plotly任せの
-          // 自動間引きだと期間が長いほど数年おきにしか線が出ず粗く見えるため)。
-          xaxis: {
-            type: 'date',
-            dtick: 'M12',
-            tickformat: '%Y',
-            gridcolor: 'rgba(255,255,255,0.08)',
-          },
+          xaxis: chartXAxisConfig(x),
           yaxis: { gridcolor: 'rgba(255,255,255,0.08)' },
         }}
         config={{ displayModeBar: false, responsive: true }}

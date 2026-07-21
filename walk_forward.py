@@ -11,12 +11,13 @@ from engine.params import reconstruct_params_from_row
 from engine.strategy_config_loader import load_strategy_config
 from main import (
     AVAILABLE_TIMEFRAMES,
-    SUPPORTED_SYMBOLS,
-    find_data_file,
-    load_price_data,
-    build_parameter_grid,
     build_grid_from_space,
+    build_monthly_analysis,
+    build_parameter_grid,
+    calculate_advanced_metrics,
+    find_data_file,
     format_seconds,
+    load_price_data,
     resolve_output_dir,
 )
 
@@ -124,9 +125,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
-        help="通貨ペア (デフォルト: USDJPY)",
+        help="通貨ペア (デフォルト: USDJPY。data/rawに取り込み済みならどの名前でも可)",
     )
 
     parser.add_argument(
@@ -142,6 +142,12 @@ def parse_args() -> argparse.Namespace:
         help="strategy_configs/*.json のパスを指定すると、内蔵のfullグリッドの代わりにこの設定を使う"
         "(main.pyの--strategy-configと同じ仕組み。condition_treeで組んだ戦略もこれで検証可能)",
     )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="結果の出力先を指定すると、通常のresolve_output_dir()の代わりにこちらへ書き出す"
+        "(ライブラリのストラテジーごとに結果を分けて永続化するため)",
+    )
 
     return parser.parse_args()
 
@@ -149,7 +155,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    output_dir = resolve_output_dir(args.symbol, args.timeframe)
+    output_dir = Path(args.output_dir) if args.output_dir else resolve_output_dir(args.symbol, args.timeframe)
     output_csv = output_dir / "walk_forward_results.csv"
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -202,11 +208,16 @@ def main() -> None:
         for rank, (_, train_row) in enumerate(train_ranked.iterrows(), start=1):
             params = reconstruct_params_from_row(train_row)
 
-            test_result = run_backtest(
+            # ランキング一覧/ライブラリと同じPF〜CAGRの指標をここでも出せる
+            # よう、return_trades=Trueでトレード履歴も受け取り、main.pyの
+            # ランキング計算(run_one_backtest)と同じcalculate_advanced_metrics
+            # でSharpe/Sortino/CAGR/Calmarを追加算出する。
+            test_result, test_trades = run_backtest(
                 df=test_df,
                 params=params,
-                return_trades=False,
+                return_trades=True,
             )
+            test_advanced = calculate_advanced_metrics(test_trades, build_monthly_analysis(test_trades))
 
             output_rows.append(
                 {
@@ -233,6 +244,11 @@ def main() -> None:
                     "test_profit_factor": float(test_result["profit_factor"]),
                     "test_max_dd": float(test_result["max_dd"]),
                     "test_expected_value": float(test_result["expected_value"]),
+                    "test_recovery_factor": float(test_result["recovery_factor"]),
+                    "test_sharpe_ratio": float(test_advanced["sharpe_ratio"]),
+                    "test_sortino_ratio": float(test_advanced["sortino_ratio"]),
+                    "test_cagr": float(test_advanced["cagr"]),
+                    "test_calmar_ratio": float(test_advanced["calmar_ratio"]),
                 }
             )
 

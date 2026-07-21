@@ -77,6 +77,7 @@ def _run_fast_path(params: dict) -> tuple[dict, pd.DataFrame]:
         weekend_exit_hour=int(p["weekend_exit_hour"]),
         use_daily_exit=bool(p["use_daily_exit"]),
         daily_exit_hour=int(p["daily_exit_hour"]),
+        use_confirmation=condition_tree is None,
         return_trades=True,
     )
 
@@ -143,8 +144,9 @@ def _run_case(**overrides) -> list[str]:
                 if slow_result[key] != fast_result[key]:
                     failures.append(f"{label}: result['{key}'] mismatch slow={slow_result[key]} fast={fast_result[key]}")
 
-            slow_cols = slow_trades[["entry_time", "exit_time", "entry_price", "exit_price", "profit", "exit_reason"]].reset_index(drop=True)
-            fast_cols = fast_trades[["entry_time", "exit_time", "entry_price", "exit_price", "profit", "exit_reason"]].reset_index(drop=True)
+            cols = ["entry_time", "exit_time", "entry_price", "exit_price", "profit", "exit_reason", "mae", "mfe"]
+            slow_cols = slow_trades[cols].reset_index(drop=True)
+            fast_cols = fast_trades[cols].reset_index(drop=True)
             if not slow_cols.equals(fast_cols):
                 mismatch_rows = (slow_cols != fast_cols).any(axis=1).sum()
                 failures.append(f"{label}: trade_log mismatch in {mismatch_rows} row(s)")

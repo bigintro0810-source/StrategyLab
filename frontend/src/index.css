@@ -81,6 +81,22 @@ body {
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
 
+/* ドロップダウンを開いたときの選択肢一覧はOSのネイティブ描画(ここまでの
+   ダーク系スタイルが効かない)なので、:root{color-scheme:dark}経由で
+   薄い文字色を引き継いだまま明るい背景に乗ると読みにくくなる。全てのselect
+   で選択肢だけは明示的に白背景・黒文字に固定して視認性を確保する。 */
+select option {
+  background-color: #ffffff;
+  color: #111827;
+}
+
+/* まだデータを取り込んでいない時間足など、選べない選択肢は薄い文字色に
+   する(disabled属性だけだと上のselect optionルールの黒文字で上書きされ、
+   ブラウザ標準の薄色表示が効かなかったため個別に指定する)。 */
+select option:disabled {
+  color: #9ca3af;
+}
+
 .glow-button {
   background: linear-gradient(135deg, #3b82f6, #8b5cf6);
   box-shadow: 0 0 24px rgba(139, 92, 246, 0.35);

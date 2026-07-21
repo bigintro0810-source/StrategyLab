@@ -1,16 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { validateData } from '../api'
 
 interface Props {
   symbols: string[]
   timeframes: string[]
+  // 通貨ごとに実際にインポート済みの時間足(App.tsx::symbolTimeframes参照) -
+  // 選択中の通貨に無い時間足は選べなくする(ユーザー要望: 「読み込んでいな
+  // いデータは選択不可能にしてほしい」)。
+  symbolTimeframes: Record<string, string[]>
 }
 
-export default function DataValidatorScreen({ symbols, timeframes }: Props) {
+export default function DataValidatorScreen({ symbols, timeframes, symbolTimeframes }: Props) {
   const [symbol, setSymbol] = useState(symbols[0])
   const [timeframe, setTimeframe] = useState('15m')
   const [checked, setChecked] = useState(false)
+
+  useEffect(() => {
+    const available = symbolTimeframes[symbol]
+    if (available && available.length > 0 && !available.includes(timeframe)) {
+      setTimeframe(available[0])
+    }
+  }, [symbol, symbolTimeframes, timeframe])
 
   const validateQuery = useQuery({
     queryKey: ['data-validate', symbol, timeframe],
@@ -28,7 +39,14 @@ export default function DataValidatorScreen({ symbols, timeframes }: Props) {
       </p>
 
       <div className="mb-3 flex items-center gap-2 text-xs text-gray-300">
-        <select className="glass-input rounded-lg px-2 py-1.5" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+        <select
+          className="glass-input rounded-lg px-2 py-1.5"
+          value={symbol}
+          onChange={(e) => {
+            setSymbol(e.target.value)
+            setChecked(false)
+          }}
+        >
           {symbols.map((s) => (
             <option key={s} value={s}>
               {s}
@@ -38,10 +56,13 @@ export default function DataValidatorScreen({ symbols, timeframes }: Props) {
         <select
           className="glass-input rounded-lg px-2 py-1.5"
           value={timeframe}
-          onChange={(e) => setTimeframe(e.target.value)}
+          onChange={(e) => {
+            setTimeframe(e.target.value)
+            setChecked(false)
+          }}
         >
           {timeframes.map((tf) => (
-            <option key={tf} value={tf}>
+            <option key={tf} value={tf} disabled={!(symbolTimeframes[symbol] ?? timeframes).includes(tf)}>
               {tf}
             </option>
           ))}
@@ -101,7 +122,7 @@ export default function DataValidatorScreen({ symbols, timeframes }: Props) {
                     <tr>
                       <th className="py-1 pr-2">直前</th>
                       <th className="py-1 pr-2">直後</th>
-                      <th className="py-1 pr-2">分数</th>
+                      <th className="py-1 pr-2 text-right">分数</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -109,7 +130,7 @@ export default function DataValidatorScreen({ symbols, timeframes }: Props) {
                       <tr key={i} className="border-t border-white/5">
                         <td className="py-1 pr-2">{g.before}</td>
                         <td className="py-1 pr-2">{g.after}</td>
-                        <td className="py-1 pr-2">{g.minutes.toLocaleString()}</td>
+                        <td className="py-1 pr-2 text-right">{g.minutes.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>

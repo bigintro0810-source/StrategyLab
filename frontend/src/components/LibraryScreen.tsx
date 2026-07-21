@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { renameStrategy, toggleStrategyFavorite } from '../api'
 import FavoriteButton from './FavoriteButton'
-import { ascendingIsBetter, buildMetricColumns, type MetricRowLike } from '../rankingColumns'
+import { ascendingIsBetter, buildMetricColumns, passesFilters, type MetricRowLike } from '../rankingColumns'
 import type { IndicatorInfo, StrategyDetail } from '../types'
 
 interface Props {
@@ -14,16 +14,10 @@ interface Props {
   // そのまま使い回せるようにしている。
   queryKey: unknown[]
   queryFn: () => Promise<StrategyDetail[]>
-  compareIds: string[]
-  onToggleCompare: (id: string) => void
-  onGoToCompare: () => void
   indicators: IndicatorInfo[]
   // ストラテジー詳細タブ(App.tsx側のlibraryOpenIds)に開いているid一覧。
   openIds: string[]
   onToggleChecked: (id: string) => void
-  // 合成タブ(App.tsx側のlibraryCompositeIds)でチェックしたid一覧。
-  compositeIds: string[]
-  onToggleComposite: (id: string) => void
   // 保存済み/お気に入りでは完全削除、ユーザー定義タブでは「このタブから外す」
   // だけ(ストラテジー自体はライブラリに残る)- ダイアログの文言もこれで変える。
   deleteMode: 'delete' | 'remove'
@@ -31,6 +25,15 @@ interface Props {
   // ユーザー定義タブだけ: ヘッダーに"+"ボタンを出してストラテジー追加picker
   // (App.tsx側のAddToCollectionModal)を開く。
   onAddClick?: () => void
+  // 反転(Reverse Strategy)。「反転ストラテジー」タブ自身の一覧ではこの列を
+  // 出さない(すでに反転済みの結果を並べているだけなので再反転する意味がない)。
+  showReverseColumn?: boolean
+  reverseIds?: string[]
+  onToggleReverse?: (id: string) => void
+  onReverseExecute?: (ids: string[]) => void
+  // 既にこの行から反転を作成済み(このセッション中)のid一覧。反転
+  // チェックボックスの代わりに白塗りの印を出し、操作できないようにする。
+  alreadyReversedIds?: string[]
 }
 
 // entry.metrics(strategy_registry.pyのMETRIC_COLUMNS)はexpected_valueを
@@ -52,6 +55,11 @@ function toMetricRow(entry: StrategyDetail): MetricRowLike {
     calmar_ratio: m.calmar_ratio,
     cagr: m.cagr,
     condition_tree: entry.params?.condition_tree ?? undefined,
+    // 双方向運用(direction固定ではなくlong_condition_tree/short_condition_tree
+    // を持つ)ストラテジーだとcondition_treeがnullのため、これらも渡さないと
+    // 「条件」列が空欄になってしまう不具合があった(実際に踏んだ不具合)。
+    long_condition_tree: entry.params?.long_condition_tree ?? undefined,
+    short_condition_tree: entry.params?.short_condition_tree ?? undefined,
     symbol: entry.symbol,
   }
 }
@@ -97,9 +105,13 @@ function NameText({
   }
 
   return (
+    // 名称が長い場合、列自体を広げず(他の列を圧迫せず)省略記号で切り詰め、
+    // カーソルを当てるとネイティブのtitleツールチップで全文を表示する -
+    // 常時表示する幅は「2026/07/16-0000000000」(21文字)が収まる程度で
+    // 十分というユーザー指定に合わせる。
     <span
-      className="cursor-pointer whitespace-nowrap hover:underline"
-      title="クリックして名称を変更"
+      className="block max-w-[21ch] cursor-pointer truncate hover:underline"
+      title={name}
       onClick={() => {
         setDraft(name)
         setEditing(true)
@@ -115,22 +127,23 @@ export default function LibraryScreen({
   emptyMessage,
   queryKey,
   queryFn,
-  compareIds,
-  onToggleCompare,
-  onGoToCompare,
   indicators,
   openIds,
   onToggleChecked,
-  compositeIds,
-  onToggleComposite,
   deleteMode,
   onDelete,
   onAddClick,
+  showReverseColumn = true,
+  reverseIds = [],
+  onToggleReverse,
+  onReverseExecute,
+  alreadyReversedIds = [],
 }: Props) {
   const queryClient = useQueryClient()
   const [sortKey, setSortKey] = useState<string>('profit_factor')
   const [sortAsc, setSortAsc] = useState(false)
-  // 一括削除用のチェック(詳細/比較/合成とは別、削除専用)。
+  const [filters, setFilters] = useState<Record<string, string>>({})
+  // 一括削除用のチェック(詳細/反転とは別、削除専用)。
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set())
   const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[]; names: string[] } | null>(null)
 
@@ -175,15 +188,22 @@ export default function LibraryScreen({
     } else {
       setSortKey(key)
       // 初回クリックは「良い順」で表示する - ほとんどの指標は大きい方が
-      // 良い(降順)が、DDだけ小さい方が良い(昇順)。
-      setSortAsc(ascendingIsBetter(key))
+      // 良い(降順)が、DDだけ小さい方が良い(昇順)。名称は良し悪しが無い
+      // ので素直にA→Z(昇順)から始める。
+      setSortAsc(key === 'name' ? true : ascendingIsBetter(key))
     }
   }
 
-  const sorted = strategies
+  const filtered = strategies.filter((s) => passesFilters(toMetricRow(s), filters, columns))
+
+  const sorted = filtered
     .slice()
     .reverse()
     .sort((a, b) => {
+      if (sortKey === 'name') {
+        const cmp = a.name.localeCompare(b.name)
+        return sortAsc ? cmp : -cmp
+      }
       const av = Number(toMetricRow(a)[sortKey])
       const bv = Number(toMetricRow(b)[sortKey])
       if (Number.isNaN(av) || Number.isNaN(bv)) return 0
@@ -196,7 +216,14 @@ export default function LibraryScreen({
   return (
     <div className="glass-panel rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold text-gray-200">{title}</div>
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-200">
+          {title}
+          {Object.values(filters).some((v) => v !== '') && (
+            <span className="text-xs font-normal text-gray-500">
+              (絞り込み条件により{filtered.length}/{strategies.length}件を表示)
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {onAddClick && (
             <button
@@ -207,14 +234,13 @@ export default function LibraryScreen({
               + ストラテジーを追加
             </button>
           )}
-          {compareIds.length > 0 && (
+          {showReverseColumn && reverseIds.length > 0 && (
             <button
               type="button"
-              onClick={onGoToCompare}
-              disabled={compareIds.length < 2}
-              className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+              onClick={() => onReverseExecute?.(reverseIds)}
+              className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
             >
-              選択した{compareIds.length}件を比較
+              選択した{reverseIds.length}件を反転実行
             </button>
           )}
           {selectedForDelete.size > 0 && (
@@ -242,17 +268,24 @@ export default function LibraryScreen({
             <thead>
               <tr className="border-b border-white/10 text-gray-400">
                 <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
-                <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
-                <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
+                {showReverseColumn && <th className="whitespace-nowrap px-1 py-1 font-medium">反転</th>}
                 <th className="px-1 py-1 font-medium" />
-                <th className="whitespace-nowrap px-1 py-1 font-medium">名称</th>
+                <th
+                  onClick={() => handleSort('name')}
+                  className={`select-none cursor-pointer whitespace-nowrap px-1 py-1 font-medium hover:text-gray-200 ${
+                    sortKey === 'name' ? 'bg-blue-500/30 text-blue-100' : ''
+                  }`}
+                >
+                  名称
+                  {sortKey === 'name' && <span className="ml-0.5">{sortAsc ? '▲' : '▼'}</span>}
+                </th>
                 <th className="whitespace-nowrap px-1 py-1 font-medium">通貨/時間足</th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
                     onClick={col.key === 'condition_tree' ? undefined : () => handleSort(col.key)}
                     title={col.tooltip}
-                    className={`select-none whitespace-nowrap px-1 py-1 font-medium ${
+                    className={`select-none whitespace-nowrap ${col.headerPadLeft ?? 'pl-1'} pr-1 py-1 font-medium ${col.numeric ? 'text-right' : ''} ${
                       col.key === 'condition_tree' ? '' : 'cursor-pointer hover:text-gray-200'
                     } ${sortKey === col.key ? 'bg-blue-500/30 text-blue-100' : ''}`}
                   >
@@ -261,6 +294,24 @@ export default function LibraryScreen({
                   </th>
                 ))}
                 <th className="whitespace-nowrap px-1 py-1 font-medium">{deleteColumnLabel}</th>
+              </tr>
+              <tr className="border-b border-white/10 bg-white/[0.02]">
+                <th className="px-1 py-1" colSpan={showReverseColumn ? 5 : 4} />
+                {columns.map((col) => (
+                  <th key={col.key} className={`px-1 py-0.5 font-normal ${col.numeric ? 'text-right' : ''}`}>
+                    {col.filterable && (
+                      <input
+                        type="number"
+                        value={filters[col.key] ?? ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, [col.key]: e.target.value }))}
+                        placeholder={ascendingIsBetter(col.key) ? '以下' : '以上'}
+                        title={`${col.label} ${ascendingIsBetter(col.key) ? '以下' : '以上'}で絞り込み`}
+                        className="glass-input w-14 rounded px-1 py-0.5 text-[10px]"
+                      />
+                    )}
+                  </th>
+                ))}
+                <th className="px-1 py-1" />
               </tr>
             </thead>
             <tbody>
@@ -272,16 +323,23 @@ export default function LibraryScreen({
                     <td className="px-1 py-1">
                       <input type="checkbox" checked={openIds.includes(s.id)} onChange={() => onToggleChecked(s.id)} />
                     </td>
-                    <td className="px-1 py-1">
-                      <input type="checkbox" checked={compareIds.includes(s.id)} onChange={() => onToggleCompare(s.id)} />
-                    </td>
-                    <td className="px-1 py-1">
-                      <input
-                        type="checkbox"
-                        checked={compositeIds.includes(s.id)}
-                        onChange={() => onToggleComposite(s.id)}
-                      />
-                    </td>
+                    {showReverseColumn && (
+                      <td className="px-1 py-1">
+                        {alreadyReversedIds.includes(s.id) ? (
+                          <span
+                            title="既にこの行から反転を作成済みです"
+                            className="inline-block h-3 w-3 rounded-sm border border-white/30 bg-white"
+                          />
+                        ) : (
+                          <input
+                            type="checkbox"
+                            checked={reverseIds.includes(s.id)}
+                            onChange={() => onToggleReverse?.(s.id)}
+                            title="エントリー方向を反転して再検証する対象に含める"
+                          />
+                        )}
+                      </td>
+                    )}
                     <td className="px-1 py-1">
                       <FavoriteButton
                         isFavorite={s.favorite}
@@ -305,8 +363,8 @@ export default function LibraryScreen({
                           title={col.key === 'condition_tree' ? text : undefined}
                           className={
                             col.key === 'condition_tree'
-                              ? 'max-w-[160px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
-                              : `whitespace-nowrap px-1 py-1 ${colorClass}`
+                              ? `max-w-[160px] truncate ${col.headerPadLeft ?? 'pl-1'} pr-1 py-1 font-mono text-[11px] text-gray-400`
+                              : `whitespace-nowrap px-1 py-1 ${col.numeric ? 'text-right' : ''} ${colorClass}`
                           }
                         >
                           {text}

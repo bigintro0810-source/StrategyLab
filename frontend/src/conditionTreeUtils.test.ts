@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   buildConditionTreeVariants,
   collectOptimizableConditions,
+  describeConditionTreeJapanese,
   optionIsValid,
   setFieldAtPath,
+  simplifyConditionTree,
 } from './conditionTreeUtils'
-import type { ConditionNode, GroupNode, OptimizeField } from './types'
+import type { ConditionNode, GroupNode, IndicatorInfo, OptimizeField } from './types'
 
 function condition(overrides: Partial<ConditionNode> = {}): ConditionNode {
   return {
@@ -137,6 +139,75 @@ describe('optionIsValid', () => {
 
   it('is false when the path continues past a leaf Condition', () => {
     expect(optionIsValid(sampleTree(), [0, 0], { kind: 'value' })).toBe(false)
+  })
+})
+
+describe('simplifyConditionTree', () => {
+  // グループの追加・削除を繰り返すと、子が1つだけの無意味な入れ子グループが
+  // 残ることがある(ユーザー報告:「グループをたくさん追加してから削除した
+  // 際に画像のようにORの中にANDの中にANDが残ってしまう」)。
+  it('collapses a chain of single-child AND/OR groups down to the innermost real group', () => {
+    const tree: GroupNode = {
+      op: 'OR',
+      children: [
+        {
+          op: 'AND',
+          children: [
+            {
+              op: 'AND',
+              children: [condition({ indicator: 'rsi', operator: '>', value: 70 }), condition({ operator: '<', value: 30 })],
+            },
+          ],
+        },
+      ],
+    }
+    const simplified = simplifyConditionTree(tree) as GroupNode
+    expect(simplified.op).toBe('AND')
+    expect(simplified.children).toHaveLength(2)
+  })
+
+  it('leaves a group with multiple real children untouched', () => {
+    const tree = sampleTree()
+    expect(simplifyConditionTree(tree)).toEqual(tree)
+  })
+
+  it('does not collapse a NOT group even though it always has exactly one child', () => {
+    const tree: GroupNode = { op: 'NOT', children: [condition()] }
+    expect(simplifyConditionTree(tree)).toEqual(tree)
+  })
+
+  it('leaves a single leaf Condition untouched', () => {
+    const leaf = condition()
+    expect(simplifyConditionTree(leaf)).toBe(leaf)
+  })
+})
+
+describe('describeConditionTreeJapanese', () => {
+  // 画面上の並び「比較元 向き 比較先」通り、常に生のindicator/operator/value
+  // をそのまま左から右へ描画する(反転なし) - ユーザー要望:「画面上で順番が
+  // 「比較元 向き 比較先」になっているから、実際の動作でも「比較元＜比較先」
+  // だったらこの通りに動作するようにして」に合わせ、以前あった
+  // price_level指標を終値と比較する時の演算子反転・順序入れ替えは撤去した。
+  const indicators: IndicatorInfo[] = [
+    { id: 'ema', label: 'EMA', params: [], category: 'indicator', allow_literal: false, kind: 'price_level' },
+    { id: 'close', label: '終値', params: [], category: 'price_action', allow_literal: false, kind: 'price_level' },
+    { id: 'rsi', label: 'RSI', params: [], category: 'indicator', allow_literal: true, kind: 'oscillator_0_100' },
+  ]
+
+  it('renders indicator-vs-indicator conditions left to right with no flip, even for price_level-vs-close', () => {
+    const node: ConditionNode = {
+      indicator: 'ema',
+      operator: '>',
+      value: 'close',
+      params: { length: 200 },
+      value_params: {},
+    }
+    expect(describeConditionTreeJapanese(node, indicators)).toBe('EMA(length=200) より上 終値')
+  })
+
+  it('renders a literal-value condition left to right', () => {
+    const node: ConditionNode = { indicator: 'rsi', operator: '>', value: 70, params: {}, value_params: {} }
+    expect(describeConditionTreeJapanese(node, indicators)).toBe('RSI より上 70')
   })
 })
 

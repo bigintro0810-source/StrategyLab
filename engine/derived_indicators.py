@@ -25,6 +25,7 @@ from engine.indicators import atr as _atr_series
 from engine.indicators import ema as _ema_series
 from engine.indicators import rsi as _rsi_series
 from engine.indicators import sma as _sma_series
+from engine.technical_indicators import accumulation_distribution as _accumulation_distribution
 from engine.technical_indicators import adx as _adx_raw
 from engine.technical_indicators import bollinger_bands as _bollinger_bands
 from engine.technical_indicators import daily_reference_levels
@@ -32,6 +33,8 @@ from engine.technical_indicators import daily_vwap as _daily_vwap_raw
 from engine.technical_indicators import ichimoku as _ichimoku_raw
 from engine.technical_indicators import keltner_channels as _keltner_channels_raw
 from engine.technical_indicators import macd as _macd_raw
+from engine.technical_indicators import money_flow_index as _money_flow_index_raw
+from engine.technical_indicators import on_balance_volume as _on_balance_volume_raw
 from engine.technical_indicators import supertrend as _supertrend_raw
 from engine.smc_indicators import (
     _confirmed_swing_level_series,
@@ -85,13 +88,24 @@ def _atr_level(df: pd.DataFrame, length: int = 14) -> pd.Series:
 
 
 def _adx_level(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    line, _plus_di, _minus_di = _adx_raw(df["high"], df["low"], df["close"], int(length))
+    # engine/technical_indicators.py::adx()は(plus_di, minus_di, adx_line)の順で
+    # 返す(engine/conditions.py::_adx_lineと同じ取り違えが以前ここにもあった -
+    # 独立した第三者的な検算で発見、実際に踏んだ不具合)。
+    _plus_di, _minus_di, line = _adx_raw(df["high"], df["low"], df["close"], int(length))
     return line
 
 
 def _macd_line_level(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
     line, _signal, _hist = _macd_raw(df["close"], int(fast), int(slow), int(signal))
     return line
+
+
+def _obv_level(df: pd.DataFrame) -> pd.Series:
+    return _on_balance_volume_raw(df["close"], _require_volume_column(df))
+
+
+def _mfi_level(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    return _money_flow_index_raw(df["high"], df["low"], df["close"], _require_volume_column(df), int(length))
 
 
 def _bollinger_level(df: pd.DataFrame, band: str, period: int = 20, num_std: float = 2.0) -> pd.Series:
@@ -267,6 +281,8 @@ _SLOPE_SERIES = {
     "adx": lambda df, **p: _adx_level(df, p.get("length", 14)),
     "macd": lambda df, **p: _macd_line_level(df, p.get("fast", 12), p.get("slow", 26), p.get("signal", 9)),
     "atr": lambda df, **p: _atr_level(df, p.get("length", 14)),
+    "obv": lambda df, **p: _obv_level(df),
+    "mfi": lambda df, **p: _mfi_level(df, p.get("length", 14)),
 }
 
 
@@ -300,6 +316,37 @@ for _series_name in _SLOPE_SERIES:
     SLOPE_INDICATORS[f"{_series_name}_falling"] = _make_falling_fn(_series_name)
 
 
+def _make_consecutive_rising_fn(series_name: str):
+    series_fn = _SLOPE_SERIES[series_name]
+
+    def _consecutive_rising(df: pd.DataFrame, n: int = 3, **params) -> np.ndarray:
+        values = pd.Series(series_fn(df, **params).to_numpy(dtype=float))
+        rising_int = (values > values.shift(1)).astype(int)
+        return (rising_int.rolling(int(n)).sum() == int(n)).to_numpy(dtype=float)
+
+    return _consecutive_rising
+
+
+def _make_consecutive_falling_fn(series_name: str):
+    series_fn = _SLOPE_SERIES[series_name]
+
+    def _consecutive_falling(df: pd.DataFrame, n: int = 3, **params) -> np.ndarray:
+        values = pd.Series(series_fn(df, **params).to_numpy(dtype=float))
+        falling_int = (values < values.shift(1)).astype(int)
+        return (falling_int.rolling(int(n)).sum() == int(n)).to_numpy(dtype=float)
+
+    return _consecutive_falling
+
+
+# 「N本連続で上昇/下降」- SLOPE_INDICATORS(直前バーとの比較のみ)を、
+# engine/candlestick_patterns.pyのconsecutive_higher_highs等と同じ
+# 「bool.rolling(n).sum() == n」パターンでN本区間に拡張したもの。
+CONSECUTIVE_SLOPE_INDICATORS: dict[str, "callable"] = {}
+for _series_name in _SLOPE_SERIES:
+    CONSECUTIVE_SLOPE_INDICATORS[f"{_series_name}_consecutive_rising"] = _make_consecutive_rising_fn(_series_name)
+    CONSECUTIVE_SLOPE_INDICATORS[f"{_series_name}_consecutive_falling"] = _make_consecutive_falling_fn(_series_name)
+
+
 def ema_slope_degrees(df: pd.DataFrame, length: int = 200, lookback: int = 5, **p) -> np.ndarray:
     """EMA slope expressed as an angle (degrees), via arctan of the price
     change per bar normalized by ATR(14) - dividing by ATR rather than raw
@@ -319,6 +366,16 @@ def ema_slope_degrees(df: pd.DataFrame, length: int = 200, lookback: int = 5, **
 def ema_roc(df: pd.DataFrame, length: int = 200, lookback: int = 5, **p) -> np.ndarray:
     """EMA rate of change over `lookback` bars, as a percentage."""
     return _roc(_ema_level(df, length).to_numpy(dtype=float), int(lookback))
+
+
+def ema_slope(df: pd.DataFrame, length: int = 200, lookback: int = 5, **p) -> np.ndarray:
+    """生のΔEMA(EMA - lookback本前のEMA、価格の生の単位のまま、角度や%に
+    変換しない)。ema_slope_degrees/ema_rocと違い銘柄間のスケール補正は
+    しないため、同一銘柄・同一時間足内での比較にのみ意味を持つ。"""
+    ema_values = _ema_level(df, length).to_numpy(dtype=float)
+    prior = np.roll(ema_values, int(lookback))
+    prior[: int(lookback)] = np.nan
+    return ema_values - prior
 
 
 def _roc(values: np.ndarray, lookback: int) -> np.ndarray:
@@ -411,6 +468,15 @@ def dist_to_ema_atr_ratio(df: pd.DataFrame, ema_length: int = 200, atr_length: i
         return dist / atr_values
 
 
+def dist_close_ema_pct(df: pd.DataFrame, length: int = 200, **p) -> np.ndarray:
+    """|close - EMA| / close × 100 - EMAからの距離を終値に対する%で表す
+    (dist_close_ema/dist_to_ema_atr_ratioの%版、銘柄間で比較しやすい)。"""
+    close = df["close"].to_numpy(dtype=float)
+    dist = np.abs(close - _ema_level(df, length).to_numpy(dtype=float))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return dist / close * 100.0
+
+
 def today_range_pct_of_adr(df: pd.DataFrame, adr_period: int = 14, **p) -> np.ndarray:
     """Today's (so far) high-low range as a percentage of ADR - "80%"/
     "100%"/"120%" from the wishlist are just this indicator compared with
@@ -471,20 +537,41 @@ def _lower_wick_size(df: pd.DataFrame) -> pd.Series:
     return df[["close", "open"]].min(axis=1) - df["low"]
 
 
-def avg_body_size(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
-    return _body_size(df).rolling(window=int(length)).mean().to_numpy(dtype=float)
+def avg_body_size(df: pd.DataFrame, length: int = 20, exclude_current: int = 0, **p) -> np.ndarray:
+    """exclude_current=0(既定)は現在バーを含む直近length本の平均(従来の
+    挙動)。1にすると直前length本(現在バーは含まない)の平均になる - 「現在
+    の実体は直近平均の何倍か」のように現在バー自身と比較する用途ではこちら
+    を使う(含めてしまうと自己参照になり歪む)。"""
+    result = _body_size(df).rolling(window=int(length)).mean()
+    if exclude_current:
+        result = result.shift(1)
+    return result.to_numpy(dtype=float)
 
 
-def max_body_size(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
-    return _body_size(df).rolling(window=int(length)).max().to_numpy(dtype=float)
+def max_body_size(df: pd.DataFrame, length: int = 20, exclude_current: int = 0, **p) -> np.ndarray:
+    """exclude_current: avg_body_sizeのdocstring参照 - 特に「現在の実体が
+    過去length本の最大を更新したか」を判定したい場合はexclude_current=1が
+    必須(0のままだと現在バー自身が最大値の候補に含まれてしまい、
+    「現在実体 > max_body_size」が定義上決して成立しない)。"""
+    result = _body_size(df).rolling(window=int(length)).max()
+    if exclude_current:
+        result = result.shift(1)
+    return result.to_numpy(dtype=float)
 
 
-def min_body_size(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
-    return _body_size(df).rolling(window=int(length)).min().to_numpy(dtype=float)
+def min_body_size(df: pd.DataFrame, length: int = 20, exclude_current: int = 0, **p) -> np.ndarray:
+    """exclude_current: max_body_sizeのdocstring参照(最小値版)。"""
+    result = _body_size(df).rolling(window=int(length)).min()
+    if exclude_current:
+        result = result.shift(1)
+    return result.to_numpy(dtype=float)
 
 
-def body_size_std(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
-    return _body_size(df).rolling(window=int(length)).std().to_numpy(dtype=float)
+def body_size_std(df: pd.DataFrame, length: int = 20, exclude_current: int = 0, **p) -> np.ndarray:
+    result = _body_size(df).rolling(window=int(length)).std()
+    if exclude_current:
+        result = result.shift(1)
+    return result.to_numpy(dtype=float)
 
 
 def avg_upper_wick(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
@@ -506,6 +593,18 @@ def atr_deviation(df: pd.DataFrame, atr_length: int = 14, window: int = 20, **p)
 
 def close_rolling_std(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
     return df["close"].rolling(window=int(length)).std().to_numpy(dtype=float)
+
+
+def historical_volatility(df: pd.DataFrame, period: int = 20, annualization_factor: float = 252.0, **p) -> np.ndarray:
+    """正式なヒストリカルボラティリティ: 対数リターンln(close/前バーclose)の
+    period本ローリング標準偏差 × √annualization_factor × 100(%表示)。
+    年率換算係数は時間足によって変わる(日足の標準は252)ため自動判定は
+    せず、パラメータとして利用者に委ねる - close_rolling_stdとは異なり、
+    こちらは対数リターンベースで年率換算した「正式な」HV。"""
+    close = df["close"]
+    log_return = np.log(close / close.shift(1))
+    std = log_return.rolling(window=int(period)).std()
+    return (std * np.sqrt(float(annualization_factor)) * 100.0).to_numpy(dtype=float)
 
 
 def rsi_rolling_mean(df: pd.DataFrame, rsi_length: int = 14, window: int = 20, **p) -> np.ndarray:
@@ -568,6 +667,9 @@ def zscore_atr(df: pd.DataFrame, atr_length: int = 14, window: int = 20, **p) ->
 
 
 def is_max_body_of_n(df: pd.DataFrame, window: int = 100, **p) -> np.ndarray:
+    """現在バーを含む直近window本の中で、現在バーの実体が最大かどうか
+    (max_body_sizeの数値比較と違い等号判定なので、現在バーを含めても
+    「常に真」にはならない - 実際に記録を更新した瞬間だけ成立する)。"""
     body = _body_size(df)
     return (body == body.rolling(window=int(window)).max()).to_numpy(dtype=float)
 
@@ -591,9 +693,16 @@ def is_max_rsi_of_n(df: pd.DataFrame, rsi_length: int = 14, window: int = 200, *
 # ---------------------------------------------------------------------------
 
 def bb_width(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, **p) -> np.ndarray:
+    """TradingViewのBollinger Bands Widthと同じ、Middle Bandで正規化した
+    幅((Upper-Lower)/Middle) - 価格帯の異なる銘柄間でも比較できる。"""
     upper = _bollinger_level(df, "upper", period, num_std).to_numpy(dtype=float)
+    middle = _bollinger_level(df, "middle", period, num_std).to_numpy(dtype=float)
     lower = _bollinger_level(df, "lower", period, num_std).to_numpy(dtype=float)
-    return upper - lower
+    return (upper - lower) / middle
+
+
+def bb_width_percent(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, **p) -> np.ndarray:
+    return bb_width(df, period, num_std) * 100.0
 
 
 def bb_squeeze(df: pd.DataFrame, period: int = 20, num_std: float = 2.0, window: int = 100, percentile: float = 10.0, **p) -> np.ndarray:
@@ -897,15 +1006,37 @@ def ichimoku_price_vs_cloud(
     return result.to_numpy(dtype=float)
 
 
+def _ichimoku_unshifted_senkou(
+    df: pd.DataFrame, tenkan_period: int, kijun_period: int, senkou_b_period: int
+) -> tuple[pd.Series, pd.Series]:
+    """Senkou Span A/B WITHOUT the kijun_period forward-display shift that
+    technical_indicators.py::ichimoku() applies - i.e. the value as of the
+    bar that computed it, not the bar it's later drawn at. Needed
+    specifically for kumo-twist detection (see below); every other Ichimoku
+    consumer in this file wants the shifted/"as displayed" version."""
+    high, low = df["high"], df["low"]
+    tenkan = (high.rolling(window=int(tenkan_period)).max() + low.rolling(window=int(tenkan_period)).min()) / 2
+    kijun = (high.rolling(window=int(kijun_period)).max() + low.rolling(window=int(kijun_period)).min()) / 2
+    senkou_a = (tenkan + kijun) / 2
+    senkou_b = (high.rolling(window=int(senkou_b_period)).max() + low.rolling(window=int(senkou_b_period)).min()) / 2
+    return senkou_a, senkou_b
+
+
 def ichimoku_kumo_twist_bullish(
     df: pd.DataFrame, tenkan_period: int = 9, kijun_period: int = 26, senkou_b_period: int = 52, **p,
 ) -> np.ndarray:
-    """Senkou Span A crosses above Senkou Span B - the cloud ahead just
-    turned from red to green. A thin convenience wrapper (this is already
-    buildable manually as senkou_a crosses_above senkou_b with matching
-    params) so it shows up as one discoverable named condition."""
-    _tenkan, _kijun, senkou_a, senkou_b = _ichimoku_raw(
-        df["high"], df["low"], int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    """Senkou Span A crosses above Senkou Span B, detected on the freshly-
+    computed values (NOT the kijun_period-bars-forward "as displayed on
+    chart" values that ichimoku_senkou_a/b and ichimoku_price_vs_cloud use)
+    - this is the standard trading convention: a twist is actionable as
+    soon as the underlying Tenkan/Kijun data makes it computable, not only
+    once it scrolls into the cloud's currently-displayed position
+    kijun_period bars later. Consequently this is NOT equivalent to
+    manually building "senkou_a crosses_above senkou_b" from the registered
+    (displayed) indicators - that version would fire kijun_period bars
+    later than this one."""
+    senkou_a, senkou_b = _ichimoku_unshifted_senkou(
+        df, int(tenkan_period), int(kijun_period), int(senkou_b_period)
     )
     above = senkou_a > senkou_b
     prev_above = above.shift(1, fill_value=False)
@@ -915,9 +1046,10 @@ def ichimoku_kumo_twist_bullish(
 def ichimoku_kumo_twist_bearish(
     df: pd.DataFrame, tenkan_period: int = 9, kijun_period: int = 26, senkou_b_period: int = 52, **p,
 ) -> np.ndarray:
-    """Mirror image of ichimoku_kumo_twist_bullish."""
-    _tenkan, _kijun, senkou_a, senkou_b = _ichimoku_raw(
-        df["high"], df["low"], int(tenkan_period), int(kijun_period), int(senkou_b_period)
+    """Mirror image of ichimoku_kumo_twist_bullish - see its docstring for
+    why this uses the unshifted Senkou Span values."""
+    senkou_a, senkou_b = _ichimoku_unshifted_senkou(
+        df, int(tenkan_period), int(kijun_period), int(senkou_b_period)
     )
     below = senkou_a < senkou_b
     prev_below = below.shift(1, fill_value=False)
@@ -1041,6 +1173,11 @@ def linreg_lower(df: pd.DataFrame, length: int = 20, num_std: float = 2.0, **p) 
 # ---------------------------------------------------------------------------
 
 def _narrow_range(df: pd.DataFrame, n: int) -> np.ndarray:
+    """現在バーを含む直近n本の中で、現在バーのレンジ(高値-安値)が最小
+    かどうか - NR4/NR7の標準的な定義自体が「今日のレンジが直近n本で
+    最小」という、現在バーを主語にした条件のため、他の多くのローリング
+    系指標と違いここでは意図的に現在バーを含めている(除外すると
+    「今日」を判定できず定義そのものが成立しない)。"""
     bar_range = df["high"] - df["low"]
     return (bar_range == bar_range.rolling(n).min()).fillna(False).to_numpy(dtype=float)
 
@@ -1087,3 +1224,100 @@ def volume_climax_bullish(df: pd.DataFrame, lookback: int = 20, body_mult: float
 
 def volume_climax_bearish(df: pd.DataFrame, lookback: int = 20, body_mult: float = 2.0, volume_mult: float = 2.0, **p) -> np.ndarray:
     return _volume_climax(df, False, int(lookback), float(body_mult), float(volume_mult))
+
+
+# ---------------------------------------------------------------------------
+# レビュー対応で新規追加した指標群(2026-07-19) - Bull Bear Power / Chaikin
+# Oscillator / CMO / Connors RSI / Coppock Curve / 相関係数 / 相関オシレーター
+# ---------------------------------------------------------------------------
+
+def bull_power(df: pd.DataFrame, length: int = 13, **p) -> np.ndarray:
+    """Elderの定義: 高値とEMA(既定期間13)の差 - 買い圧力の強さ。"""
+    ema = _ema_level(df, int(length))
+    return (df["high"] - ema).to_numpy(dtype=float)
+
+
+def bear_power(df: pd.DataFrame, length: int = 13, **p) -> np.ndarray:
+    """Elderの定義: 安値とEMA(既定期間13)の差 - 売り圧力の強さ。"""
+    ema = _ema_level(df, int(length))
+    return (df["low"] - ema).to_numpy(dtype=float)
+
+
+def chaikin_oscillator(df: pd.DataFrame, short_length: int = 3, long_length: int = 10, **p) -> np.ndarray:
+    """既存のA/Dライン(accumulation_distribution)を再利用し、その短期EMAと
+    長期EMAの差を取る(A/Dラインを再計算しない)。"""
+    volume = _require_volume_column(df)
+    ad = _accumulation_distribution(df["high"], df["low"], df["close"], volume)
+    short_ema = ad.ewm(span=int(short_length), adjust=False).mean()
+    long_ema = ad.ewm(span=int(long_length), adjust=False).mean()
+    return (short_ema - long_ema).to_numpy(dtype=float)
+
+
+def cmo(df: pd.DataFrame, length: int = 14, **p) -> np.ndarray:
+    """Chande Momentum Oscillator: 100 * (上昇分合計 - 下降分合計) / (上昇分
+    合計 + 下降分合計)。両方の合計が0(値動きが全く無い)の場合は0を返す。"""
+    close = df["close"]
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    sum_gain = gain.rolling(window=int(length)).sum()
+    sum_loss = loss.rolling(window=int(length)).sum()
+    denom = sum_gain + sum_loss
+    result = 100 * (sum_gain - sum_loss) / denom
+    return result.where(denom != 0, 0.0).to_numpy(dtype=float)
+
+
+def _streak(close: pd.Series) -> pd.Series:
+    """終値ベースの連続上昇/下降本数(上昇継続中は+1,+2,+3...、下降継続中は
+    -1,-2,-3...、前バーと同値の場合は0にリセット) - Connors RSIのStreak定義。"""
+    sign = np.sign(close.diff()).fillna(0.0)
+    streak_id = (sign != sign.shift()).cumsum()
+    run_length = sign.groupby(streak_id).cumcount() + 1
+    return (run_length * sign).where(sign != 0, 0.0)
+
+
+def connors_rsi(
+    df: pd.DataFrame, rsi_length: int = 3, streak_length: int = 2, percent_rank_length: int = 100, **p
+) -> np.ndarray:
+    """Larry Connorsの定義通り、RSI(終値,rsi_length)・RSI(Streak,streak_
+    length)・PercentRank(1本ROC,percent_rank_length)の単純平均。"""
+    close = df["close"]
+    price_rsi = _rsi_series(close, int(rsi_length))
+    streak_rsi = _rsi_series(_streak(close), int(streak_length))
+    roc_1 = close.pct_change() * 100.0
+    percent_rank = roc_1.rolling(window=int(percent_rank_length)).rank(pct=True) * 100.0
+    return ((price_rsi + streak_rsi + percent_rank) / 3.0).to_numpy(dtype=float)
+
+
+def _wma(series: pd.Series, length: int) -> pd.Series:
+    weights = np.arange(1, length + 1, dtype=float)
+    return series.rolling(window=length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+
+
+def coppock_curve(df: pd.DataFrame, long_roc: int = 14, short_roc: int = 11, wma_length: int = 10, **p) -> np.ndarray:
+    """WMA(ROC(長期)+ROC(短期), wma_length) - SMA/EMAではなくWMAで平滑化する
+    のが標準の定義。"""
+    close = df["close"].to_numpy(dtype=float)
+    roc_sum = pd.Series(_roc(close, int(long_roc)) + _roc(close, int(short_roc)), index=df.index)
+    return _wma(roc_sum, int(wma_length)).to_numpy(dtype=float)
+
+
+def correlation_close_ema(df: pd.DataFrame, length: int = 20, ema_length: int = 20, **p) -> np.ndarray:
+    """終値とEMA(ema_length)のPearson相関係数(直近length本のローリング) -
+    価格がトレンド指標にどれだけ素直に追従しているかの目安。分散が0になる
+    区間(値が全く動かない)はTradingViewのta.correlation()同様NaNのまま
+    (定義上計算不能なため、無理に0埋めしない)。"""
+    close = df["close"]
+    ema = _ema_level(df, int(ema_length))
+    return close.rolling(window=int(length)).corr(ema).to_numpy(dtype=float)
+
+
+def correlation_oscillator(df: pd.DataFrame, length: int = 20, **p) -> np.ndarray:
+    """終値と単純な連番(バーインデックス)とのPearson相関係数(直近length
+    本のローリング) - +1に近いほど直近が一直線の上昇トレンド、-1に近い
+    ほど一直線の下降トレンド、0付近はレンジ/往来相場(Correlation Coefficientが
+    2系列を自由に選べるのに対し、こちらは「価格が時間と一貫して相関して
+    いるか=トレンドの一貫性」を測る専用の指標)。"""
+    close = df["close"]
+    bar_index = pd.Series(np.arange(len(df), dtype=float), index=df.index)
+    return close.rolling(window=int(length)).corr(bar_index).to_numpy(dtype=float)

@@ -26,18 +26,6 @@ from engine.params import reconstruct_params_from_row
 
 AVAILABLE_TIMEFRAMES = ["1m", "5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"]
 
-SUPPORTED_SYMBOLS = [
-    "USDJPY",
-    "EURJPY",
-    "GBPJPY",
-    "AUDJPY",
-    "AUDUSD",
-    "EURUSD",
-    "GBPUSD",
-    "XAUUSD",
-    "XAGUSD",
-]
-
 OUTPUT_DIR = Path("output")
 
 # os.cpu_count() reports LOGICAL processors (16 here), not physical cores
@@ -86,9 +74,15 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
-        help="通貨ペア (デフォルト: USDJPY)",
+        # choices=SUPPORTED_SYMBOLSで固定9通貨に制限していたが、CSVインポート
+        # 画面はユーザーが任意の名前(例: "USDJPY-FXCM"、複数業者のUSDJPYを
+        # 共存させるための別名、日経平均のような別資産)で新しい「通貨ペア」
+        # を追加できる作りなので、ここで固定リストに縛るとインポートできても
+        # バックテストが実行できない不整合になっていた(実際に踏んだ不具合)。
+        # 存在しないシンボルを指定した場合はfind_data_file()が
+        # わかりやすいFileNotFoundErrorを出すので、ここでの事前検証は不要。
+        help="通貨ペア (デフォルト: USDJPY。data/rawに取り込み済みならどの名前でも可)",
     )
 
     parser.add_argument(
@@ -132,7 +126,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="--optimizer structure でランキング対象に残す最低トレード数。少なすぎるトレード数の候補は"
-        "勝率100%/PF999のような統計的に無意味な値でランキング上位を占めてしまうため除外する (デフォルト: 30)",
+        "勝率100%%/PF999のような統計的に無意味な値でランキング上位を占めてしまうため除外する (デフォルト: 30)",
     )
 
     parser.add_argument(
@@ -251,7 +245,10 @@ METAL_PIP_SIZE = {
 def pip_size_for_symbol(symbol: str) -> float:
     if symbol in METAL_PIP_SIZE:
         return METAL_PIP_SIZE[symbol]
-    return JPY_PIP_SIZE if symbol.endswith("JPY") else NON_JPY_PIP_SIZE
+    # endswith("JPY")ではなくin判定 - 同じ通貨ペアを複数の業者から取り込む
+    # ためにユーザーが付ける別名(例: "USDJPY-FXCM")はJPYで終わらないが
+    # JPYクロスであることに変わりはないため(実際に踏んだ不具合)。
+    return JPY_PIP_SIZE if "JPY" in symbol else NON_JPY_PIP_SIZE
 
 
 def build_trigger_filter_defaults() -> dict[str, list]:
@@ -425,6 +422,47 @@ def run_one_backtest(task: tuple[int, dict]) -> dict:
     result["sortino_ratio"] = advanced["sortino_ratio"]
     result["cagr"] = advanced["cagr"]
     result["calmar_ratio"] = advanced["calmar_ratio"]
+
+    # MAE/MFE(最大逆行幅/最大追い風幅)の戦略単位の集計値 - ユーザー要望:
+    # 「ストラテジー詳細にこれを追加して。MAE,MFE,平均MAE,MFE,中央値MAE,MFE」。
+    # MAE/MFE単体(平均・中央値なし)は「最悪ケース/最良ケースの1トレード」を
+    # 表す最大値として扱う。
+    if not trade_log.empty and "mae" in trade_log.columns:
+        result["mae"] = round(float(trade_log["mae"].max()), 5)
+        result["mfe"] = round(float(trade_log["mfe"].max()), 5)
+        result["mae_avg"] = round(float(trade_log["mae"].mean()), 5)
+        result["mfe_avg"] = round(float(trade_log["mfe"].mean()), 5)
+        result["mae_median"] = round(float(trade_log["mae"].median()), 5)
+        result["mfe_median"] = round(float(trade_log["mfe"].median()), 5)
+    else:
+        result["mae"] = 0.0
+        result["mfe"] = 0.0
+        result["mae_avg"] = 0.0
+        result["mfe_avg"] = 0.0
+        result["mae_median"] = 0.0
+        result["mfe_median"] = 0.0
+
+    # 勝ちトレード/負けトレードだけに絞った利益・損失の集計値 - ユーザー
+    # 要望:「ストラテジー詳細に最大利益、最大損失、平均利益、平均損失、
+    # 中央値利益、中央値損失追加して」。期待値(expected_value)は勝ち負け
+    # 両方をならした値なので、勝ち/負けそれぞれの傾向を見るには別集計が
+    # 必要。損失側は符号付き(マイナス)のまま返す(profitの符号規則と揃える)。
+    if not trade_log.empty:
+        wins = trade_log.loc[trade_log["profit"] > 0, "profit"]
+        losses = trade_log.loc[trade_log["profit"] < 0, "profit"]
+        result["max_win"] = round(float(wins.max()), 5) if not wins.empty else 0.0
+        result["max_loss"] = round(float(losses.min()), 5) if not losses.empty else 0.0
+        result["avg_win"] = round(float(wins.mean()), 5) if not wins.empty else 0.0
+        result["avg_loss"] = round(float(losses.mean()), 5) if not losses.empty else 0.0
+        result["median_win"] = round(float(wins.median()), 5) if not wins.empty else 0.0
+        result["median_loss"] = round(float(losses.median()), 5) if not losses.empty else 0.0
+    else:
+        result["max_win"] = 0.0
+        result["max_loss"] = 0.0
+        result["avg_win"] = 0.0
+        result["avg_loss"] = 0.0
+        result["median_win"] = 0.0
+        result["median_loss"] = 0.0
 
     return result
 
@@ -1026,6 +1064,11 @@ def main() -> None:
         # evaluation time (engine/backtest_engine.py), never stored inside
         # condition_tree itself.
         param_space["mandatory_conditions"] = [exploration_mandatory_conditions]
+        # generate_candidate_trees()自体の既定シード(42)は再現性のため残し
+        # てあるが、ここ(実際のランダム探索実行)では毎回違う候補を試したい
+        # という明示的な要望(2026-07-21)により、実行のたびに現在時刻ベースの
+        # 新しいシードを渡す。
+        structure_seed = int(time.time() * 1000) % (2**31)
         param_space["condition_tree"] = generate_candidate_trees(
             n=args.n_candidates,
             max_depth=args.max_depth,
@@ -1036,6 +1079,7 @@ def main() -> None:
             pool=indicator_pool,
             allowed_param_values=exploration_param_values,
             allowed_literal_values=exploration_literal_values,
+            seed=structure_seed,
         )
         param_space["direction"] = exploration_directions
         print(f"構造生成candidate数: {len(param_space['condition_tree'])} (要求: {args.n_candidates})")
@@ -1081,7 +1125,12 @@ def main() -> None:
             parameter_list = build_grid_from_space(param_space)
             total_tasks = len(parameter_list)
         elif args.optimizer == "random":
-            parameter_list = sample_random_combos(param_space, args.n_samples)
+            # sample_random_combos()自体の既定シード(42)は再現性のため
+            # 固定のままにしてあるが、ここ(実際の探索実行)では毎回違う
+            # 候補を試したいという明示的な要望(2026-07-21)により、
+            # 実行のたびに現在時刻ベースの新しいシードを渡す。
+            random_search_seed = int(time.time() * 1000) % (2**31)
+            parameter_list = sample_random_combos(param_space, args.n_samples, seed=random_search_seed)
             total_tasks = len(parameter_list)
         else:
             parameter_list = None
@@ -1179,6 +1228,10 @@ def main() -> None:
                 # StructureGeneticSearch's rr_choices) and overrides
                 # base_defaults's rr below via the ** merge order.
                 base_defaults = {key: values[0] for key, values in param_space.items()}
+                # StructureGeneticSearch自体の既定シード(42)は再現性のため
+                # 残してあるが、generate_candidate_trees呼び出し側と同じ理由
+                # (2026-07-21)で、実行のたびに新しいシードを渡す。
+                genetic_seed = int(time.time() * 1000) % (2**31)
                 search = StructureGeneticSearch(
                     population_size=args.population,
                     mutation_rate=args.mutation_rate,
@@ -1192,6 +1245,7 @@ def main() -> None:
                     allowed_param_values=exploration_param_values,
                     allowed_literal_values=exploration_literal_values,
                     allowed_directions=exploration_directions,
+                    seed=genetic_seed,
                 )
                 population = search.initial_population()
                 next_id = 1

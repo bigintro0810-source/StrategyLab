@@ -113,11 +113,11 @@ const OPERATOR_LABELS: Record<Operator, string> = {
   crosses_below: '下抜け',
 }
 
-function indicatorLabel(indicators: IndicatorInfo[], id: string): string {
+export function indicatorLabel(indicators: IndicatorInfo[], id: string): string {
   return indicators.find((i) => i.id === id)?.label ?? id
 }
 
-function paramsLabel(indicators: IndicatorInfo[], indicatorId: string, params: Record<string, number>): string {
+export function paramsLabel(indicators: IndicatorInfo[], indicatorId: string, params: Record<string, number>): string {
   const info = indicators.find((i) => i.id === indicatorId)
   const entries = Object.entries(params)
   if (entries.length === 0) return ''
@@ -155,6 +155,82 @@ export function describeConditionTreeJapanese(node: TreeNode, indicators: Indica
 
   const value = Number(node.value.toFixed(4))
   return `${leftLabel}${leftParams} ${operatorLabel} ${value}`
+}
+
+/** Same translation as describeConditionTreeJapanese, but one leaf condition
+ * per line (indented by nesting depth) instead of a single dense line -
+ * used by the strategy-detail 条件 tab where readability matters more than
+ * compactness (the table "条件" column keeps the one-liner). */
+export function describeConditionTreeJapaneseLines(
+  node: TreeNode,
+  indicators: IndicatorInfo[],
+  depth = 0,
+): string[] {
+  const indent = '  '.repeat(depth)
+  if (isGroup(node)) {
+    const opLabel = node.op === 'NOT' ? 'NOT' : node.op
+    const lines = [`${indent}${opLabel}(`]
+    node.children.forEach((child, i) => {
+      lines.push(...describeConditionTreeJapaneseLines(child, indicators, depth + 1))
+      if (node.op !== 'NOT' && i < node.children.length - 1) lines.push(`${indent}  ${node.op}`)
+    })
+    lines.push(`${indent})`)
+    return lines
+  }
+
+  return [`${indent}${describeConditionTreeJapanese(node, indicators)}`]
+}
+
+// 双方向運用(condition_treeではなくlong_condition_tree/short_condition_tree
+// を持つ行)の条件を表示する共通ロジック - ランキング/ライブラリ一覧の「条件」
+// 列とストラテジー詳細の「条件」タブが、それぞれcondition_treeだけを見て
+// いて双方向ストラテジーだと空欄/「条件ツリーがありません」になってしまう
+// 不具合があった(実際に踏んだ不具合:「ストラテジー詳細に条件が表示され
+// なくなった」)。
+interface StrategyConditionLike {
+  condition_tree?: TreeNode | null
+  long_condition_tree?: TreeNode | null
+  short_condition_tree?: TreeNode | null
+}
+
+export function describeStrategyConditionJapanese(row: StrategyConditionLike, indicators: IndicatorInfo[]): string {
+  if (row.condition_tree) return describeConditionTreeJapanese(row.condition_tree, indicators)
+  const parts: string[] = []
+  if (row.long_condition_tree) parts.push(`Long: ${describeConditionTreeJapanese(row.long_condition_tree, indicators)}`)
+  if (row.short_condition_tree) parts.push(`Short: ${describeConditionTreeJapanese(row.short_condition_tree, indicators)}`)
+  return parts.join(' / ')
+}
+
+export function describeStrategyConditionJapaneseLines(row: StrategyConditionLike, indicators: IndicatorInfo[]): string[] {
+  if (row.condition_tree) return describeConditionTreeJapaneseLines(row.condition_tree, indicators)
+
+  const lines: string[] = []
+  if (row.long_condition_tree) {
+    lines.push('[Long]')
+    lines.push(...describeConditionTreeJapaneseLines(row.long_condition_tree, indicators))
+  }
+  if (row.short_condition_tree) {
+    if (lines.length > 0) lines.push('')
+    lines.push('[Short]')
+    lines.push(...describeConditionTreeJapaneseLines(row.short_condition_tree, indicators))
+  }
+  return lines
+}
+
+// グループを追加してから削除していくと、「AND(OR(AND(...)))」のように
+// 子が1つだけの(意味のない)入れ子グループが残ってしまうことがある
+// (ユーザー報告:「グループをたくさん追加してから削除した際に画像のように
+// ORの中にANDの中にANDが残ってしまう」)。AND/ORは子が1つだけならその子
+// 自身と論理的に同じ(AND(x)=x, OR(x)=x)なので、子が1つだけかつその子が
+// グループの場合はそのグループ自身に置き換えて畳み込む。NOTは子1つが
+// 正常な形(NOT(x)はxとは意味が違う)なので対象外。
+export function simplifyConditionTree(node: TreeNode): TreeNode {
+  if (!isGroup(node)) return node
+  const children = node.children.map(simplifyConditionTree)
+  if (node.op !== 'NOT' && children.length === 1 && isGroup(children[0])) {
+    return children[0]
+  }
+  return { ...node, children }
 }
 
 function cartesianProduct<T>(arrays: T[][]): T[][] {

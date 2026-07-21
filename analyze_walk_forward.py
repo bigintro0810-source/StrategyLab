@@ -2,7 +2,7 @@ import argparse
 
 import pandas as pd
 
-from main import AVAILABLE_TIMEFRAMES, SUPPORTED_SYMBOLS, resolve_output_dir
+from main import AVAILABLE_TIMEFRAMES, resolve_output_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -10,9 +10,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--symbol",
-        choices=SUPPORTED_SYMBOLS,
         default="USDJPY",
-        help="通貨ペア (walk_forward.pyで使ったものと合わせる)",
+        help="通貨ペア (walk_forward.pyで使ったものと合わせる。data/rawに取り込み済みならどの名前でも可)",
     )
 
     parser.add_argument(

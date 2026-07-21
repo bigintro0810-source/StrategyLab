@@ -8,7 +8,11 @@ import {
   fetchBacktestResults,
   fetchBacktestStatus,
   fetchCollections,
+  fetchDataSymbolTimeframes,
+  fetchDataSymbols,
   fetchIndicators,
+  fetchReverseCurrentResults,
+  fetchReverseRowResults,
   fetchSaveResult,
   fetchStrategies,
   fetchStrategiesFiltered,
@@ -17,12 +21,15 @@ import {
   renameCollection,
   renameStrategy,
   rerunRankingRow,
+  runReverse,
   saveRankingRow,
+  saveReverseRow,
   stopBacktest,
   toggleStrategyFavorite,
   type CompareEntry,
+  type ReverseTarget,
 } from './api'
-import type { CompositeInput } from './compositeUtils'
+import type { CompositeCandidate, CompositeInput } from './compositeUtils'
 import type {
   BacktestResults,
   ConditionNode,
@@ -40,16 +47,17 @@ import { buildRangeValues } from './rangeUtils'
 import ConditionTreeEditor from './components/ConditionTreeEditor'
 import AutoExplorationScreen from './components/AutoExplorationScreen'
 import AutoExplorationHero from './components/AutoExplorationHero'
-import DataScreen from './components/DataScreen'
 import ReportScreen from './components/ReportScreen'
 import ValidationScreen from './components/ValidationScreen'
 import ResultsScreen from './components/ResultsScreen'
+import RankingTable from './components/RankingTable'
 import type { StrategyTabData } from './components/StrategyDetailTabs'
+import type { TabId } from './components/AutoExplorationDetail'
 import LibraryScreen from './components/LibraryScreen'
 import LibraryDetailTabs, { type LibraryTabData } from './components/LibraryDetailTabs'
 import CompareScreen from './components/CompareScreen'
 import CompareView from './components/CompareView'
-import CompositeDetail from './components/CompositeDetail'
+import CompositeDetail, { type CompositeSavedEntry } from './components/CompositeDetail'
 import AddToCollectionModal from './components/AddToCollectionModal'
 import CsvImportScreen from './components/CsvImportScreen'
 import DataValidatorScreen from './components/DataValidatorScreen'
@@ -129,9 +137,26 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
     label: '結果',
     subTabs: [
       { id: 'ranking', label: 'ランキング' },
+      // 'reversed'(反転ストラテジー)は反転実行が1回もされていない間は
+      // 出さない - 下の描画側でreversedBatchIds.length===0のとき除外する。
+      { id: 'reversed', label: '反転ストラテジー' },
       { id: 'detail', label: 'ストラテジー詳細' },
       { id: 'compare', label: '比較' },
       { id: 'composite', label: '合成' },
+    ],
+  },
+  {
+    id: 'library',
+    label: 'ライブラリ',
+    subTabs: [
+      { id: 'saved', label: '保存済みストラテジー' },
+      { id: 'favorites', label: 'お気に入り' },
+      { id: 'reversed', label: '反転ストラテジー' },
+      { id: 'detail', label: 'ストラテジー詳細' },
+      { id: 'compare', label: '比較' },
+      { id: 'composite', label: '合成' },
+      // 'export'(エクスポート)は一旦非表示 - ReportScreenの描画自体は
+      // 下に残してあるので、この行を戻すだけで再表示できる。
     ],
   },
   {
@@ -145,23 +170,9 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
     ],
   },
   {
-    id: 'library',
-    label: 'ライブラリ',
-    subTabs: [
-      { id: 'saved', label: '保存済みストラテジー' },
-      { id: 'favorites', label: 'お気に入り' },
-      { id: 'detail', label: 'ストラテジー詳細' },
-      { id: 'compare', label: '比較' },
-      { id: 'composite', label: '合成' },
-      // 'export'(エクスポート)は一旦非表示 - ReportScreenの描画自体は
-      // 下に残してあるので、この行を戻すだけで再表示できる。
-    ],
-  },
-  {
     id: 'data',
     label: 'データ',
     subTabs: [
-      { id: 'dataset', label: 'データセット' },
       { id: 'import', label: 'CSVインポート' },
       { id: 'validator', label: 'Data Validator' },
     ],
@@ -178,7 +189,12 @@ const MAIN_TABS: { id: MainTab; label: string; subTabs: { id: string; label: str
   },
 ]
 
-const SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD', 'XAUUSD', 'XAGUSD']
+// data/symbolsクエリ(GET /api/data/symbols、ディスク上を都度スキャン)が
+// まだ読み込めていない間だけ使う初期表示用。以前はこれが唯一のシンボル
+// リストで、新しい通貨ペアをCSVインポートしても選択肢に出てこなかった
+// (ユーザー要望: 「俺以外のユーザーがどの通貨でも任意でインポートできる
+// ようにしたい」)。
+const FALLBACK_SYMBOLS = ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY', 'AUDUSD', 'EURUSD', 'GBPUSD', 'XAUUSD', 'XAGUSD']
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1mo']
 
 // api_server.pyのJOBSは常駐プロセスのメモリ上にしかない(run.batが開く
@@ -188,6 +204,18 @@ const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1w', '1m
 // 場合はstatusQueryが404を返すので、その時だけ諦めてnullに戻す
 // (下のuseEffect参照)。
 const JOB_ID_STORAGE_KEY = 'strategylab:jobId'
+// 反転ストラテジーの詳細タブは負のrankで開くが、結果側(-rank)とライブラリ
+// 側が同じrank値を取りうる(それぞれ別データ、rankは1から振り直される)
+// ため、ライブラリ側だけこのオフセットを足して負のタブrank空間を分ける
+// (openTabRanksが結果/ライブラリ/通常ランキングを1つの配列で共有している
+// ため - toggleReverseRowChecked/reverseDetailRanks/strategyTabs参照)。
+const LIBRARY_REVERSE_TAB_OFFSET = 100000
+// 検証タブで選択中のライブラリストラテジー。結果自体はバックエンド側で
+// saved_strategies/{id}/にファイルとして永続化される(api_server.pyの
+// by-strategyエンドポイント参照)ため消えないが、「どのストラテジーを
+// 選んでいたか」もここに残しておかないとブラウザを開き直すたびに
+// 選び直しになってしまう。
+const VALIDATION_STRATEGY_ID_KEY = 'strategylab:validationStrategyId'
 
 // ランキング行の既定表示名: 探索を実行した日付 + rank(6桁連番)。
 // 例: runDateが2026-07-14、rank=3 なら "2026/07/14-000003"。
@@ -200,9 +228,15 @@ function defaultStrategyName(rank: number, runDate: Date | null): string {
 }
 
 function defaultTree(): GroupNode {
+  // indicatorsのデータ取得が終わる前のプレースホルダーなので、動的に
+  // ジャンルを求めることはできない(ユーザー報告:「インジケーター等
+  // ジャンルを選択する際に最初価格データが選択されてる。一番上が
+  // インジケーターだからインジケーターを選択していてほしい」)。一番上の
+  // ジャンル「インジケーター」の先頭であるEMA(デフォルト期間200、
+  // api_server.pyのINDICATOR_PARAM_SPECSと同じ値)を直接指定する。
   return {
     op: 'AND',
-    children: [{ indicator: 'close', operator: '>', value: 0, params: {}, value_params: {} }],
+    children: [{ indicator: 'ema', operator: '>', value: 0, params: { length: 200 }, value_params: {} }],
   }
 }
 
@@ -300,6 +334,7 @@ export default function App() {
   // 位置を覚えていられない - 常に生き続けるApp本体側のrefにスクロール
   // 位置を持たせ、RankingTable側のref callbackで復元/継続記録する。
   const rankingScrollTopRef = useRef(0)
+  const reverseScrollTopRef = useRef(0)
 
   const handleMainTabClick = (tab: MainTab) => {
     setMainTab(tab)
@@ -354,12 +389,26 @@ export default function App() {
 
   useEffect(() => {
     if (!collectionsQuery.data) return
-    const validIds = new Set([...FIXED_LIBRARY_TAB_IDS, ...collectionsQuery.data.map((c) => c.id)])
+    const collectionIds = collectionsQuery.data.map((c) => c.id)
+    const validIds = new Set([...FIXED_LIBRARY_TAB_IDS, ...collectionIds])
     setLibraryTabOrder((prev) => {
-      const kept = prev.filter((id) => validIds.has(id))
-      const missing = Array.from(validIds).filter((id) => !kept.includes(id))
-      if (missing.length === 0 && kept.length === prev.length) return prev
-      return [...kept, ...missing]
+      let next = prev.filter((id) => validIds.has(id))
+      // 新規に追加された固定タブ(MAIN_TABSにはあるがまだ古いlocalStorageの
+      // 並びには無いもの - 例: 後から追加した「反転ストラテジー」)は、
+      // MAIN_TABS上で直後に来る既存の固定タブの手前に挿入する。末尾に
+      // 追加すると意図した位置(「ストラテジー詳細」の左)からズレるため。
+      for (const id of FIXED_LIBRARY_TAB_IDS) {
+        if (next.includes(id)) continue
+        const idx = FIXED_LIBRARY_TAB_IDS.indexOf(id)
+        const nextFixedAfter = FIXED_LIBRARY_TAB_IDS.slice(idx + 1).find((laterId) => next.includes(laterId))
+        const insertAt = nextFixedAfter ? next.indexOf(nextFixedAfter) : next.length
+        next = [...next.slice(0, insertAt), id, ...next.slice(insertAt)]
+      }
+      // 新規コレクションは従来通り末尾に追加。
+      const missingCollections = collectionIds.filter((id) => !next.includes(id))
+      if (missingCollections.length > 0) next = [...next, ...missingCollections]
+      if (next.length === prev.length && next.every((id, i) => id === prev[i])) return prev
+      return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectionsQuery.data])
@@ -517,6 +566,13 @@ export default function App() {
   })
   const [showStopConfirm, setShowStopConfirm] = useState(false)
   const [showRunConfirm, setShowRunConfirm] = useState(false)
+  const [validationStrategyId, setValidationStrategyId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(VALIDATION_STRATEGY_ID_KEY)
+    } catch {
+      return null
+    }
+  })
 
   // ストラテジー詳細タブの状態。openTabRanks=開いているタブ(最大20、rank自体を
   // IDとして使う - RankingRow.rankは列ソートで表示順が変わっても値は変わらない
@@ -533,6 +589,12 @@ export default function App() {
   const [visibleRanks, setVisibleRanks] = useState<number[]>([])
   const [focusedRank, setFocusedRank] = useState<number | null>(null)
   const [tabJobIds, setTabJobIds] = useState<Record<number, string>>({})
+  // ストラテジー詳細パネル内のどのサブタブ(累積Pips/チャート/取引履歴...)を
+  // 表示中かをrank単位で保持する - AutoExplorationDetail自身がuseStateで
+  // 持つと、別のmainTab/subTabへ移動した瞬間にResultsScreen/StrategyDetail
+  // Tabs/AutoExplorationDetail自体がアンマウントされ、戻ってきた時に
+  // 累積Pipsへリセットされてしまう(実際に踏んだ不具合)。
+  const [detailActiveTabs, setDetailActiveTabs] = useState<Record<number, TabId>>({})
 
   // 結果>比較・結果>合成でチェックした行(それぞれ独立、詳細タブのチェックとは
   // 別)。どちらも比較/合成に元データ(equity_curve/trade_log)が要るため、
@@ -541,6 +603,11 @@ export default function App() {
   // toggleCompositeRank参照)。
   const [compareRanks, setCompareRanks] = useState<number[]>([])
   const [compositeRanks, setCompositeRanks] = useState<number[]>([])
+  // 結果>合成タブの表示中サブタブ/直前に保存したエントリ - 別画面へ移動して
+  // CompositeDetail自体がアンマウントされても復元できるよう、他のタブ状態
+  // (detailActiveTabs等)と同じくApp.tsx側に持つ(CompositeDetail.tsx参照)。
+  const [resultsCompositeActiveTab, setResultsCompositeActiveTab] = useState<TabId>('equity')
+  const [resultsCompositeSavedEntry, setResultsCompositeSavedEntry] = useState<CompositeSavedEntry | null>(null)
 
   // ライブラリ画面(保存済みストラテジー/お気に入り)版のストラテジー詳細タブ。上の
   // openTabRanks/visibleRanksと同じ仕組みだが、こちらは再計算ジョブが要らない
@@ -549,16 +616,88 @@ export default function App() {
   // なので、新しいバックテストが始まってもリセットしない。
   const [libraryOpenIds, setLibraryOpenIds] = useState<string[]>([])
   const [libraryVisibleIds, setLibraryVisibleIds] = useState<string[]>([])
+  // ストラテジー詳細パネルの表示中サブタブ(上のdetailActiveTabsと同じ理由) -
+  // idは永続的な文字列なので、こちらも新しいバックテストが始まってもリセット
+  // しない。
+  const [libraryDetailActiveTabs, setLibraryDetailActiveTabs] = useState<Record<string, TabId>>({})
   // ライブラリ>合成でチェックしたid(比較は既存のcompareIds/CompareScreenを
   // そのまま使うので合成専用の状態だけ追加する)。
   const [libraryCompositeIds, setLibraryCompositeIds] = useState<string[]>([])
+  // ライブラリ>合成タブの表示中サブタブ/直前に保存したエントリ(結果側の
+  // resultsCompositeActiveTab/resultsCompositeSavedEntryと同じ理由)。
+  const [libraryCompositeActiveTab, setLibraryCompositeActiveTab] = useState<TabId>('equity')
+  const [libraryCompositeSavedEntry, setLibraryCompositeSavedEntry] = useState<CompositeSavedEntry | null>(null)
+
+  // 反転(Reverse Strategy)。ランキング一覧の「反転」チェック(rank単位)と
+  // ライブラリの「反転」チェック(id単位)は別々に持つ - 実行ボタンを押した
+  // 側でどちらの由来かを組み立てる(reverseMutation参照)。反転結果は
+  // ライブラリへ自動保存しない(api_server.py/reverse_strategies.py参照) -
+  // resultsReverseResults/libraryReverseResultsはこのセッション中に実行した
+  // 反転バッチ全部をバックエンド側でorigin別に連結・rank振り直し済みの
+  // 一覧(GET /api/tools/reverse/current/results?origin=、
+  // fetchReverseCurrentResults参照)。結果のランキング一覧から反転した分は
+  // 結果側にだけ、保存済みストラテジー/お気に入りから反転した分はライブラリ
+  // 側にだけ現れる - 互いに影響しない別々のデータ。新しい反転を実行しても
+  // 前回分は消えず追加される。行ごとの詳細取得/保存はrow自身が持つ
+  // _source_job_id/_source_rank(元のバッチ内でのjob_id/rank)を使う。
+  // 行ごとに🔖(handleReverseBookmark)を押した分だけ*ReverseSavedMetaに
+  // 記録されつつライブラリへ永続化される。反転ストラテジーの詳細タブは
+  // 負のrankで開く(openStrategyTab/reverseDetailRanks参照) - 結果側は
+  // -rank、ライブラリ側は衝突を避けるためLIBRARY_REVERSE_TAB_OFFSETを
+  // 足した-（オフセット+rank）を使う。どちらも通常のランキング行(正の
+  // rank)と同じopenTabRanks配列にそのまま同居できる。
+  const [reverseRanks, setReverseRanks] = useState<number[]>([])
+  const [reverseIds, setReverseIds] = useState<string[]>([])
+  const [resultsReverseResults, setResultsReverseResults] = useState<RankingRow[]>([])
+  const [libraryReverseResults, setLibraryReverseResults] = useState<RankingRow[]>([])
+  const [reverseJobId, setReverseJobId] = useState<string | null>(null)
+  const [reverseSourceMainTab, setReverseSourceMainTab] = useState<'results' | 'library' | null>(null)
+  const [reverseError, setReverseError] = useState<string | null>(null)
+  const [resultsReverseSavedMeta, setResultsReverseSavedMeta] = useState<
+    Record<number, { id: string; favorite: boolean }>
+  >({})
+  const [libraryReverseSavedMeta, setLibraryReverseSavedMeta] = useState<
+    Record<number, { id: string; favorite: boolean }>
+  >({})
+  const [resultsReversePendingSaveRanks, setResultsReversePendingSaveRanks] = useState<Set<number>>(new Set())
+  const [libraryReversePendingSaveRanks, setLibraryReversePendingSaveRanks] = useState<Set<number>>(new Set())
+  // 反転前のランキング行/ライブラリ行に「もう反転作成済み」を示すための
+  // キー集合(このセッション中、反転実行した対象は反転チェックボックス自体
+  // を白塗り・操作不可にする - 同じ行を何度も反転して重複した反転候補を
+  // 量産してしまうのを防ぐ)。rank由来はジョブをまたぐと同じrankが別の
+  // 候補を指しうるのでsymbol/timeframe/rankまで含めたキーにする。
+  const [reversedOriginKeys, setReversedOriginKeys] = useState<Set<string>>(new Set())
+  const rankOriginKey = (rowSymbol: string, rowTimeframe: string, rank: number) =>
+    `rank:${rowSymbol}:${rowTimeframe}:${rank}`
+  const idOriginKey = (id: string) => `id:${id}`
+
+  const toggleReverseRank = (rank: number) => {
+    setReverseRanks((prev) => (prev.includes(rank) ? prev.filter((r) => r !== rank) : [...prev, rank]))
+  }
+  const toggleReverseId = (id: string) => {
+    setReverseIds((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]))
+  }
 
   // 各行の表示名。リネームした行だけcustomNamesに入り、それ以外はrunDate(この
   // ジョブの実行日時)+rank(6桁連番)から機械的に組み立てる既定名を使う
   // (例: 2026/07/14-000003)。ライブラリへの保存名にもこれをそのまま使う。
   const [customNames, setCustomNames] = useState<Record<number, string>>({})
   const [runDate, setRunDate] = useState<Date | null>(null)
-  const renameRow = (rank: number, name: string) => setCustomNames((prev) => ({ ...prev, [rank]: name }))
+  // 既に保存済み(savedMeta[rank]あり)の行を結果画面側で改名した場合、
+  // ローカル表示名(customNames)を更新するだけでなく、ライブラリ側の
+  // 登録簿にも同じ名前を反映する(renameLibraryMutation - ライブラリ画面の
+  // 名前変更と同じミューテーションを再利用、成功時に['strategies']を
+  // 無効化するので両画面が揃う)。ユーザー要望:「結果画面でストラテジーを
+  // 保存してから結果画面でそのストラテジーの名前を変更したらライブラリの
+  // 方にも変更した名前が反映されるようにして」。savedMeta/renameLibrary
+  // Mutationはこの関数より後方(下)で定義されるが、この関数自体は
+  // イベントハンドラとして後で呼ばれるだけなので、呼ばれる時点では
+  // 同じレンダー内で既に初期化済み(クロージャとして問題なく参照できる)。
+  const renameRow = (rank: number, name: string) => {
+    setCustomNames((prev) => ({ ...prev, [rank]: name }))
+    const meta = savedMeta[rank]
+    if (meta) renameLibraryMutation.mutate({ id: meta.id, name })
+  }
 
   // 🔖/⭐によるライブラリ保存状態。rerunRankingRowと同じ「rank毎にジョブを
   // 1つ持つ」パターンで、rerun_ranking_row.py --save-asの完了を待ってから
@@ -680,6 +819,32 @@ export default function App() {
   const [exitConditionTree, setExitConditionTree] = useState<GroupNode>(defaultTree())
 
   const indicatorsQuery = useQuery({ queryKey: ['indicators'], queryFn: fetchIndicators })
+  // ディスク上に実際にインポート済みの通貨/銘柄一覧(api_server.pyの
+  // get_data_symbols参照) - CSVインポート成功時にinvalidateされ、新しく
+  // 取り込んだ通貨がここにもすぐ反映される(CsvImportScreen.tsx参照)。
+  const symbolsQuery = useQuery({ queryKey: ['data-symbols'], queryFn: fetchDataSymbols })
+  const symbols = symbolsQuery.data && symbolsQuery.data.length > 0 ? symbolsQuery.data : FALLBACK_SYMBOLS
+  // 通貨ごとに実際にインポート済みの時間足(api_server.pyのget_data_
+  // symbol_timeframes参照) - CSVインポート成功時にinvalidateされる
+  // (CsvImportScreen.tsx参照)。まだ読み込めていない/未知の通貨の間は
+  // undefinedになり、その間は全時間足を選択可にする(下の各利用箇所で
+  // ?? TIMEFRAMESのフォールバックを使う)。
+  const symbolTimeframesQuery = useQuery({
+    queryKey: ['data-symbol-timeframes'],
+    queryFn: fetchDataSymbolTimeframes,
+  })
+  const symbolTimeframes = symbolTimeframesQuery.data ?? {}
+
+  // 選択中の通貨に無い時間足を選んだままにしない(ユーザー要望:「CADJPYの
+  // 月足〜1時間足を追加した...読み込んでいないデータは選択不可能にして
+  // ほしい」) - 通貨を切り替えて今の時間足がその通貨に無ければ、その通貨で
+  // 一番細かい(先頭の)利用可能な時間足へ自動的に切り替える。
+  useEffect(() => {
+    const available = symbolTimeframes[symbol]
+    if (available && available.length > 0 && !available.includes(timeframe)) {
+      setTimeframe(available[0])
+    }
+  }, [symbol, symbolTimeframes, timeframe])
 
   const runMutation = useMutation({
     mutationFn: () => {
@@ -802,9 +967,24 @@ export default function App() {
       setFocusedRank(null)
       setTabJobIds({})
       setCustomNames({})
+      setDetailActiveTabs({})
       setRunDate(new Date())
       setSaveJobIds({})
       setPendingSaveRanks(new Set())
+      // 反転ストラテジータブ(結果側・ライブラリ側の両方)も新しい探索を
+      // 実行した時だけリセットする対象(バックエンド側はcreate_backtestで
+      // reverse_batches.jsonのresults/library両方を既にクリア済み -
+      // api_server.py参照)。ページ再読み込みやツールバー操作では消さない。
+      setResultsReverseResults([])
+      setResultsReverseSavedMeta({})
+      setResultsReversePendingSaveRanks(new Set())
+      setLibraryReverseResults([])
+      setLibraryReverseSavedMeta({})
+      setLibraryReversePendingSaveRanks(new Set())
+      // 反転ストラテジーの候補自体が消える以上、「反転作成済み」の白塗り
+      // 表示(ランキング一覧・保存済みストラテジー共通)も維持する理由が
+      // ない - 保存済みストラテジーは再び反転できるようにチェックを戻す。
+      setReversedOriginKeys(new Set())
     },
   })
 
@@ -833,6 +1013,15 @@ export default function App() {
       // 継続させる - このタブを閉じるまでは通常通り結果を表示できる。
     }
   }, [jobId])
+
+  useEffect(() => {
+    try {
+      if (validationStrategyId) localStorage.setItem(VALIDATION_STRATEGY_ID_KEY, validationStrategyId)
+      else localStorage.removeItem(VALIDATION_STRATEGY_ID_KEY)
+    } catch {
+      // 上のjobId用useEffectと同じ理由でnoop。
+    }
+  }, [validationStrategyId])
 
   // ブラウザだけ閉じ直した場合は上のlocalStorageからjobIdが復元されるが、
   // バックエンドのプロセスごと再起動されていた場合はJOBSが空になっている
@@ -870,8 +1059,13 @@ export default function App() {
   // 詳細タブ・比較・合成のどれかでチェックされた行はすべて同じ「1行だけ
   // 再計算」ジョブ(tabJobIds)を共有する - 同じrankを複数の用途で使っても
   // rerunは1回で済む。クエリ配列はこのunion順で構築し、strategyTabs等は
-  // rankをキーにdetailRanksでの位置を引いて参照する。
-  const detailRanks = Array.from(new Set([...openTabRanks, ...compareRanks, ...compositeRanks]))
+  // rankをキーにdetailRanksでの位置を引いて参照する。反転ストラテジー由来の
+  // タブは負のrank(-i)で見分ける(下のreverseDetailRanks参照) - こちらの
+  // 仕組みには乗らない(ranking_total.csvに存在しないrankでrerunすると
+  // エラーになるため)。
+  const detailRanks = Array.from(new Set([...openTabRanks, ...compareRanks, ...compositeRanks])).filter(
+    (rank) => rank > 0,
+  )
 
   const tabStatusQueries = useQueries({
     queries: detailRanks.map((rank) => ({
@@ -894,6 +1088,29 @@ export default function App() {
     })),
   })
 
+  // 反転ストラテジー由来のタブ(負のrank)版。reverse_strategies.pyが
+  // 全ての対象を最初からフル計算済みなので、通常のtabJobIdsのような
+  // 「rerunして完了を待つ」手順は不要 - strategy_idキーで直接読める保存済み
+  // ストラテジーと同じ「読むだけ」のクエリで済む。
+  const reverseDetailRanks = Array.from(
+    new Set([...openTabRanks, ...compareRanks, ...compositeRanks].filter((rank) => rank < 0)),
+  )
+  const reverseTabResultsQueries = useQueries({
+    queries: reverseDetailRanks.map((tabRank) => {
+      const isLibrary = -tabRank > LIBRARY_REVERSE_TAB_OFFSET
+      const originalRank = isLibrary ? -tabRank - LIBRARY_REVERSE_TAB_OFFSET : -tabRank
+      const source = isLibrary ? libraryReverseResults : resultsReverseResults
+      const row = source.find((r) => Number(r.rank) === originalRank)
+      const sourceJobId = row?.['_source_job_id'] as string | undefined
+      const sourceRank = row ? Number(row['_source_rank']) : undefined
+      return {
+        queryKey: ['reverse-row-results', sourceJobId, sourceRank],
+        queryFn: () => fetchReverseRowResults(sourceJobId as string, sourceRank as number),
+        enabled: sourceJobId != null && sourceRank != null,
+      }
+    }),
+  })
+
   // Clicking a ranking row opens (or re-focuses) its tab and shows it alone
   // (replaces whatever was visible) - dragging one tab onto another is the
   // only way to build a side-by-side view (see StrategyDetailTabs.tsx).
@@ -901,7 +1118,7 @@ export default function App() {
     setFocusedRank(rank)
     setOpenTabRanks((prev) => (prev.includes(rank) || prev.length >= MAX_DETAIL_TABS ? prev : [...prev, rank]))
     setVisibleRanks([rank])
-    if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+    if (rank > 0 && tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
   }
 
   const closeStrategyTab = (rank: number) => {
@@ -949,6 +1166,13 @@ export default function App() {
   const toggleCompositeRank = (rank: number) => {
     setCompositeRanks((prev) => (prev.includes(rank) ? prev.filter((r) => r !== rank) : [...prev, rank]))
     if (tabJobIds[rank] == null) rerunRowMutation.mutate(rank)
+    // 合成対象の組み合わせが変わったら、前の組み合わせの保存済み(🔖/⭐)
+    // 状態を引き継がない(ユーザー要望: 「合成のチェックを一つでも外したり、
+    // 違う合成を行ったりしたときはしおりと星をオフにして」) -
+    // CompositeDetail.tsx側の再マウント(別画面へ移動して戻る等)を挟むと
+    // ローカルなuseEffectでは検知できないため、チェックボックス操作の
+    // 発生源であるここで確実にリセットする。
+    setResultsCompositeSavedEntry(null)
   }
 
   // ライブラリ版ストラテジー詳細タブ(結果側のtoggleRowChecked等と同じ仕組み
@@ -979,6 +1203,9 @@ export default function App() {
 
   const toggleLibraryComposite = (id: string) => {
     setLibraryCompositeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+    // 結果側のtoggleCompositeRankと同じ理由(合成対象が変わったら保存済み
+    // 表示を引き継がない)。
+    setLibraryCompositeSavedEntry(null)
   }
 
   const mergeLibraryTabs = (draggedId: string, targetId: string) => {
@@ -1071,6 +1298,9 @@ export default function App() {
           calmar_ratio: entry.metrics.calmar_ratio ?? 0,
           rr: 0,
           condition_tree: entry.params?.condition_tree ?? undefined,
+          long_condition_tree: entry.params?.long_condition_tree ?? undefined,
+          short_condition_tree: entry.params?.short_condition_tree ?? undefined,
+          direction: entry.params?.direction,
           symbol: entry.symbol,
         }
       : undefined
@@ -1083,6 +1313,9 @@ export default function App() {
       isLoading: query?.isLoading ?? false,
       error: query?.isError ? '結果の読み込みに失敗しました。' : null,
       isFavorite: entry?.favorite ?? false,
+      isCompareChecked: compareIds.includes(id),
+      isCompositeChecked: libraryCompositeIds.includes(id),
+      activeTab: libraryDetailActiveTabs[id] ?? 'equity',
     }
   })
 
@@ -1098,10 +1331,22 @@ export default function App() {
         symbol: entry?.symbol,
         timeframe: entry?.timeframe,
         tradeLog: query.data.trade_log ?? [],
+        direction: entry?.params?.direction,
+        conditionTree: entry?.params?.condition_tree ?? undefined,
       }
     })
     .filter((input): input is CompositeInput => input != null)
   const libraryCompositePendingCount = libraryCompositeIds.length - libraryCompositeInputs.length
+
+  // ライブラリ>合成の「+ 合成対象を追加」ピッカー(AddCandidateModal.tsx)
+  // 候補一覧 - 保存済みストラテジー全件(既に選択済みかどうかはモーダル側が
+  // libraryCompositeIdsとの突き合わせで判定する)。
+  const libraryCompositeCandidates: CompositeCandidate[] = (strategiesQuery.data ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    symbol: s.symbol,
+    timeframe: s.timeframe,
+  }))
 
   const saveJobEntries = Object.entries(saveJobIds)
 
@@ -1125,15 +1370,58 @@ export default function App() {
     })),
   })
 
+  // ['strategies']が読み込み済みなら、そのidセットを「現在も本当に存在する
+  // 保存済みストラテジー」の権威ある一覧として使う - ライブラリ側で削除
+  // された行は、結果画面のsaveResultQueriesキャッシュにはまだ残っていても
+  // (削除後もsave-resultクエリ自体は再取得されないため)、ここで弾くことで
+  // 🔖/⭐が自動でオフになるようにする(ユーザー要望:「ライブラリで保存した
+  // ストラテジーを削除したら結果画面ではしおりと星がオフになるようにして」)。
+  // strategiesQuery.dataがまだ未読込(null)の間は判定せず常に「保存済み」
+  // 扱いにする - でないとページ読み込み直後の一瞬、まだ削除されていない
+  // 行まで🔖が誤ってオフに見えてしまう(ちらつき防止)。
+  const currentStrategyIds = strategiesQuery.data ? new Set(strategiesQuery.data.map((s) => s.id)) : null
+
   const savedMeta: Record<number, { id: string; favorite: boolean }> = {}
+  // 削除確認済み(save-resultは取得できた=保存は完了していた、しかし今は
+  // currentStrategyIdsに無い)のrank集合 - isRowSavePendingが「まだ保存中」
+  // (save-resultをまだ取得できていないだけ)と区別するために使う。区別
+  // しないと、削除後は「保存中…」のまま固まってしまい、🔖が期待通り
+  // オフに戻らない。
+  const deletedRanks = new Set<number>()
   const saveJobStatusByRank: Record<number, string | undefined> = {}
   saveJobEntries.forEach(([rankStr], i) => {
     const rank = Number(rankStr)
     saveJobStatusByRank[rank] = saveStatusQueries[i]?.data?.status
     const data = saveResultQueries[i]?.data
     if (!data) return
+    if (currentStrategyIds && !currentStrategyIds.has(data.id)) {
+      deletedRanks.add(rank)
+      return
+    }
     savedMeta[rank] = { id: data.id, favorite: favoriteById[data.id] ?? data.favorite }
   })
+
+  // saveRowMutationのonSuccessは保存ジョブを「投げた」直後(バックテスト
+  // 再計算がまだ終わっていない状態)に['strategies']を無効化していたため、
+  // 既にマウント済みのクエリ(このApp.tsx自身が持つstrategiesQuery = ライブラリ
+  // 側の詳細タブが参照するもの)がジョブ完了前の古い状態で再取得されてしまい、
+  // その後ジョブが完了しても改めて無効化されないため名前(名前変更して保存
+  // した場合の新しい名前)が反映されないままになる不具合があった(実際に
+  // 踏んだ不具合:「保存したストラテジーには変更後の名前で表示されるが、
+  // ストラテジー詳細画面では変更前の名前で表示される」)。ジョブが本当に
+  // 完了した時点でもう一度無効化する - invalidatedSaveJobIdsで同じジョブに
+  // 対して二重に無効化しないようにする。
+  const invalidatedSaveJobIdsRef = useRef<Set<string>>(new Set())
+  const saveStatusSummary = saveJobEntries.map(([, jid], i) => `${jid}:${saveStatusQueries[i]?.data?.status}`).join(',')
+  useEffect(() => {
+    saveJobEntries.forEach(([, jid], i) => {
+      if (saveStatusQueries[i]?.data?.status === 'done' && !invalidatedSaveJobIdsRef.current.has(jid)) {
+        invalidatedSaveJobIdsRef.current.add(jid)
+        queryClient.invalidateQueries({ queryKey: ['strategies'] })
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveStatusSummary])
 
   const resolveName = (rank: number) => customNames[rank] ?? defaultStrategyName(rank, runDate)
 
@@ -1142,6 +1430,7 @@ export default function App() {
   // 防止)し、ボタン側にも「保存中」であることを表示する。
   const isRowSavePending = (rank: number): boolean => {
     if (pendingSaveRanks.has(rank)) return true
+    if (deletedRanks.has(rank)) return false
     const status = saveJobStatusByRank[rank]
     if (status == null) return false
     return status !== 'error' && savedMeta[rank] == null
@@ -1211,6 +1500,34 @@ export default function App() {
   // original `results` (a rerun doesn't recompute the whole ranking, just
   // one row's own trade_log/equity_curve - see rerun_ranking_row.py).
   const strategyTabs: StrategyTabData[] = openTabRanks.map((rank) => {
+    // 反転ストラテジー由来のタブ(負のrank)は別経路 - resultsReverseResults/
+    // libraryReverseResults/reverseTabResultsQueriesから読むだけで、rerunジョブ(tabJobIds)は
+    // 使わない(reverseDetailRanks/reverseTabResultsQueries参照)。
+    if (rank < 0) {
+      const isLibrary = -rank > LIBRARY_REVERSE_TAB_OFFSET
+      const originalRank = isLibrary ? -rank - LIBRARY_REVERSE_TAB_OFFSET : -rank
+      const source = isLibrary ? libraryReverseResults : resultsReverseResults
+      const savedMetaSrc = isLibrary ? libraryReverseSavedMeta : resultsReverseSavedMeta
+      const pendingSrc = isLibrary ? libraryReversePendingSaveRanks : resultsReversePendingSaveRanks
+      const j = reverseDetailRanks.indexOf(rank)
+      const bestRow = source.find((row) => Number(row.rank) === originalRank)
+      const meta = savedMetaSrc[originalRank]
+      return {
+        rank,
+        name: String(bestRow?.name ?? `反転${originalRank}`),
+        bestRow,
+        displayResults: reverseTabResultsQueries[j]?.data,
+        isLoading: reverseTabResultsQueries[j]?.isLoading ?? false,
+        error: reverseTabResultsQueries[j]?.isError ? '結果の読み込みに失敗しました。' : null,
+        isFavorite: meta?.favorite ?? false,
+        isPending: pendingSrc.has(originalRank),
+        isCompareChecked: compareRanks.includes(rank),
+        isCompositeChecked: compositeRanks.includes(rank),
+        isSaved: meta != null,
+        activeTab: detailActiveTabs[rank] ?? 'equity',
+      }
+    }
+
     const i = detailRanks.indexOf(rank)
     const status = tabStatusQueries[i]?.data?.status
     const isLoading = tabJobIds[rank] != null && !['done', 'error'].includes(status ?? 'queued')
@@ -1229,6 +1546,10 @@ export default function App() {
       error,
       isFavorite: savedMeta[rank]?.favorite ?? false,
       isPending: isRowSavePending(rank),
+      isCompareChecked: compareRanks.includes(rank),
+      isCompositeChecked: compositeRanks.includes(rank),
+      isSaved: savedMeta[rank] != null,
+      activeTab: detailActiveTabs[rank] ?? 'equity',
     }
   })
 
@@ -1236,7 +1557,14 @@ export default function App() {
   const rankingNames: Record<number, string> = {}
   const rankingRowMeta: Record<
     number,
-    { isChecked: boolean; isCompareChecked: boolean; isCompositeChecked: boolean; isSaved: boolean; isFavorite: boolean; isPending: boolean }
+    {
+      isChecked: boolean
+      isReverseChecked: boolean
+      isReverseCreated: boolean
+      isSaved: boolean
+      isFavorite: boolean
+      isPending: boolean
+    }
   > = {}
   for (const row of results?.ranking_total ?? []) {
     const rank = Number(row.rank)
@@ -1244,12 +1572,282 @@ export default function App() {
     const meta = savedMeta[rank]
     rankingRowMeta[rank] = {
       isChecked: openTabRanks.includes(rank),
-      isCompareChecked: compareRanks.includes(rank),
-      isCompositeChecked: compositeRanks.includes(rank),
+      isReverseChecked: reverseRanks.includes(rank),
+      isReverseCreated: reversedOriginKeys.has(
+        rankOriginKey((row.symbol as string) ?? symbol, statusQuery.data?.timeframe ?? timeframe, rank),
+      ),
       isSaved: meta != null,
       isFavorite: meta?.favorite ?? false,
       isPending: isRowSavePending(rank),
     }
+  }
+
+  // 反転ストラテジー一覧(RankingTableをそのまま再利用)の名称セル/保存状態
+  // 表示用。反転チェックボックス自体は出すが常時無効(再反転はサポート
+  // 対象外 - 必要なら元のランキング一覧/ライブラリから改めて反転すればよい)。
+  // 結果側とライブラリ側は別データ(resultsReverseResults/
+  // libraryReverseResults)なので、名称/行状態も別々に組み立てる。
+  const resultsReverseNames: Record<number, string> = {}
+  const resultsReverseRowMeta: Record<
+    number,
+    {
+      isChecked: boolean
+      isReverseChecked: boolean
+      isReverseCreated: boolean
+      isSaved: boolean
+      isFavorite: boolean
+      isPending: boolean
+    }
+  > = {}
+  for (const row of resultsReverseResults) {
+    const rank = Number(row.rank)
+    resultsReverseNames[rank] = String(row.name ?? `反転${rank}`)
+    const meta = resultsReverseSavedMeta[rank]
+    resultsReverseRowMeta[rank] = {
+      isChecked: openTabRanks.includes(-rank),
+      isReverseChecked: false,
+      isReverseCreated: false,
+      isSaved: meta != null,
+      isFavorite: meta?.favorite ?? false,
+      isPending: resultsReversePendingSaveRanks.has(rank),
+    }
+  }
+
+  const libraryReverseNames: Record<number, string> = {}
+  const libraryReverseRowMeta: Record<
+    number,
+    {
+      isChecked: boolean
+      isReverseChecked: boolean
+      isReverseCreated: boolean
+      isSaved: boolean
+      isFavorite: boolean
+      isPending: boolean
+    }
+  > = {}
+  for (const row of libraryReverseResults) {
+    const rank = Number(row.rank)
+    libraryReverseNames[rank] = String(row.name ?? `反転${rank}`)
+    const meta = libraryReverseSavedMeta[rank]
+    libraryReverseRowMeta[rank] = {
+      isChecked: openTabRanks.includes(-(LIBRARY_REVERSE_TAB_OFFSET + rank)),
+      isReverseChecked: false,
+      isReverseCreated: false,
+      isSaved: meta != null,
+      isFavorite: meta?.favorite ?? false,
+      isPending: libraryReversePendingSaveRanks.has(rank),
+    }
+  }
+
+  // 反転(Reverse Strategy)実行。結果のランキング一覧由来はrank/symbol/
+  // timeframe/表示名を、ライブラリ由来はstrategy_idだけをターゲットとして
+  // 渡す(バックエンド側でどちらもparamsを復元できる - api_server.py/
+  // reverse_strategies.py参照)。完了後はfetchReverseResultsで保存された
+  // idを回収し、「反転ストラテジー」タブに切り替えてから、反転前の元行を
+  // 削除してよいか確認するダイアログを出す。
+  const reverseMutation = useMutation({
+    mutationFn: (targets: ReverseTarget[]) => runReverse(targets),
+    onSuccess: (data) => setReverseJobId(data.job_id),
+  })
+
+  const reverseStatusQuery = useQuery({
+    queryKey: ['reverse-status', reverseJobId],
+    queryFn: () => fetchBacktestStatus(reverseJobId as string),
+    enabled: reverseJobId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'done' || status === 'error' ? false : 1000
+    },
+    refetchIntervalInBackground: true,
+  })
+
+  useEffect(() => {
+    const status = reverseStatusQuery.data?.status
+    if (reverseJobId === null || status == null) return
+    if (status === 'error') {
+      setReverseError(reverseStatusQuery.data?.error_summary ?? '反転処理中にエラーが発生しました。')
+      setReverseJobId(null)
+      setReverseSourceMainTab(null)
+      return
+    }
+    if (status !== 'done') return
+    // 単一バッチだけでなく、これまでのバッチ全部を連結し直した最新の一覧を
+    // 取り直す - これが「前回分は消さず追加する」の実体(バッチの連結・
+    // rank振り直しはバックエンド側、api_server.pyのget_reverse_current_
+    // results参照)。既存行のrankはバッチ追加順を保つ限り変わらないので、
+    // *ReverseSavedMeta/*ReversePendingSaveRanksはリセットせず引き継ぐ。
+    // reverseSourceMainTabがそのままoriginになる(結果由来なら'results'、
+    // ライブラリ由来なら'library' - handleReverseExecuteFromResults/
+    // FromLibrary参照)。
+    const origin = reverseSourceMainTab ?? 'results'
+    fetchReverseCurrentResults(origin)
+      .then((data) => {
+        if (origin === 'library') setLibraryReverseResults(data.ranking_total)
+        else setResultsReverseResults(data.ranking_total)
+        if (reverseSourceMainTab) {
+          setMainTab(reverseSourceMainTab)
+          setSubTab('reversed')
+        }
+      })
+      .catch(() => setReverseError('反転結果の取得に失敗しました。'))
+      .finally(() => {
+        setReverseJobId(null)
+        setReverseSourceMainTab(null)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reverseStatusQuery.data?.status, reverseJobId, reverseSourceMainTab])
+
+  // ページ再読み込み/ソフト再起動後の復元。JOBS(メモリ)は消えても
+  // reverse_batches.jsonはディスク上に残っているので、マウント時に一度
+  // 取得しておけば反転ストラテジータブのデータがそのまま復活する。新しい
+  // 探索を実行した時だけこのバッチ一覧はバックエンド側でクリアされる
+  // (api_server.pyのcreate_backtest参照)。結果側/ライブラリ側それぞれ
+  // 独立に復元する。
+  useEffect(() => {
+    fetchReverseCurrentResults('results')
+      .then((data) => {
+        if (data.ranking_total.length > 0) setResultsReverseResults(data.ranking_total)
+      })
+      .catch(() => {})
+    fetchReverseCurrentResults('library')
+      .then((data) => {
+        if (data.ranking_total.length > 0) setLibraryReverseResults(data.ranking_total)
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleReverseExecuteFromResults = () => {
+    if (reverseRanks.length === 0) return
+    const targets: ReverseTarget[] = reverseRanks
+      .map((rank): ReverseTarget | null => {
+        const row = results?.ranking_total?.find((r) => Number(r.rank) === rank)
+        if (!row) return null
+        return {
+          type: 'rank',
+          symbol: (row.symbol as string) ?? symbol,
+          timeframe: statusQuery.data?.timeframe ?? timeframe,
+          rank,
+          name: rankingNames[rank] ?? `Strat${rank}`,
+        }
+      })
+      .filter((t): t is ReverseTarget => t != null)
+    setReversedOriginKeys((prev) => {
+      const next = new Set(prev)
+      for (const t of targets) {
+        if (t.type === 'rank') next.add(rankOriginKey(t.symbol, t.timeframe, t.rank))
+      }
+      return next
+    })
+    setReverseSourceMainTab('results')
+    setReverseRanks([])
+    reverseMutation.mutate(targets)
+  }
+
+  const handleReverseExecuteFromLibrary = (ids: string[]) => {
+    if (ids.length === 0) return
+    const targets: ReverseTarget[] = ids.map((id) => ({ type: 'strategy', strategy_id: id }))
+    setReversedOriginKeys((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.add(idOriginKey(id))
+      return next
+    })
+    setReverseSourceMainTab('library')
+    setReverseIds([])
+    reverseMutation.mutate(targets)
+  }
+
+  // 反転ストラテジー一覧(反転タブ)の🔖/⭐: 通常のランキング一覧と違い、
+  // このデータはreverse_strategies.pyの時点で既にフル計算済みなので、
+  // 保存はrerunを挟まない同期API(saveReverseRow)を叩くだけで完結する。
+  // rankはバッチ跨ぎで振り直された表示用の連番なので、行自身が持つ
+  // _source_job_id/_source_rank(元のバッチ内での場所)を使って保存する。
+  // origin('results'|'library')で結果側/ライブラリ側どちらのデータ・
+  // 保存状態を読み書きするかを切り替える。
+  const saveReverseRowAndTrack = (origin: 'results' | 'library', rank: number, favorite: boolean) => {
+    const source = origin === 'library' ? libraryReverseResults : resultsReverseResults
+    const setSavedMeta = origin === 'library' ? setLibraryReverseSavedMeta : setResultsReverseSavedMeta
+    const setPending = origin === 'library' ? setLibraryReversePendingSaveRanks : setResultsReversePendingSaveRanks
+    const row = source.find((r) => Number(r.rank) === rank)
+    const sourceJobId = row?.['_source_job_id'] as string | undefined
+    const sourceRank = row ? Number(row['_source_rank']) : undefined
+    if (sourceJobId == null || sourceRank == null) return
+    setPending((prev) => new Set(prev).add(rank))
+    const name = String(row?.name ?? `反転${rank}`)
+    saveReverseRow(sourceJobId, sourceRank, name, favorite)
+      .then((entry) => {
+        setSavedMeta((prev) => ({ ...prev, [rank]: { id: entry.id, favorite: entry.favorite } }))
+        queryClient.invalidateQueries({ queryKey: ['strategies'] })
+      })
+      .finally(() => {
+        setPending((prev) => {
+          const next = new Set(prev)
+          next.delete(rank)
+          return next
+        })
+      })
+  }
+
+  const handleReverseBookmark = (origin: 'results' | 'library', rank: number) => {
+    const pending = origin === 'library' ? libraryReversePendingSaveRanks : resultsReversePendingSaveRanks
+    if (pending.has(rank)) return
+    const savedMeta = origin === 'library' ? libraryReverseSavedMeta : resultsReverseSavedMeta
+    const setSavedMeta = origin === 'library' ? setLibraryReverseSavedMeta : setResultsReverseSavedMeta
+    const meta = savedMeta[rank]
+    if (meta) {
+      deleteSavedMutation.mutate(meta.id)
+      setSavedMeta((prev) => {
+        const next = { ...prev }
+        delete next[rank]
+        return next
+      })
+      return
+    }
+    saveReverseRowAndTrack(origin, rank, false)
+  }
+
+  const handleReverseFavorite = (origin: 'results' | 'library', rank: number) => {
+    const pending = origin === 'library' ? libraryReversePendingSaveRanks : resultsReversePendingSaveRanks
+    if (pending.has(rank)) return
+    const savedMeta = origin === 'library' ? libraryReverseSavedMeta : resultsReverseSavedMeta
+    const setSavedMeta = origin === 'library' ? setLibraryReverseSavedMeta : setResultsReverseSavedMeta
+    const meta = savedMeta[rank]
+    if (meta) {
+      favoriteToggleMutation.mutate(meta.id)
+      setSavedMeta((prev) => ({ ...prev, [rank]: { ...meta, favorite: !meta.favorite } }))
+      return
+    }
+    saveReverseRowAndTrack(origin, rank, true)
+  }
+
+  // ストラテジー詳細タブの🔖は、開いているタブが通常のランキング行(正の
+  // rank)か反転ストラテジー行(負のrank)かでApp.tsx側の別々の保存経路に
+  // 振り分ける(AutoExplorationDetail自体はどちらか意識しない)。負のrankは
+  // さらに結果側/ライブラリ側どちらの反転タブ由来かをオフセットで判定する
+  // (LIBRARY_REVERSE_TAB_OFFSET参照)。
+  const handleDetailBookmark = (rank: number) => {
+    if (rank >= 0) {
+      handleBookmark(rank)
+      return
+    }
+    const isLibrary = -rank > LIBRARY_REVERSE_TAB_OFFSET
+    const originalRank = isLibrary ? -rank - LIBRARY_REVERSE_TAB_OFFSET : -rank
+    handleReverseBookmark(isLibrary ? 'library' : 'results', originalRank)
+  }
+
+  // 反転ストラテジー一覧の「詳細」チェックボックス: 負のrankをopenTabRanks
+  // に出し入れするだけ(toggleRowCheckedと同じ開閉ロジックだが、rerunジョブ
+  // は要らない)。ライブラリ側はLIBRARY_REVERSE_TAB_OFFSETを足したタブrank
+  // を使い、結果側の反転タブと負のrank空間が衝突しないようにする。
+  const toggleReverseRowChecked = (origin: 'results' | 'library', rank: number) => {
+    const tabRank = origin === 'library' ? -(LIBRARY_REVERSE_TAB_OFFSET + rank) : -rank
+    if (openTabRanks.includes(tabRank)) {
+      closeStrategyTab(tabRank)
+      return
+    }
+    setFocusedRank(tabRank)
+    setOpenTabRanks((prev) => (prev.length >= MAX_DETAIL_TABS ? prev : [...prev, tabRank]))
+    setVisibleRanks((prev) => (prev.length === 0 ? [tabRank] : prev))
   }
 
   // 結果>比較・結果>合成の表示データ。どちらもdetailRanksの位置からtab
@@ -1296,10 +1894,25 @@ export default function App() {
         symbol: (row?.symbol as string) ?? symbol,
         timeframe: statusQuery.data?.timeframe ?? timeframe,
         tradeLog: detail.trade_log ?? [],
+        direction: row?.direction as 'long' | 'short' | undefined,
+        conditionTree: row?.condition_tree,
       }
     })
     .filter((input): input is CompositeInput => input != null)
   const resultsCompositePendingCount = compositeRanks.length - resultsCompositeInputs.length
+
+  // 結果>合成の「+ 合成対象を追加」ピッカー(AddCandidateModal.tsx)
+  // 候補一覧 - このランキング全件(既に選択済みかどうかはモーダル側が
+  // compositeRanksとの突き合わせで判定する)。
+  const resultsCompositeCandidates: CompositeCandidate[] = (results?.ranking_total ?? []).map((row) => {
+    const rank = Number(row.rank)
+    return {
+      id: String(rank),
+      name: rankingNames[rank] ?? `Strat${rank}`,
+      symbol: row.symbol as string | undefined,
+      timeframe: statusQuery.data?.timeframe ?? timeframe,
+    }
+  })
 
   // Back-compat scalars for ValidationScreen/ReportScreen, which only ever
   // needed "the one currently-relevant rank/row" and know nothing about
@@ -1338,6 +1951,7 @@ export default function App() {
             const collection = collectionsQuery.data?.find((c) => c.id === id)
             const label = fixed?.label ?? collection?.name
             if (!label) return null
+            if (id === 'reversed' && libraryReverseResults.length === 0) return null
             const isActive = subTab === id
             const isRenaming = collectionRenameId === id
             return (
@@ -1435,7 +2049,9 @@ export default function App() {
         )}
         {mainTab !== 'explore' && mainTab !== 'library' && (
         <div className="flex items-center gap-4 border-t border-white/5 px-4 py-2 text-xs">
-          {(MAIN_TABS.find((t) => t.id === mainTab)?.subTabs ?? []).map((st) => (
+          {(MAIN_TABS.find((t) => t.id === mainTab)?.subTabs ?? [])
+            .filter((st) => st.id !== 'reversed' || resultsReverseResults.length > 0)
+            .map((st) => (
             <button
               key={st.id}
               type="button"
@@ -1453,11 +2069,27 @@ export default function App() {
         )}
       </nav>
 
+      {reverseJobId !== null && (
+        <div className="mx-4 mt-4 flex items-center gap-2 rounded-2xl border border-blue-400/30 bg-blue-500/10 px-4 py-2 text-xs text-blue-200">
+          <span className="running-glow">●</span>
+          反転処理を実行中…(数十秒かかる場合があります)
+        </div>
+      )}
+      {reverseError && (
+        <div className="mx-4 mt-4 flex items-center justify-between gap-2 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+          <span>反転処理に失敗しました: {reverseError}</span>
+          <button type="button" onClick={() => setReverseError(null)} className="text-red-300 hover:text-red-100">
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="p-4">
 
-        {mainTab === 'data' && subTab === 'dataset' && <DataScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
-        {mainTab === 'data' && subTab === 'import' && <CsvImportScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
-        {mainTab === 'data' && subTab === 'validator' && <DataValidatorScreen symbols={SYMBOLS} timeframes={TIMEFRAMES} />}
+        {mainTab === 'data' && subTab === 'import' && <CsvImportScreen symbols={symbols} timeframes={TIMEFRAMES} />}
+        {mainTab === 'data' && subTab === 'validator' && (
+          <DataValidatorScreen symbols={symbols} timeframes={TIMEFRAMES} symbolTimeframes={symbolTimeframes} />
+        )}
 
         {mainTab === 'library' && subTab === 'export' && (
           <ReportScreen
@@ -1476,23 +2108,46 @@ export default function App() {
             emptyMessage={subTab === 'favorites' ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
             queryKey={['strategies', subTab === 'favorites']}
             queryFn={() => fetchStrategiesFiltered(subTab === 'favorites')}
-            compareIds={compareIds}
-            onToggleCompare={toggleCompareId}
-            onGoToCompare={() => {
-              setMainTab('library')
-              setSubTab('compare')
-            }}
             indicators={indicatorsQuery.data ?? []}
             openIds={libraryOpenIds}
             onToggleChecked={toggleLibraryChecked}
-            compositeIds={libraryCompositeIds}
-            onToggleComposite={toggleLibraryComposite}
             deleteMode="delete"
             onDelete={async (ids) => {
               await Promise.all(ids.map((id) => deleteStrategy(id)))
               queryClient.invalidateQueries({ queryKey: ['strategies'] })
             }}
+            reverseIds={reverseIds}
+            onToggleReverse={toggleReverseId}
+            onReverseExecute={handleReverseExecuteFromLibrary}
+            alreadyReversedIds={Array.from(reversedOriginKeys)
+              .filter((k) => k.startsWith('id:'))
+              .map((k) => k.slice(3))}
           />
+        )}
+        {mainTab === 'library' && subTab === 'reversed' && (
+          <div className="glass-panel flex flex-col rounded-2xl p-4" style={{ height: 'calc(100vh - 122px)' }}>
+            <div className="mb-3 flex flex-none items-baseline gap-2">
+              <div className="text-sm font-semibold text-gray-200">反転ストラテジー</div>
+              <div className="text-xs text-gray-500">新たな探索を行うとデータが削除されます</div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <RankingTable
+                rows={libraryReverseResults}
+                indicators={indicatorsQuery.data ?? []}
+                jobId={libraryReverseResults.length > 0 ? 'reverse-batch' : null}
+                names={libraryReverseNames}
+                rowMeta={libraryReverseRowMeta}
+                onRenameRow={() => {}}
+                onToggleChecked={(rank) => toggleReverseRowChecked('library', rank)}
+                onToggleReverse={() => {}}
+                showReverseColumn={false}
+                onBookmark={(rank) => handleReverseBookmark('library', rank)}
+                onFavorite={(rank) => handleReverseFavorite('library', rank)}
+                scrollTopRef={reverseScrollTopRef}
+                timeframe=""
+              />
+            </div>
+          </div>
         )}
         {(() => {
           const activeCollection = collectionsQuery.data?.find((c) => c.id === subTab)
@@ -1507,23 +2162,16 @@ export default function App() {
                 const all = await fetchStrategies()
                 return all.filter((s) => activeCollection.strategy_ids.includes(s.id))
               }}
-              compareIds={compareIds}
-              onToggleCompare={toggleCompareId}
-              onGoToCompare={() => {
-                setMainTab('library')
-                setSubTab('compare')
-              }}
               indicators={indicatorsQuery.data ?? []}
               openIds={libraryOpenIds}
               onToggleChecked={toggleLibraryChecked}
-              compositeIds={libraryCompositeIds}
-              onToggleComposite={toggleLibraryComposite}
               deleteMode="remove"
               onDelete={async (ids) => {
                 await Promise.all(ids.map((id) => removeStrategyFromCollection(activeCollection.id, id)))
                 queryClient.invalidateQueries({ queryKey: ['collections'] })
               }}
               onAddClick={() => setAddToCollectionTarget(activeCollection.id)}
+              showReverseColumn={false}
             />
           )
         })()}
@@ -1538,33 +2186,65 @@ export default function App() {
             onRemoveFromView={removeLibraryFromVisible}
             onRenameRow={(id, name) => renameLibraryMutation.mutate({ id, name })}
             onFavorite={(id) => favoriteToggleMutation.mutate(id)}
+            onToggleCompare={toggleCompareId}
+            onToggleComposite={toggleLibraryComposite}
+            onTabChange={(id, tabId) => setLibraryDetailActiveTabs((prev) => ({ ...prev, [id]: tabId }))}
+            candidates={libraryCompositeCandidates}
+            onToggleInput={toggleLibraryChecked}
           />
         )}
         {mainTab === 'library' && subTab === 'compare' && (
-          <CompareScreen ids={compareIds} indicators={indicatorsQuery.data ?? []} />
+          <CompareScreen
+            ids={compareIds}
+            indicators={indicatorsQuery.data ?? []}
+            candidates={libraryCompositeCandidates}
+            onToggleInput={toggleCompareId}
+          />
         )}
         {mainTab === 'library' && subTab === 'composite' && (
-          <CompositeDetail inputs={libraryCompositeInputs} pendingCount={libraryCompositePendingCount} />
+          <CompositeDetail
+            inputs={libraryCompositeInputs}
+            pendingCount={libraryCompositePendingCount}
+            indicators={indicatorsQuery.data ?? []}
+            activeTab={libraryCompositeActiveTab}
+            onTabChange={setLibraryCompositeActiveTab}
+            savedEntry={libraryCompositeSavedEntry}
+            onSavedEntryChange={setLibraryCompositeSavedEntry}
+            candidates={libraryCompositeCandidates}
+            onToggleInput={toggleLibraryComposite}
+          />
         )}
 
         {mainTab === 'validation' && (
           <ValidationScreen
             subTab={subTab}
-            symbol={symbol}
-            timeframe={timeframe}
-            effectiveRank={focusedRank ?? bestRow?.rank ?? null}
+            strategyId={validationStrategyId}
+            onSelectStrategy={setValidationStrategyId}
+            indicators={indicatorsQuery.data ?? []}
           />
         )}
 
         {mainTab === 'results' && subTab === 'compare' && (
           <CompareView
             entries={resultsCompareEntries}
-            emptyMessage="比較対象がありません。ランキング一覧で「比較」のチェックを2件以上付けてください。"
+            emptyMessage="「比較」のチェックボックスを付けるか、下のボタンから比較対象を追加すると、選んだストラテジーをまとめて比較した結果がここに表示されます。"
             indicators={indicatorsQuery.data ?? []}
+            candidates={resultsCompositeCandidates}
+            onToggleInput={(id) => toggleCompareRank(Number(id))}
           />
         )}
         {mainTab === 'results' && subTab === 'composite' && (
-          <CompositeDetail inputs={resultsCompositeInputs} pendingCount={resultsCompositePendingCount} />
+          <CompositeDetail
+            inputs={resultsCompositeInputs}
+            pendingCount={resultsCompositePendingCount}
+            indicators={indicatorsQuery.data ?? []}
+            activeTab={resultsCompositeActiveTab}
+            onTabChange={setResultsCompositeActiveTab}
+            savedEntry={resultsCompositeSavedEntry}
+            onSavedEntryChange={setResultsCompositeSavedEntry}
+            candidates={resultsCompositeCandidates}
+            onToggleInput={(id) => toggleCompositeRank(Number(id))}
+          />
         )}
 
         {mainTab === 'results' && (subTab === 'ranking' || subTab === 'detail') && (
@@ -1586,11 +2266,42 @@ export default function App() {
             focusedRank={focusedRank}
             onToggleChecked={toggleRowChecked}
             rankingScrollTopRef={rankingScrollTopRef}
-            onBookmark={handleBookmark}
+            onBookmark={handleDetailBookmark}
             onFavorite={handleFavorite}
             onToggleCompare={toggleCompareRank}
             onToggleComposite={toggleCompositeRank}
+            onToggleReverse={toggleReverseRank}
+            reverseCount={reverseRanks.length}
+            onReverseExecute={handleReverseExecuteFromResults}
+            onDetailTabChange={(rank, tabId) => setDetailActiveTabs((prev) => ({ ...prev, [rank]: tabId }))}
+            detailCandidates={resultsCompositeCandidates}
+            onToggleDetailInput={(id) => toggleRowChecked(Number(id))}
           />
+        )}
+        {mainTab === 'results' && subTab === 'reversed' && (
+          <div className="glass-panel flex flex-col rounded-2xl p-4" style={{ height: 'calc(100vh - 122px)' }}>
+            <div className="mb-3 flex flex-none items-baseline gap-2">
+              <div className="text-sm font-semibold text-gray-200">反転ストラテジー</div>
+              <div className="text-xs text-gray-500">新たな探索を行うとデータが削除されます</div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <RankingTable
+                rows={resultsReverseResults}
+                indicators={indicatorsQuery.data ?? []}
+                jobId={resultsReverseResults.length > 0 ? 'reverse-batch' : null}
+                names={resultsReverseNames}
+                rowMeta={resultsReverseRowMeta}
+                onRenameRow={() => {}}
+                onToggleChecked={(rank) => toggleReverseRowChecked('results', rank)}
+                onToggleReverse={() => {}}
+                showReverseColumn={false}
+                onBookmark={(rank) => handleReverseBookmark('results', rank)}
+                onFavorite={(rank) => handleReverseFavorite('results', rank)}
+                scrollTopRef={reverseScrollTopRef}
+                timeframe=""
+              />
+            </div>
+          </div>
         )}
 
         {mainTab === 'settings' && <SettingsScreen subTab={subTab} />}
@@ -1626,7 +2337,7 @@ export default function App() {
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
             >
-              {SYMBOLS.map((s) => (
+              {symbols.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
@@ -1638,7 +2349,7 @@ export default function App() {
               onChange={(e) => setTimeframe(e.target.value)}
             >
               {TIMEFRAMES.map((tf) => (
-                <option key={tf} value={tf}>
+                <option key={tf} value={tf} disabled={!(symbolTimeframes[symbol] ?? TIMEFRAMES).includes(tf)}>
                   {tf}
                 </option>
               ))}
@@ -2470,7 +3181,7 @@ export default function App() {
             <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
               <h2 className="text-sm font-semibold text-gray-100">バックテストを実行します</h2>
               <p className="mt-2 text-xs leading-relaxed text-gray-400">
-                未保存の探索結果は破棄されますがよろしいですか?
+                既存のバックテスト結果と反転ストラテジーを削除して新たなバックテストを実行します。
               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button

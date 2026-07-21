@@ -152,10 +152,14 @@ def daily_reference_levels(df: pd.DataFrame, adr_period: int) -> pd.DataFrame:
     return merged[["prev_day_high", "prev_day_low", "pivot", "r1", "s1", "adr"]]
 
 
-def round_number_distance_pips(close: pd.Series, pip: float) -> pd.Series:
-    """Distance in pips from the nearest whole-unit price level (e.g. the
-    nearest whole yen for a JPY pair)."""
-    nearest_round = close.round(0)
+def round_number_distance_pips(close: pd.Series, pip: float, round_interval: float = 1.0) -> pd.Series:
+    """Distance in pips from the nearest round_interval-spaced price level
+    (round_interval=1.0 [default] = nearest whole yen for a JPY pair;
+    0.5 = nearest half-yen; 10.0 for XAUUSD's $10 round levels, etc. -
+    round_interval and pip are independent: round_interval picks WHICH
+    round levels count, pip only converts the resulting distance into pip
+    units)."""
+    nearest_round = (close / round_interval).round(0) * round_interval
     return (close - nearest_round).abs() / pip
 
 
@@ -449,13 +453,25 @@ def money_flow_index(high: pd.Series, low: pd.Series, close: pd.Series, volume: 
 
 
 def chaikin_money_flow(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, period: int = 20) -> pd.Series:
-    money_flow_multiplier = ((close - low) - (high - close)) / (high - low)
+    price_range = high - low
+    money_flow_multiplier = ((close - low) - (high - close)) / price_range
+    # TradingViewと同じ規約: 値幅ゼロ(高値=安値)のバーは0/0でNaNになるため、
+    # MFMを0として扱う(そのバーはA/D方向に寄与しない)。
+    money_flow_multiplier = money_flow_multiplier.where(price_range != 0, 0.0)
     money_flow_volume = money_flow_multiplier * volume
-    return money_flow_volume.rolling(window=period).sum() / volume.rolling(window=period).sum()
+    volume_sum = volume.rolling(window=period).sum()
+    cmf = money_flow_volume.rolling(window=period).sum() / volume_sum
+    # 出来高データが無い(全期間0埋めされた)銘柄で分母が0になるケースが
+    # 実際に発生する(USDJPY-FXCM) - 資金フロー中立として0を返す。
+    return cmf.where(volume_sum != 0, 0.0)
 
 
 def accumulation_distribution(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
-    money_flow_multiplier = ((close - low) - (high - close)) / (high - low)
+    price_range = high - low
+    money_flow_multiplier = ((close - low) - (high - close)) / price_range
+    # TradingViewと同じ規約: 値幅ゼロ(高値=安値)のバーは0/0でNaNになるため、
+    # MFMを0として扱う(そのバーはA/D方向に寄与しない)。
+    money_flow_multiplier = money_flow_multiplier.where(price_range != 0, 0.0)
     return (money_flow_multiplier * volume).cumsum()
 
 
@@ -483,14 +499,21 @@ def _prev_day_hlc(df: pd.DataFrame) -> pd.DataFrame:
 def woodie_pivot_levels(df: pd.DataFrame) -> pd.DataFrame:
     """Woodie's pivot weights the previous close twice as heavily as
     high/low - meant to react a bit faster to the latest close than the
-    classic floor-trader pivot."""
+    classic floor-trader pivot. R3/R4/S3/S4 follow the standard extended
+    Woodie formula (R4=R3+(R2-R1), S4=S3-(S1-S2))."""
     prev = _prev_day_hlc(df)
     pivot = (prev["high"] + prev["low"] + 2 * prev["close"]) / 4
     r1 = 2 * pivot - prev["low"]
     s1 = 2 * pivot - prev["high"]
     r2 = pivot + (prev["high"] - prev["low"])
     s2 = pivot - (prev["high"] - prev["low"])
-    return pd.DataFrame({"pivot": pivot, "r1": r1, "s1": s1, "r2": r2, "s2": s2})
+    r3 = prev["high"] + 2 * (pivot - prev["low"])
+    s3 = prev["low"] - 2 * (prev["high"] - pivot)
+    r4 = r3 + (r2 - r1)
+    s4 = s3 - (s1 - s2)
+    return pd.DataFrame({
+        "pivot": pivot, "r1": r1, "s1": s1, "r2": r2, "s2": s2, "r3": r3, "s3": s3, "r4": r4, "s4": s4,
+    })
 
 
 def camarilla_levels(df: pd.DataFrame) -> pd.DataFrame:

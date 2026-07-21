@@ -838,3 +838,37 @@ def cup_with_handle_breakout(
     handle_high = high.rolling(handle_window).max().where(is_handle).ffill()
     breakout = close > handle_high
     return _first_occurrence_after(formed, breakout)
+
+
+# ---------------------------------------------------------------------------
+# Equal High / Equal Low (ICT用語の「流動性プール」) - 直近2つの確定スイング
+# 高値(安値)がほぼ同じ水準に並んでいる状態。double_top_breakdown等と同じ
+# ATR許容誤差の仕組みをそのまま再利用(ネックライン突破の確認は不要、
+# 2点が並んだ時点で成立)。
+# ---------------------------------------------------------------------------
+
+def equal_high(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    swing_lookback: int = 5, tolerance_atr_mult: float = 0.3, **p,
+) -> np.ndarray:
+    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
+    swing_high = _swing_high_levels(high, swing_lookback)
+    lh0, lh1 = _nth_back_level(swing_high, 0), _nth_back_level(swing_high, 1)
+    bh0 = _nth_back_bar_index(swing_high)
+    bar_index = pd.Series(np.arange(len(high)), index=high.index)
+    formed = (bar_index == bh0) & _similar(lh0, lh1, atr_values, tolerance_atr_mult)
+    return formed.fillna(False).to_numpy(dtype=float)
+
+
+def equal_low(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    swing_lookback: int = 5, tolerance_atr_mult: float = 0.3, **p,
+) -> np.ndarray:
+    """Mirror image of equal_high, for swing lows."""
+    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
+    swing_low = _swing_low_levels(low, swing_lookback)
+    ll0, ll1 = _nth_back_level(swing_low, 0), _nth_back_level(swing_low, 1)
+    bl0 = _nth_back_bar_index(swing_low)
+    bar_index = pd.Series(np.arange(len(low)), index=low.index)
+    formed = (bar_index == bl0) & _similar(ll0, ll1, atr_values, tolerance_atr_mult)
+    return formed.fillna(False).to_numpy(dtype=float)

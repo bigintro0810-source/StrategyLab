@@ -171,16 +171,16 @@ INDICATOR_POOL: list[IndicatorSpec] = [
         allow_indicator_pair=True, literal_range=(20.0, 80.0),
     ),
     IndicatorSpec(
-        "adx", "oscillator_0_100", param_ranges={"length": (7, 30)},
-        allow_indicator_pair=True, literal_range=(15.0, 40.0),
+        "adx", "oscillator_0_100", param_ranges={"length": (2, 100)},
+        allow_indicator_pair=True, literal_range=(10.0, 50.0),
     ),
     IndicatorSpec(
-        "plus_di", "oscillator_0_100", param_ranges={"length": (7, 30)},
-        allow_indicator_pair=True, literal_range=(15.0, 40.0),
+        "plus_di", "oscillator_0_100", param_ranges={"length": (2, 100)},
+        allow_indicator_pair=True, literal_range=(10.0, 50.0),
     ),
     IndicatorSpec(
-        "minus_di", "oscillator_0_100", param_ranges={"length": (7, 30)},
-        allow_indicator_pair=True, literal_range=(15.0, 40.0),
+        "minus_di", "oscillator_0_100", param_ranges={"length": (2, 100)},
+        allow_indicator_pair=True, literal_range=(10.0, 50.0),
     ),
     IndicatorSpec(
         "stochastic_k",
@@ -194,7 +194,7 @@ INDICATOR_POOL: list[IndicatorSpec] = [
         param_ranges={"k_period": (5, 21), "d_period": (3, 5), "smooth": (3, 5)},
         allow_indicator_pair=True, literal_range=(20.0, 80.0),
     ),
-    IndicatorSpec("atr", "volatility", param_ranges={"length": (7, 30)}, allow_indicator_pair=True),
+    IndicatorSpec("atr", "volatility", param_ranges={"length": (2, 100)}, allow_indicator_pair=True),
     IndicatorSpec("adr", "volatility", param_ranges={"adr_period": (7, 30)}, allow_indicator_pair=True),
     IndicatorSpec(
         "macd_line",
@@ -204,6 +204,12 @@ INDICATOR_POOL: list[IndicatorSpec] = [
     ),
     IndicatorSpec(
         "macd_signal",
+        "signed_price_diff",
+        param_ranges={"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
+        allow_indicator_pair=True, literal_choices=[0.0],
+    ),
+    IndicatorSpec(
+        "macd_histogram",
         "signed_price_diff",
         param_ranges={"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
         allow_indicator_pair=True, literal_choices=[0.0],
@@ -327,9 +333,18 @@ INDICATOR_POOL: list[IndicatorSpec] = [
             "lower_wick_ratio_max": [0.05, 0.1, 0.15],
         },
     ),
-    IndicatorSpec("engulfing_bullish", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("engulfing_bearish", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("inside_bar", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec(
+        "engulfing_bullish", "boolean_signal", literal_choices=[1.0],
+        param_choices={"tolerance_pct": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "engulfing_bearish", "boolean_signal", literal_choices=[1.0],
+        param_choices={"tolerance_pct": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "inside_bar", "boolean_signal", literal_choices=[1.0],
+        param_choices={"min_mother_range_atr_mult": [0.0, 0.3, 0.5, 1.0]},
+    ),
     IndicatorSpec("outside_bar", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec(
         "tweezer_top", "boolean_signal", literal_choices=[1.0],
@@ -339,22 +354,54 @@ INDICATOR_POOL: list[IndicatorSpec] = [
         "tweezer_bottom", "boolean_signal", literal_choices=[1.0],
         param_choices={"tolerance_pct": [0.05, 0.1, 0.15, 0.2]},
     ),
-    IndicatorSpec("harami_bullish", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("harami_bearish", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("gap_up", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("gap_down", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec(
+        "harami_bullish", "boolean_signal", literal_choices=[1.0],
+        param_choices={"containment_tolerance": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "harami_bearish", "boolean_signal", literal_choices=[1.0],
+        param_choices={"containment_tolerance": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "gap_up", "boolean_signal", literal_choices=[1.0],
+        param_choices={"min_gap_atr_mult": [0.0, 0.1, 0.25, 0.5]},
+    ),
+    IndicatorSpec(
+        "gap_down", "boolean_signal", literal_choices=[1.0],
+        param_choices={"min_gap_atr_mult": [0.0, 0.1, 0.25, 0.5]},
+    ),
     IndicatorSpec(
         "morning_star", "boolean_signal", literal_choices=[1.0],
-        param_choices={"small_body_ratio": [0.2, 0.3, 0.4]},
+        param_choices={
+            "small_body_ratio": [0.2, 0.3, 0.4],
+            "close_position_ratio": [0.3, 0.5, 0.7, 1.0],
+            "require_gap": [0, 1],
+        },
     ),
     IndicatorSpec(
         "evening_star", "boolean_signal", literal_choices=[1.0],
-        param_choices={"small_body_ratio": [0.2, 0.3, 0.4]},
+        param_choices={
+            "small_body_ratio": [0.2, 0.3, 0.4],
+            "close_position_ratio": [0.3, 0.5, 0.7, 1.0],
+            "require_gap": [0, 1],
+        },
     ),
-    IndicatorSpec("three_white_soldiers", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("three_black_crows", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("rising_three_methods", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("falling_three_methods", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec(
+        "three_white_soldiers", "boolean_signal", literal_choices=[1.0],
+        param_choices={"min_body_ratio": [0.0, 0.3, 0.5, 0.7]},
+    ),
+    IndicatorSpec(
+        "three_black_crows", "boolean_signal", literal_choices=[1.0],
+        param_choices={"min_body_ratio": [0.0, 0.3, 0.5, 0.7]},
+    ),
+    IndicatorSpec(
+        "rising_three_methods", "boolean_signal", literal_choices=[1.0],
+        param_choices={"max_middle_body_ratio": [0.3, 0.5, 0.7, 1.0]},
+    ),
+    IndicatorSpec(
+        "falling_three_methods", "boolean_signal", literal_choices=[1.0],
+        param_choices={"max_middle_body_ratio": [0.3, 0.5, 0.7, 1.0]},
+    ),
     IndicatorSpec(
         "consecutive_bullish_candles", "boolean_signal", literal_choices=[1.0],
         param_ranges={"n": (2, 10)},
@@ -455,9 +502,11 @@ _SLOPE_SERIES_PARAMS: dict[str, dict] = {
     "vwap": {},
     "supertrend": {"length": (5, 30)},
     "rsi": {"length": (7, 30)},
-    "adx": {"length": (7, 30)},
+    "adx": {"length": (2, 100)},
     "macd": {"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
-    "atr": {"length": (7, 30)},
+    "atr": {"length": (2, 100)},
+    "obv": {},
+    "mfi": {"length": (7, 30)},
 }
 for _series_name, _series_ranges in _SLOPE_SERIES_PARAMS.items():
     for _direction in ("rising", "falling"):
@@ -468,6 +517,18 @@ for _series_name, _series_ranges in _SLOPE_SERIES_PARAMS.items():
             )
         )
 
+# 「N本連続で上昇/下降」版 - 上のrising/fallingと同じ7系列に、直前バーとの
+# 比較(lookback)ではなくN本区間ぶん連続で条件を満たすかを見る`n`を持つ
+# (engine/derived_indicators.py::CONSECUTIVE_SLOPE_INDICATORS)。
+for _series_name, _series_ranges in _SLOPE_SERIES_PARAMS.items():
+    for _direction in ("consecutive_rising", "consecutive_falling"):
+        INDICATOR_POOL.append(
+            IndicatorSpec(
+                f"{_series_name}_{_direction}", "boolean_signal", literal_choices=[1.0],
+                param_ranges={**_series_ranges, "n": (2, 10)},
+            )
+        )
+
 INDICATOR_POOL.extend([
     IndicatorSpec(
         "ema_slope_degrees", "unitless_ratio", literal_range=(-30.0, 30.0),
@@ -475,6 +536,10 @@ INDICATOR_POOL.extend([
     ),
     IndicatorSpec(
         "ema_roc", "unitless_ratio", literal_range=(-10.0, 10.0),
+        param_ranges={"length": (10, 300), "lookback": (2, 20)},
+    ),
+    IndicatorSpec(
+        "ema_slope", "signed_price_diff", literal_choices=[0.0],
         param_ranges={"length": (10, 300), "lookback": (2, 20)},
     ),
     IndicatorSpec(
@@ -499,6 +564,10 @@ INDICATOR_POOL.extend([
         param_ranges={"ema_length": (10, 300), "atr_length": (7, 30)},
     ),
     IndicatorSpec(
+        "dist_close_ema_pct", "unitless_ratio", literal_range=(0.0, 5.0),
+        param_ranges={"length": (10, 300)},
+    ),
+    IndicatorSpec(
         "today_range_pct_of_adr", "unitless_ratio", literal_range=(50.0, 150.0),
         param_ranges={"adr_period": (7, 30)},
     ),
@@ -513,10 +582,22 @@ INDICATOR_POOL.extend([
     # 統計系
     IndicatorSpec("rolling_mean_high", "price_level", param_ranges={"length": (10, 300)}, allow_indicator_pair=True),
     IndicatorSpec("rolling_mean_low", "price_level", param_ranges={"length": (10, 300)}, allow_indicator_pair=True),
-    IndicatorSpec("avg_body_size", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
-    IndicatorSpec("max_body_size", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
-    IndicatorSpec("min_body_size", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
-    IndicatorSpec("body_size_std", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
+    IndicatorSpec(
+        "avg_body_size", "volatility", param_ranges={"length": (10, 50)},
+        param_choices={"exclude_current": [0, 1]}, allow_indicator_pair=True,
+    ),
+    IndicatorSpec(
+        "max_body_size", "volatility", param_ranges={"length": (10, 50)},
+        param_choices={"exclude_current": [0, 1]}, allow_indicator_pair=True,
+    ),
+    IndicatorSpec(
+        "min_body_size", "volatility", param_ranges={"length": (10, 50)},
+        param_choices={"exclude_current": [0, 1]}, allow_indicator_pair=True,
+    ),
+    IndicatorSpec(
+        "body_size_std", "volatility", param_ranges={"length": (10, 50)},
+        param_choices={"exclude_current": [0, 1]}, allow_indicator_pair=True,
+    ),
     IndicatorSpec("avg_upper_wick", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
     IndicatorSpec("avg_lower_wick", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
     IndicatorSpec(
@@ -529,6 +610,24 @@ INDICATOR_POOL.extend([
         allow_indicator_pair=True,
     ),
     IndicatorSpec("close_rolling_std", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
+    IndicatorSpec(
+        "historical_volatility", "volatility",
+        param_ranges={"period": (10, 50)}, allow_indicator_pair=True,
+    ),
+    IndicatorSpec(
+        "equal_high", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.15, 0.3, 0.5]},
+    ),
+    IndicatorSpec(
+        "equal_low", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.15, 0.3, 0.5]},
+    ),
+    IndicatorSpec("mss_bullish", "boolean_signal", literal_choices=[1.0], param_ranges={"length": (3, 10)}),
+    IndicatorSpec("mss_bearish", "boolean_signal", literal_choices=[1.0], param_ranges={"length": (3, 10)}),
+    IndicatorSpec("three_line_strike_bullish", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec("three_line_strike_bearish", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec("tasuki_gap_upside", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec("tasuki_gap_downside", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec(
         "rsi_rolling_mean", "oscillator_0_100",
         param_ranges={"rsi_length": (7, 30), "window": (10, 50)},
@@ -584,6 +683,11 @@ INDICATOR_POOL.extend([
     # エントリー専用イベント
     IndicatorSpec(
         "bb_width", "volatility",
+        param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
+        allow_indicator_pair=True,
+    ),
+    IndicatorSpec(
+        "bb_width_percent", "unitless_ratio", literal_range=(0.0, 20.0),
         param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
         allow_indicator_pair=True,
     ),
@@ -684,11 +788,11 @@ INDICATOR_POOL.extend([
     ),
     IndicatorSpec(
         "kicker_bullish", "boolean_signal", literal_choices=[1.0],
-        param_choices={"body_ratio_threshold": [0.5, 0.6, 0.7, 0.8]},
+        param_choices={"body_ratio_threshold": [0.5, 0.6, 0.7, 0.8], "require_gap": [1, 0]},
     ),
     IndicatorSpec(
         "kicker_bearish", "boolean_signal", literal_choices=[1.0],
-        param_choices={"body_ratio_threshold": [0.5, 0.6, 0.7, 0.8]},
+        param_choices={"body_ratio_threshold": [0.5, 0.6, 0.7, 0.8], "require_gap": [1, 0]},
     ),
     IndicatorSpec(
         "belt_hold_bullish", "boolean_signal", literal_choices=[1.0],
@@ -706,10 +810,22 @@ INDICATOR_POOL.extend([
         "abandoned_baby_bearish", "boolean_signal", literal_choices=[1.0],
         param_choices={"small_body_ratio": [0.05, 0.1, 0.15]},
     ),
-    IndicatorSpec("three_inside_up", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("three_inside_down", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("three_outside_up", "boolean_signal", literal_choices=[1.0]),
-    IndicatorSpec("three_outside_down", "boolean_signal", literal_choices=[1.0]),
+    IndicatorSpec(
+        "three_inside_up", "boolean_signal", literal_choices=[1.0],
+        param_choices={"containment_tolerance": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "three_inside_down", "boolean_signal", literal_choices=[1.0],
+        param_choices={"containment_tolerance": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "three_outside_up", "boolean_signal", literal_choices=[1.0],
+        param_choices={"tolerance_pct": [0.0, 0.05, 0.1, 0.2]},
+    ),
+    IndicatorSpec(
+        "three_outside_down", "boolean_signal", literal_choices=[1.0],
+        param_choices={"tolerance_pct": [0.0, 0.05, 0.1, 0.2]},
+    ),
     # ラウンドナンバー距離 - 常にvolatility kind(価格単位・symbol依存)。
     # pip_sizeは通貨ペア/銘柄によって異なるべきだが(main.py::pip_size_for_symbol
     # 参照 - JPYペア=0.01、非JPYペア=0.0001、XAUUSD=0.01、XAGUSD=0.001)、この
@@ -717,8 +833,9 @@ INDICATOR_POOL.extend([
     # 対象と噛み合わないpip_sizeを選ぶ可能性はある既知の限界(このプロジェクトの
     # fib比率選択などと同じ、symbol非依存な汎用選択肢という扱い)。
     IndicatorSpec(
-        "dist_to_round_number", "volatility",
-        param_choices={"pip_size": [0.01, 0.001, 0.0001]}, allow_indicator_pair=True,
+        "dist_to_round_number", "unitless_ratio",
+        param_choices={"pip_size": [0.01, 0.001, 0.0001], "round_interval": [0.1, 0.5, 1.0, 5.0, 10.0]},
+        allow_indicator_pair=True, literal_range=(0.0, 30.0),
     ),
     # チャートパターン(engine/chart_patterns.py) - 全てboolean_signal。
     # tolerance/margin類はATR倍率で正規化済み(symbol/timeframe非依存)。
@@ -828,8 +945,14 @@ INDICATOR_POOL.extend([
         param_choices={"af_start": [0.01, 0.02, 0.03], "af_max": [0.1, 0.2, 0.3]},
         literal_choices=[-1.0, 1.0],
     ),
-    IndicatorSpec("aroon_up", "oscillator_0_100", param_ranges={"period": (10, 30)}, literal_range=(20.0, 80.0)),
-    IndicatorSpec("aroon_down", "oscillator_0_100", param_ranges={"period": (10, 30)}, literal_range=(20.0, 80.0)),
+    IndicatorSpec(
+        "aroon_up", "oscillator_0_100", param_ranges={"period": (2, 100)},
+        allow_indicator_pair=True, literal_range=(0.0, 100.0),
+    ),
+    IndicatorSpec(
+        "aroon_down", "oscillator_0_100", param_ranges={"period": (2, 100)},
+        allow_indicator_pair=True, literal_range=(0.0, 100.0),
+    ),
     IndicatorSpec(
         "aroon_oscillator", "unitless_ratio", literal_range=(-100.0, 100.0), param_ranges={"period": (10, 30)},
     ),
@@ -857,6 +980,10 @@ INDICATOR_POOL.extend([
     IndicatorSpec("woodie_s1", "price_level", allow_indicator_pair=True),
     IndicatorSpec("woodie_r2", "price_level", allow_indicator_pair=True),
     IndicatorSpec("woodie_s2", "price_level", allow_indicator_pair=True),
+    IndicatorSpec("woodie_r3", "price_level", allow_indicator_pair=True),
+    IndicatorSpec("woodie_s3", "price_level", allow_indicator_pair=True),
+    IndicatorSpec("woodie_r4", "price_level", allow_indicator_pair=True),
+    IndicatorSpec("woodie_s4", "price_level", allow_indicator_pair=True),
     IndicatorSpec("camarilla_r1", "price_level", allow_indicator_pair=True),
     IndicatorSpec("camarilla_r2", "price_level", allow_indicator_pair=True),
     IndicatorSpec("camarilla_r3", "price_level", allow_indicator_pair=True),
@@ -1090,6 +1217,7 @@ _ICT_EXACT = {
     "dist_bos_bullish", "dist_bos_bearish",
     "fvg_first_retest_bullish", "fvg_first_retest_bearish",
     "order_block_first_retest_bullish", "order_block_first_retest_bearish",
+    "equal_high", "equal_low", "mss_bullish", "mss_bearish",
 }
 
 # Multi-swing chart patterns and harmonic patterns - all boolean_signal,
@@ -1137,6 +1265,8 @@ _PRICE_ACTION_EXACT = {
     "kicker_bullish", "kicker_bearish", "belt_hold_bullish", "belt_hold_bearish",
     "abandoned_baby_bullish", "abandoned_baby_bearish",
     "three_inside_up", "three_inside_down", "three_outside_up", "three_outside_down",
+    "three_line_strike_bullish", "three_line_strike_bearish",
+    "tasuki_gap_upside", "tasuki_gap_downside",
     "nr4", "nr7", "volume_climax_bullish", "volume_climax_bearish",
     "dist_to_round_number", "avg_body_size", "max_body_size", "min_body_size", "body_size_std",
     "avg_upper_wick", "avg_lower_wick", "is_max_body_of_n", "percentile_rank_body",
@@ -1144,6 +1274,40 @@ _PRICE_ACTION_EXACT = {
     "first_pullback_after_breakout_bullish", "first_pullback_after_breakout_bearish",
     "prev_day_high", "prev_day_low", "prev_day_mid",
 }
+
+# 2026-07-19追加(レビュー対応、未実装だった指標)。
+INDICATOR_POOL.extend([
+    IndicatorSpec(
+        "bull_power", "signed_price_diff", literal_choices=[0.0], param_ranges={"length": (5, 34)},
+    ),
+    IndicatorSpec(
+        "bear_power", "signed_price_diff", literal_choices=[0.0], param_ranges={"length": (5, 34)},
+    ),
+    IndicatorSpec(
+        "chaikin_oscillator", "signed_price_diff", literal_choices=[0.0],
+        param_ranges={"short_length": (2, 10), "long_length": (10, 30)},
+    ),
+    IndicatorSpec(
+        "cmo", "unitless_ratio", literal_range=(-80.0, 80.0), param_ranges={"length": (7, 30)},
+    ),
+    IndicatorSpec(
+        "connors_rsi", "oscillator_0_100",
+        param_ranges={"rsi_length": (2, 10), "streak_length": (2, 10), "percent_rank_length": (50, 200)},
+        literal_range=(10.0, 90.0),
+    ),
+    IndicatorSpec(
+        "coppock_curve", "unitless_ratio", literal_range=(-20.0, 20.0),
+        param_ranges={"long_roc": (10, 20), "short_roc": (7, 15), "wma_length": (5, 20)},
+    ),
+    IndicatorSpec(
+        "correlation_close_ema", "unitless_ratio", literal_range=(-1.0, 1.0),
+        param_ranges={"length": (10, 50), "ema_length": (10, 50)},
+    ),
+    IndicatorSpec(
+        "correlation_oscillator", "unitless_ratio", literal_range=(-1.0, 1.0),
+        param_ranges={"length": (10, 50)},
+    ),
+])
 
 # Known-wrong results from the name-pattern rules above, keyed by indicator
 # name - checked first, before any prefix/exact-set rule.

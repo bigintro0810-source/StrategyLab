@@ -103,33 +103,42 @@ def bullish_fvg(high: pd.Series, low: pd.Series) -> np.ndarray:
 def bearish_order_block(open_: pd.Series, close: pd.Series) -> np.ndarray:
     """Simplified 2-candle order block: a bullish candle immediately
     followed by a bearish candle with a larger body (an "engulfing"-style
-    reversal), flagged on the bullish candle's bar. Simpler than the
-    multi-candle "impulse move" definitions some traders use - a
-    deliberate simplification for a first pass."""
-    is_bullish = close > open_
-    this_body = close - open_
+    reversal). Simpler than the multi-candle "impulse move" definitions
+    some traders use - a deliberate simplification for a first pass.
 
-    next_open = open_.shift(-1)
-    next_close = close.shift(-1)
-    next_is_bearish = next_close < next_open
-    next_body = next_open - next_close
+    Flagged on the BEARISH (confirming) candle's own bar, not the bullish
+    origin candle - flagging it one bar earlier would need shift(-1) (the
+    origin candle's bar) reading the confirming candle's not-yet-closed
+    open/close, i.e. genuine lookahead bias. The engine enters at the next
+    bar's open once a signal is true, so a signal that can only be computed
+    using a bar's own close cannot legally appear before that bar has
+    actually closed. Actually hit this: order_block_bearish alone produced
+    a ~4.0 profit factor / 65-67% win rate across 15,000-63,000 trades
+    spanning 23 years - result of trading on tomorrow's candle before it
+    happened, not a real edge. Verified the fix doesn't merely move the
+    bug: this fires strictly using only open_[i-1]/close_[i-1]/open_[i]/
+    close_[i], all known by the close of bar i."""
+    is_bullish_prev = (close > open_).shift(1)
+    prev_body = (close - open_).shift(1)
 
-    return (is_bullish & next_is_bearish & (next_body > this_body)).fillna(False).to_numpy()
+    is_bearish = close < open_
+    this_body = open_ - close
+
+    return (is_bullish_prev & is_bearish & (this_body > prev_body)).fillna(False).to_numpy()
 
 
 def bullish_order_block(open_: pd.Series, close: pd.Series) -> np.ndarray:
     """Mirror image of bearish_order_block: a bearish candle immediately
     followed by a bullish candle with a larger body, flagged on the
-    bearish candle's bar."""
-    is_bearish = close < open_
-    this_body = open_ - close
+    bullish (confirming) candle's own bar for the same lookahead-avoidance
+    reason - see bearish_order_block."""
+    is_bearish_prev = (close < open_).shift(1)
+    prev_body = (open_ - close).shift(1)
 
-    next_open = open_.shift(-1)
-    next_close = close.shift(-1)
-    next_is_bullish = next_close > next_open
-    next_body = next_close - next_open
+    is_bullish = close > open_
+    this_body = close - open_
 
-    return (is_bearish & next_is_bullish & (next_body > this_body)).fillna(False).to_numpy()
+    return (is_bearish_prev & is_bullish & (this_body > prev_body)).fillna(False).to_numpy()
 
 
 def liquidity_sweep_bearish(high: pd.Series, low: pd.Series, close: pd.Series, lookback: int) -> np.ndarray:
@@ -154,16 +163,23 @@ def liquidity_sweep_bullish(high: pd.Series, low: pd.Series, close: pd.Series, l
     return ((low < recent_swing_low) & (close > recent_swing_low)).fillna(False).to_numpy()
 
 
-def bos_choch_bearish(high: pd.Series, low: pd.Series, close: pd.Series, lookback: int) -> tuple[np.ndarray, np.ndarray]:
+def bos_choch_bearish(
+    high: pd.Series, low: pd.Series, close: pd.Series, lookback: int, break_basis: str = "close"
+) -> tuple[np.ndarray, np.ndarray]:
     """Distinguishes a downside break of structure into two flavors:
 
-    - BOS (continuation): close breaks below the most recent confirmed
+    - BOS (continuation): price breaks below the most recent confirmed
       swing low, and that swing low was already LOWER than the swing low
       before it (structure was already trending down).
-    - CHoCH (reversal): close breaks below the most recent confirmed swing
+    - CHoCH (reversal): price breaks below the most recent confirmed swing
       low, but that swing low was HIGHER than the one before it
       (structure had been making higher lows / trending up) - the first
       break signaling a possible trend change.
+
+    break_basis="close"(既定): 終値がスイング安値を下回った時点で成立
+    (TradingView等の主流な定義)。break_basis="wick": ヒゲ(安値)がスイング
+    安値を下回った時点で成立(終値では戻していても、一瞬でも下抜けた
+    ら成立する、よりセンシティブな判定)。
 
     Returns (bos_bearish, choch_bearish) as two boolean arrays.
     """
@@ -173,11 +189,11 @@ def bos_choch_bearish(high: pd.Series, low: pd.Series, close: pd.Series, lookbac
     recent_swing_low = _last_confirmed_level(swing_low_series)
     previous_swing_low = _previous_confirmed_level(swing_low_series)
 
-    close_arr = close.to_numpy(dtype=float)
+    break_price_arr = (low if break_basis == "wick" else close).to_numpy(dtype=float)
     recent_arr = recent_swing_low.to_numpy(dtype=float)
     prev_arr = previous_swing_low.to_numpy(dtype=float)
 
-    broke_below = close_arr < recent_arr
+    broke_below = break_price_arr < recent_arr
     prev_above = np.roll(broke_below, 1)
     prev_above[0] = False
     fresh_break = broke_below & ~prev_above
@@ -191,16 +207,20 @@ def bos_choch_bearish(high: pd.Series, low: pd.Series, close: pd.Series, lookbac
     return bos_bearish, choch_bearish
 
 
-def bos_choch_bullish(high: pd.Series, low: pd.Series, close: pd.Series, lookback: int) -> tuple[np.ndarray, np.ndarray]:
+def bos_choch_bullish(
+    high: pd.Series, low: pd.Series, close: pd.Series, lookback: int, break_basis: str = "close"
+) -> tuple[np.ndarray, np.ndarray]:
     """Mirror image of bos_choch_bearish, for upside breaks of structure:
 
-    - BOS (continuation): close breaks above the most recent confirmed
+    - BOS (continuation): price breaks above the most recent confirmed
       swing high, and that swing high was already HIGHER than the swing
       high before it (structure was already trending up).
-    - CHoCH (reversal): close breaks above the most recent confirmed swing
+    - CHoCH (reversal): price breaks above the most recent confirmed swing
       high, but that swing high was LOWER than the one before it
       (structure had been making lower highs / trending down) - the first
       break signaling a possible trend change.
+
+    break_basis="close"(既定)/"wick" - bos_choch_bearishのdocstring参照。
 
     Returns (bos_bullish, choch_bullish) as two boolean arrays.
     """
@@ -210,11 +230,11 @@ def bos_choch_bullish(high: pd.Series, low: pd.Series, close: pd.Series, lookbac
     recent_swing_high = _last_confirmed_level(swing_high_series)
     previous_swing_high = _previous_confirmed_level(swing_high_series)
 
-    close_arr = close.to_numpy(dtype=float)
+    break_price_arr = (high if break_basis == "wick" else close).to_numpy(dtype=float)
     recent_arr = recent_swing_high.to_numpy(dtype=float)
     prev_arr = previous_swing_high.to_numpy(dtype=float)
 
-    broke_above = close_arr > recent_arr
+    broke_above = break_price_arr > recent_arr
     prev_below = np.roll(broke_above, 1)
     prev_below[0] = False
     fresh_break = broke_above & ~prev_below
@@ -250,7 +270,13 @@ def breaker_block_bullish(
     resistance to support. Fires on every bar the retest condition holds
     (not just the first), matching liquidity_sweep/BOS-CHoCH's style."""
     ob_flags = pd.Series(bearish_order_block(open_, close), index=close.index)
-    zone_high = np.maximum(open_, close)
+    # bearish_order_block now flags the CONFIRMING (bearish) candle's bar,
+    # one bar after the actual order-block origin (bullish) candle - shift(1)
+    # here re-anchors the zone price to that origin candle's own body,
+    # matching this function's own "resistance it was expected to hold"
+    # description (see bearish_order_block's docstring for why the flag
+    # itself can't sit on the origin candle without lookahead bias).
+    zone_high = np.maximum(open_, close).shift(1)
 
     tracked_high, epoch_id = _tracked_zone_level(ob_flags, zone_high)
     broke_above = close > tracked_high
@@ -268,7 +294,10 @@ def breaker_block_bearish(
     support it was expected to hold), then pulls back up and touches that
     same zone again - flipping it from support to resistance."""
     ob_flags = pd.Series(bullish_order_block(open_, close), index=close.index)
-    zone_low = np.minimum(open_, close)
+    # See breaker_block_bullish's identical shift(1) comment - re-anchors
+    # to the origin (bearish) candle now that the flag sits on the
+    # confirming candle instead.
+    zone_low = np.minimum(open_, close).shift(1)
 
     tracked_low, epoch_id = _tracked_zone_level(ob_flags, zone_low)
     broke_below = close < tracked_low
@@ -289,7 +318,10 @@ def mitigation_block_bullish(
     imbalance would merely break even, not the full zone a breaker needs.
     Fires on every bar the retest condition holds, same as breaker_block_*."""
     ob_flags = pd.Series(bearish_order_block(open_, close), index=close.index)
-    mitigation_level = open_
+    # See breaker_block_bullish's shift(1) comment - re-anchors to the
+    # origin candle's own OPEN now that the flag sits on the confirming
+    # candle instead.
+    mitigation_level = open_.shift(1)
 
     tracked_level, epoch_id = _tracked_zone_level(ob_flags, mitigation_level)
     broke_above = close > tracked_level
@@ -306,10 +338,33 @@ def mitigation_block_bearish(
     the shallower retest level instead of breaker_block_bearish's full
     min(open, close) zone."""
     ob_flags = pd.Series(bullish_order_block(open_, close), index=close.index)
-    mitigation_level = open_
+    # See breaker_block_bullish's shift(1) comment - re-anchors to the
+    # origin candle's own OPEN now that the flag sits on the confirming
+    # candle instead.
+    mitigation_level = open_.shift(1)
 
     tracked_level, epoch_id = _tracked_zone_level(ob_flags, mitigation_level)
     broke_below = close < tracked_level
     broken_so_far = broke_below.groupby(epoch_id).cummax().fillna(False)
 
     return (broken_so_far & (high >= tracked_level)).fillna(False).to_numpy()
+
+
+def mss_bullish(
+    high: pd.Series, low: pd.Series, close: pd.Series, lookback: int, break_basis: str = "close"
+) -> np.ndarray:
+    """Market Structure Shift(強気)。ICT界隈でもMSSとCHoCHは多くの情報源で
+    同一概念として互換的に使われており、両者を明確に区別する統一定義は
+    存在しない(唯一の「正解」がない、と本レビューでも指摘の通り)。
+    Strategy Labでは同じロジック(bos_choch_bullishのCHoCH側)を、検索性の
+    ため別名でも登録している - 計算結果はchoch_bullishと完全に同一。"""
+    _bos, choch = bos_choch_bullish(high, low, close, lookback, break_basis)
+    return choch
+
+
+def mss_bearish(
+    high: pd.Series, low: pd.Series, close: pd.Series, lookback: int, break_basis: str = "close"
+) -> np.ndarray:
+    """Mirror image of mss_bullish - see its docstring."""
+    _bos, choch = bos_choch_bearish(high, low, close, lookback, break_basis)
+    return choch

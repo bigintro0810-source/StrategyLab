@@ -1,11 +1,13 @@
 import RankingTable from './RankingTable'
 import StrategyDetailTabs, { type StrategyTabData } from './StrategyDetailTabs'
+import type { TabId } from './AutoExplorationDetail'
+import type { CompositeCandidate } from '../compositeUtils'
 import type { BacktestResults, IndicatorInfo } from '../types'
 
 interface RowMeta {
   isChecked: boolean
-  isCompareChecked: boolean
-  isCompositeChecked: boolean
+  isReverseChecked: boolean
+  isReverseCreated: boolean
   isSaved: boolean
   isFavorite: boolean
   isPending: boolean
@@ -28,11 +30,18 @@ interface Props {
   rowMeta: Record<number, RowMeta>
   focusedRank: number | null
   onToggleChecked: (rank: number) => void
-  onToggleCompare: (rank: number) => void
-  onToggleComposite: (rank: number) => void
+  onToggleReverse: (rank: number) => void
   onBookmark: (rank: number) => void
   onFavorite: (rank: number) => void
+  onToggleCompare: (rank: number) => void
+  onToggleComposite: (rank: number) => void
   rankingScrollTopRef: React.MutableRefObject<number>
+  reverseCount: number
+  onReverseExecute: () => void
+  onDetailTabChange: (rank: number, tab: TabId) => void
+  // 何も開いていない時の「ストラテジー詳細を確認」ピッカー(AddCandidateModal.tsx)用。
+  detailCandidates: CompositeCandidate[]
+  onToggleDetailInput: (id: string) => void
 }
 
 export default function ResultsScreen({
@@ -52,11 +61,17 @@ export default function ResultsScreen({
   rowMeta,
   focusedRank,
   onToggleChecked,
-  onToggleCompare,
-  onToggleComposite,
+  onToggleReverse,
   onBookmark,
   onFavorite,
+  onToggleCompare,
+  onToggleComposite,
   rankingScrollTopRef,
+  reverseCount,
+  onReverseExecute,
+  onDetailTabChange,
+  detailCandidates,
+  onToggleDetailInput,
 }: Props) {
   if (subTab === 'detail') {
     return (
@@ -71,19 +86,41 @@ export default function ResultsScreen({
         onRemoveFromView={onRemoveFromView}
         onRenameRow={onRenameRow}
         onFavorite={onFavorite}
+        onToggleCompare={onToggleCompare}
+        onToggleComposite={onToggleComposite}
+        onBookmark={onBookmark}
+        onTabChange={onDetailTabChange}
+        candidates={detailCandidates}
+        onToggleInput={onToggleDetailInput}
       />
     )
   }
+
+  const rows = results?.ranking_total ?? []
 
   // ナビバー(結果/ランキングタブ2段分、実測約90px)+外側p-4の上下パディング
   // 分を引いた高さにぴったり収め、この中だけでスクロールさせる(ページ全体
   // はスクロールしない)。
   return (
     <div className="glass-panel flex flex-col rounded-2xl p-4" style={{ height: 'calc(100vh - 122px)' }}>
-      <div className="mb-3 flex-none text-sm font-semibold text-gray-200">ランキング一覧</div>
+      <div className="mb-3 flex flex-none items-center justify-between">
+        <div className="flex items-baseline gap-2">
+          <div className="text-sm font-semibold text-gray-200">ランキング</div>
+          <div className="text-xs text-gray-500">新たな探索を行うとデータが削除されます</div>
+        </div>
+        {reverseCount > 0 && (
+          <button
+            type="button"
+            onClick={onReverseExecute}
+            className="glow-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+          >
+            選択した{reverseCount}件を反転実行
+          </button>
+        )}
+      </div>
       <div className="min-h-0 flex-1">
         <RankingTable
-          rows={results?.ranking_total ?? []}
+          rows={rows}
           indicators={indicators}
           jobId={jobId}
           names={names}
@@ -91,8 +128,7 @@ export default function ResultsScreen({
           selectedRank={focusedRank}
           onRenameRow={onRenameRow}
           onToggleChecked={onToggleChecked}
-          onToggleCompare={onToggleCompare}
-          onToggleComposite={onToggleComposite}
+          onToggleReverse={onToggleReverse}
           onBookmark={onBookmark}
           onFavorite={onFavorite}
           scrollTopRef={rankingScrollTopRef}

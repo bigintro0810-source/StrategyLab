@@ -30,6 +30,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from engine.indicators import atr as _atr_series
+
 
 def _safe_range(high: pd.Series, low: pd.Series) -> pd.Series:
     return (high - low).replace(0, np.nan)
@@ -222,30 +224,43 @@ def spinning_top(open_, high, low, close, body_ratio_max: float = 0.3, wick_rati
     return (body_pct <= body_ratio_max) & (upper_pct >= wick_ratio_min) & (lower_pct >= wick_ratio_min)
 
 
-def kicker_bullish(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, body_ratio_threshold: float = 0.7) -> pd.Series:
-    """Previous candle bearish, current candle gaps up past the PREVIOUS
-    OPEN (not just the previous close - a stronger gap than gap_up alone)
+def kicker_bullish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series,
+    body_ratio_threshold: float = 0.7, require_gap: bool = True,
+) -> pd.Series:
+    """Previous candle bearish, current candle opens past the PREVIOUS
+    OPEN (not just the previous close - a stronger move than gap_up alone)
     and closes as a strong bullish candle with no overlap at all between
     the two bodies - the sharpest, least-ambiguous single-bar reversal
-    signal in this module."""
+    signal in this module. require_gap=True(既定)は現在の始値が前の始値を
+    超えていることを要求する(株式・指数向け、FXではGapがほぼ発生しないため
+    ほぼ常に不成立)。require_gap=Falseにすると始値の位置は問わず、色反転+
+    実体無重複のみで判定する(FX等Gapが起きない市場向け)。"""
     prev_bearish = bearish_candle(open_, close).shift(1).fillna(False)
-    gapped_past_prev_open = open_ > open_.shift(1)
     cur_bullish = bullish_candle(open_, close)
     rng = _safe_range(high, low)
     body_pct = _abs_body(open_, close) / rng
-    return prev_bearish & gapped_past_prev_open & cur_bullish & (body_pct >= body_ratio_threshold)
+    no_overlap = open_ >= open_.shift(1)
+    result = prev_bearish & cur_bullish & no_overlap & (body_pct >= body_ratio_threshold)
+    if require_gap:
+        result = result & (open_ > open_.shift(1))
+    return result
 
 
-def kicker_bearish(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, body_ratio_threshold: float = 0.7) -> pd.Series:
-    """Mirror image of kicker_bullish: previous candle bullish, current
-    candle gaps down past the previous open and closes as a strong bearish
-    candle with no body overlap."""
+def kicker_bearish(
+    open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series,
+    body_ratio_threshold: float = 0.7, require_gap: bool = True,
+) -> pd.Series:
+    """Mirror image of kicker_bullish - see its docstring for require_gap."""
     prev_bullish = bullish_candle(open_, close).shift(1).fillna(False)
-    gapped_past_prev_open = open_ < open_.shift(1)
     cur_bearish = bearish_candle(open_, close)
     rng = _safe_range(high, low)
     body_pct = _abs_body(open_, close) / rng
-    return prev_bullish & gapped_past_prev_open & cur_bearish & (body_pct >= body_ratio_threshold)
+    no_overlap = open_ <= open_.shift(1)
+    result = prev_bullish & cur_bearish & no_overlap & (body_pct >= body_ratio_threshold)
+    if require_gap:
+        result = result & (open_ < open_.shift(1))
+    return result
 
 
 def belt_hold_bullish(open_, high, low, close, lower_wick_ratio_max: float = 0.05, body_ratio_min: float = 0.7) -> pd.Series:
@@ -304,34 +319,36 @@ def abandoned_baby_bearish(open_, high, low, close, small_body_ratio: float = 0.
     return c1_bullish & c2_small & gapped_up_into_c2 & c3_bearish & gapped_down_out_of_c2
 
 
-def three_inside_up(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def three_inside_up(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, containment_tolerance: float = 0.0) -> pd.Series:
     """harami_bullish (a large bearish candle then a smaller bullish candle
     contained within it) completed on the PREVIOUS bar, confirmed by the
     current bar closing higher still - the confirmation candle that
-    upgrades a harami from "maybe a pause" to "a real reversal"."""
-    prior_harami = harami_bullish(open_, close).shift(1).fillna(False)
+    upgrades a harami from "maybe a pause" to "a real reversal".
+    containment_tolerance: harami_bullishのパラメータをそのまま引き継ぐ。"""
+    prior_harami = harami_bullish(open_, close, containment_tolerance).shift(1).fillna(False)
     confirmation = close > close.shift(1)
     return prior_harami & confirmation
 
 
-def three_inside_down(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def three_inside_down(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, containment_tolerance: float = 0.0) -> pd.Series:
     """Mirror image of three_inside_up, confirming a harami_bearish."""
-    prior_harami = harami_bearish(open_, close).shift(1).fillna(False)
+    prior_harami = harami_bearish(open_, close, containment_tolerance).shift(1).fillna(False)
     confirmation = close < close.shift(1)
     return prior_harami & confirmation
 
 
-def three_outside_up(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def three_outside_up(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, tolerance_pct: float = 0.0) -> pd.Series:
     """engulfing_bullish completed on the PREVIOUS bar, confirmed by the
-    current bar closing higher still."""
-    prior_engulfing = engulfing_bullish(open_, close).shift(1).fillna(False)
+    current bar closing higher still. tolerance_pct: engulfing_bullishの
+    パラメータをそのまま引き継ぐ。"""
+    prior_engulfing = engulfing_bullish(open_, close, tolerance_pct).shift(1).fillna(False)
     confirmation = close > close.shift(1)
     return prior_engulfing & confirmation
 
 
-def three_outside_down(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def three_outside_down(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, tolerance_pct: float = 0.0) -> pd.Series:
     """Mirror image of three_outside_up, confirming an engulfing_bearish."""
-    prior_engulfing = engulfing_bearish(open_, close).shift(1).fillna(False)
+    prior_engulfing = engulfing_bearish(open_, close, tolerance_pct).shift(1).fillna(False)
     confirmation = close < close.shift(1)
     return prior_engulfing & confirmation
 
@@ -341,20 +358,37 @@ def three_outside_down(open_: pd.Series, high: pd.Series, low: pd.Series, close:
 # ---------------------------------------------------------------------------
 
 
-def engulfing_bullish(open_: pd.Series, close: pd.Series) -> pd.Series:
+def engulfing_bullish(open_: pd.Series, close: pd.Series, tolerance_pct: float = 0.0) -> pd.Series:
+    """tolerance_pct: 0(既定)は前の実体を完全に包んだ場合のみ成立する厳格
+    判定。0より大きくすると、前の実体サイズに対する割合分だけ包み不足を
+    許容する(実務でよく使われる「ほぼ包んでいればOK」判定)。"""
     prev_bearish = bearish_candle(open_, close).shift(1).fillna(False)
     cur_bullish = bullish_candle(open_, close)
-    return prev_bearish & cur_bullish & (open_ <= close.shift(1)) & (close >= open_.shift(1))
+    prev_body = (close.shift(1) - open_.shift(1)).abs()
+    slack = prev_body * tolerance_pct
+    return prev_bearish & cur_bullish & (open_ <= close.shift(1) + slack) & (close >= open_.shift(1) - slack)
 
 
-def engulfing_bearish(open_: pd.Series, close: pd.Series) -> pd.Series:
+def engulfing_bearish(open_: pd.Series, close: pd.Series, tolerance_pct: float = 0.0) -> pd.Series:
+    """Mirror image of engulfing_bullish - see its docstring for tolerance_pct."""
     prev_bullish = bullish_candle(open_, close).shift(1).fillna(False)
     cur_bearish = bearish_candle(open_, close)
-    return prev_bullish & cur_bearish & (open_ >= close.shift(1)) & (close <= open_.shift(1))
+    prev_body = (close.shift(1) - open_.shift(1)).abs()
+    slack = prev_body * tolerance_pct
+    return prev_bullish & cur_bearish & (open_ >= close.shift(1) - slack) & (close <= open_.shift(1) + slack)
 
 
-def inside_bar(high: pd.Series, low: pd.Series) -> pd.Series:
-    return (high < high.shift(1)) & (low > low.shift(1))
+def inside_bar(high: pd.Series, low: pd.Series, close: pd.Series | None = None, min_mother_range_atr_mult: float = 0.0) -> pd.Series:
+    """min_mother_range_atr_mult=0(既定)は母足(前バー)のレンジの大きさを
+    問わない(従来の挙動)。0より大きくすると、母足のレンジがATRの何倍以上
+    かも要求する(小さすぎる母足によるノイズを除外したい場合向け。closeは
+    ATR算出用でmin_mother_range_atr_mult=0のままなら省略可)。"""
+    contained = (high < high.shift(1)) & (low > low.shift(1))
+    if min_mother_range_atr_mult <= 0 or close is None:
+        return contained
+    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
+    mother_range = (high - low).shift(1)
+    return contained & (mother_range >= atr_values * min_mother_range_atr_mult)
 
 
 def outside_bar(high: pd.Series, low: pd.Series) -> pd.Series:
@@ -379,38 +413,54 @@ def tweezer_bottom(open_, high, low, close, tolerance_pct: float = 0.1) -> pd.Se
     return matching_lows & prev_bearish & cur_bullish
 
 
-def harami_bullish(open_: pd.Series, close: pd.Series) -> pd.Series:
+def harami_bullish(open_: pd.Series, close: pd.Series, containment_tolerance: float = 0.0) -> pd.Series:
     """Previous bar a large bearish candle; current bar a smaller bullish
-    candle whose body is fully contained within the previous body."""
+    candle whose body is (by default) fully contained within the previous
+    body. containment_tolerance: 0(既定)は厳密な内包判定。0より大きくすると
+    前の実体サイズに対する割合分だけ、現在の実体がはみ出すことを許容する。"""
     prev_bearish = bearish_candle(open_, close).shift(1).fillna(False)
     cur_bullish = bullish_candle(open_, close)
     prev_top = np.maximum(open_.shift(1), close.shift(1))
     prev_bottom = np.minimum(open_.shift(1), close.shift(1))
+    slack = (prev_top - prev_bottom) * containment_tolerance
     cur_top = np.maximum(open_, close)
     cur_bottom = np.minimum(open_, close)
-    contained = (cur_top <= prev_top) & (cur_bottom >= prev_bottom)
+    contained = (cur_top <= prev_top + slack) & (cur_bottom >= prev_bottom - slack)
     return prev_bearish & cur_bullish & contained
 
 
-def harami_bearish(open_: pd.Series, close: pd.Series) -> pd.Series:
-    """Previous bar a large bullish candle; current bar a smaller bearish
-    candle whose body is fully contained within the previous body."""
+def harami_bearish(open_: pd.Series, close: pd.Series, containment_tolerance: float = 0.0) -> pd.Series:
+    """Mirror image of harami_bullish - see its docstring for containment_tolerance."""
     prev_bullish = bullish_candle(open_, close).shift(1).fillna(False)
     cur_bearish = bearish_candle(open_, close)
     prev_top = np.maximum(open_.shift(1), close.shift(1))
     prev_bottom = np.minimum(open_.shift(1), close.shift(1))
+    slack = (prev_top - prev_bottom) * containment_tolerance
     cur_top = np.maximum(open_, close)
     cur_bottom = np.minimum(open_, close)
-    contained = (cur_top <= prev_top) & (cur_bottom >= prev_bottom)
+    contained = (cur_top <= prev_top + slack) & (cur_bottom >= prev_bottom - slack)
     return prev_bullish & cur_bearish & contained
 
 
-def gap_up(open_: pd.Series, high: pd.Series) -> pd.Series:
-    return open_ > high.shift(1)
+def gap_up(open_: pd.Series, high: pd.Series, low: pd.Series | None = None, close: pd.Series | None = None, min_gap_atr_mult: float = 0.0) -> pd.Series:
+    """min_gap_atr_mult=0(既定)は始値が前の高値を超えていれば成立(従来の
+    挙動)。0より大きくすると、その超過分がATRの何倍以上かも要求する
+    (ノイズレベルの小さなGapを除外したい場合向け。low/closeはATR算出用で、
+    min_gap_atr_mult=0のままなら省略可)。"""
+    gapped = open_ > high.shift(1)
+    if min_gap_atr_mult <= 0 or low is None or close is None:
+        return gapped
+    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
+    return gapped & ((open_ - high.shift(1)) >= atr_values * min_gap_atr_mult)
 
 
-def gap_down(open_: pd.Series, low: pd.Series) -> pd.Series:
-    return open_ < low.shift(1)
+def gap_down(open_: pd.Series, low: pd.Series, high: pd.Series | None = None, close: pd.Series | None = None, min_gap_atr_mult: float = 0.0) -> pd.Series:
+    """Mirror image of gap_up - see its docstring for min_gap_atr_mult."""
+    gapped = open_ < low.shift(1)
+    if min_gap_atr_mult <= 0 or high is None or close is None:
+        return gapped
+    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
+    return gapped & ((low.shift(1) - open_) >= atr_values * min_gap_atr_mult)
 
 
 # ---------------------------------------------------------------------------
@@ -418,37 +468,67 @@ def gap_down(open_: pd.Series, low: pd.Series) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 
-def morning_star(open_, high, low, close, small_body_ratio: float = 0.3) -> pd.Series:
+def morning_star(
+    open_, high, low, close, small_body_ratio: float = 0.3,
+    close_position_ratio: float = 0.5, require_gap: bool = False,
+) -> pd.Series:
+    """close_position_ratio: 3本目の終値が1本目の実体のどこまで押し戻せば
+    成立とするか(0.5=中間点、既定。1.0にすると1本目の始値まで完全に押し
+    戻す必要がある、より厳格な判定)。require_gap=True(既定False)にすると
+    1本目→2本目、2本目→3本目それぞれに真のGapがあることも要求する
+    (伝統的な定義。FXではGapがほぼ発生しないため既定はFalse)。"""
     rng = _safe_range(high, low)
     body_pct = _abs_body(open_, close) / rng
 
     c1_bearish = bearish_candle(open_, close).shift(2).fillna(False)
+    c1_open = open_.shift(2)
+    c1_close = close.shift(2)
     c1_body = _abs_body(open_, close).shift(2)
-    c1_mid = ((open_.shift(2) + close.shift(2)) / 2)
+    c1_target = c1_close + (c1_open - c1_close) * close_position_ratio
     c2_small = body_pct.shift(1) < small_body_ratio
     c3_bullish = bullish_candle(open_, close)
     c3_large = _abs_body(open_, close) > c1_body * 0.5
-    c3_closes_above_mid = close > c1_mid
+    c3_closes_past_target = close > c1_target
 
-    return c1_bearish & c2_small & c3_bullish & c3_large & c3_closes_above_mid
+    result = c1_bearish & c2_small & c3_bullish & c3_large & c3_closes_past_target
+    if require_gap:
+        gap_into_c2 = high.shift(1) < low.shift(2)
+        gap_into_c3 = low < high.shift(1)
+        result = result & gap_into_c2 & gap_into_c3
+    return result
 
 
-def evening_star(open_, high, low, close, small_body_ratio: float = 0.3) -> pd.Series:
+def evening_star(
+    open_, high, low, close, small_body_ratio: float = 0.3,
+    close_position_ratio: float = 0.5, require_gap: bool = False,
+) -> pd.Series:
+    """Mirror image of morning_star - see its docstring for
+    close_position_ratio/require_gap."""
     rng = _safe_range(high, low)
     body_pct = _abs_body(open_, close) / rng
 
     c1_bullish = bullish_candle(open_, close).shift(2).fillna(False)
+    c1_open = open_.shift(2)
+    c1_close = close.shift(2)
     c1_body = _abs_body(open_, close).shift(2)
-    c1_mid = ((open_.shift(2) + close.shift(2)) / 2)
+    c1_target = c1_close - (c1_close - c1_open) * close_position_ratio
     c2_small = body_pct.shift(1) < small_body_ratio
     c3_bearish = bearish_candle(open_, close)
     c3_large = _abs_body(open_, close) > c1_body * 0.5
-    c3_closes_below_mid = close < c1_mid
+    c3_closes_past_target = close < c1_target
 
-    return c1_bullish & c2_small & c3_bearish & c3_large & c3_closes_below_mid
+    result = c1_bullish & c2_small & c3_bearish & c3_large & c3_closes_past_target
+    if require_gap:
+        gap_into_c2 = low.shift(1) > high.shift(2)
+        gap_into_c3 = high < low.shift(1)
+        result = result & gap_into_c2 & gap_into_c3
+    return result
 
 
-def three_white_soldiers(open_: pd.Series, close: pd.Series) -> pd.Series:
+def three_white_soldiers(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, min_body_ratio: float = 0.0) -> pd.Series:
+    """min_body_ratio=0(既定)は3本それぞれの実体の大きさを問わない(従来の
+    挙動)。0より大きくすると、3本とも値幅に対する実体比率がこの値以上
+    であることも要求する(弱い陽線3本による誤検出を除外したい場合向け)。"""
     bullish = bullish_candle(open_, close)
     all_bullish = bullish & bullish.shift(1).fillna(False) & bullish.shift(2).fillna(False)
     rising_closes = (close > close.shift(1)) & (close.shift(1) > close.shift(2))
@@ -456,10 +536,16 @@ def three_white_soldiers(open_: pd.Series, close: pd.Series) -> pd.Series:
         (open_ > open_.shift(1)) & (open_ < close.shift(1))
         & (open_.shift(1) > open_.shift(2)) & (open_.shift(1) < close.shift(2))
     )
-    return all_bullish & rising_closes & opens_within_prior_body
+    result = all_bullish & rising_closes & opens_within_prior_body
+    if min_body_ratio > 0:
+        body_pct = _abs_body(open_, close) / _safe_range(high, low)
+        strong_bodies = (body_pct >= min_body_ratio) & (body_pct.shift(1) >= min_body_ratio) & (body_pct.shift(2) >= min_body_ratio)
+        result = result & strong_bodies
+    return result
 
 
-def three_black_crows(open_: pd.Series, close: pd.Series) -> pd.Series:
+def three_black_crows(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, min_body_ratio: float = 0.0) -> pd.Series:
+    """Mirror image of three_white_soldiers - see its docstring for min_body_ratio."""
     bearish = bearish_candle(open_, close)
     all_bearish = bearish & bearish.shift(1).fillna(False) & bearish.shift(2).fillna(False)
     falling_closes = (close < close.shift(1)) & (close.shift(1) < close.shift(2))
@@ -467,13 +553,21 @@ def three_black_crows(open_: pd.Series, close: pd.Series) -> pd.Series:
         (open_ < open_.shift(1)) & (open_ > close.shift(1))
         & (open_.shift(1) < open_.shift(2)) & (open_.shift(1) > close.shift(2))
     )
-    return all_bearish & falling_closes & opens_within_prior_body
+    result = all_bearish & falling_closes & opens_within_prior_body
+    if min_body_ratio > 0:
+        body_pct = _abs_body(open_, close) / _safe_range(high, low)
+        strong_bodies = (body_pct >= min_body_ratio) & (body_pct.shift(1) >= min_body_ratio) & (body_pct.shift(2) >= min_body_ratio)
+        result = result & strong_bodies
+    return result
 
 
-def rising_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def rising_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, max_middle_body_ratio: float = 1.0) -> pd.Series:
     """Traditional 5-candle continuation: one large bullish candle, three
     small consolidating candles staying within its range, then a final
-    large bullish candle breaking to a new high."""
+    large bullish candle breaking to a new high. max_middle_body_ratio=1.0
+    (既定)は中間3本の実体の大きさを問わない(従来の挙動、レンジ内に収まる
+    ことのみ要求)。1.0未満にすると、中間3本の実体が値幅に対してこの比率
+    以下(=小さい、伝統的な定義によりよく合う)であることも要求する。"""
     c1_bullish = bullish_candle(open_, close).shift(4).fillna(False)
     c1_high = high.shift(4)
     c1_low = low.shift(4)
@@ -481,6 +575,10 @@ def rising_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, clos
     middle_within_range = pd.Series(True, index=open_.index)
     for k in (1, 2, 3):
         middle_within_range &= (high.shift(k) <= c1_high) & (low.shift(k) >= c1_low)
+    if max_middle_body_ratio < 1.0:
+        body_pct = _abs_body(open_, close) / _safe_range(high, low)
+        for k in (1, 2, 3):
+            middle_within_range &= body_pct.shift(k) <= max_middle_body_ratio
 
     c5_bullish = bullish_candle(open_, close)
     c5_breaks_high = close > c1_high
@@ -488,7 +586,8 @@ def rising_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, clos
     return c1_bullish & middle_within_range & c5_bullish & c5_breaks_high
 
 
-def falling_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+def falling_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, max_middle_body_ratio: float = 1.0) -> pd.Series:
+    """Mirror image of rising_three_methods - see its docstring for max_middle_body_ratio."""
     c1_bearish = bearish_candle(open_, close).shift(4).fillna(False)
     c1_high = high.shift(4)
     c1_low = low.shift(4)
@@ -496,6 +595,10 @@ def falling_three_methods(open_: pd.Series, high: pd.Series, low: pd.Series, clo
     middle_within_range = pd.Series(True, index=open_.index)
     for k in (1, 2, 3):
         middle_within_range &= (high.shift(k) <= c1_high) & (low.shift(k) >= c1_low)
+    if max_middle_body_ratio < 1.0:
+        body_pct = _abs_body(open_, close) / _safe_range(high, low)
+        for k in (1, 2, 3):
+            middle_within_range &= body_pct.shift(k) <= max_middle_body_ratio
 
     c5_bearish = bearish_candle(open_, close)
     c5_breaks_low = close < c1_low
@@ -544,3 +647,55 @@ def body_ratio_at_least(open_, high, low, close, threshold_pct: float = 50.0) ->
     rng = _safe_range(high, low)
     body_pct = _abs_body(open_, close) / rng * 100.0
     return body_pct >= threshold_pct
+
+
+def three_line_strike_bullish(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """TA-LibのCDL3LINESTRIKEと同じ定義: 3本連続の陰線(終値が切り下がり
+    続ける)の直後、4本目が3本分の実体を丸ごと飲み込む大陽線で終わる形
+    (前3本の陰線側から見た終値[-1]より下で始まり、1本目の陰線の始値
+    より上で終わる)。"""
+    bearish = bearish_candle(open_, close)
+    three_bearish = bearish.shift(1).fillna(False) & bearish.shift(2).fillna(False) & bearish.shift(3).fillna(False)
+    falling = (close.shift(1) < close.shift(2)) & (close.shift(2) < close.shift(3))
+    cur_bullish = bullish_candle(open_, close)
+    engulfs = (open_ < close.shift(1)) & (close > open_.shift(3))
+    return (three_bearish & falling & cur_bullish & engulfs).fillna(False)
+
+
+def three_line_strike_bearish(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """Mirror image of three_line_strike_bullish."""
+    bullish = bullish_candle(open_, close)
+    three_bullish = bullish.shift(1).fillna(False) & bullish.shift(2).fillna(False) & bullish.shift(3).fillna(False)
+    rising = (close.shift(1) > close.shift(2)) & (close.shift(2) > close.shift(3))
+    cur_bearish = bearish_candle(open_, close)
+    engulfs = (open_ > close.shift(1)) & (close < open_.shift(3))
+    return (three_bullish & rising & cur_bearish & engulfs).fillna(False)
+
+
+def tasuki_gap_upside(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """上昇継続のGapパターン: 陽線→(高値をGapで飛び越える)陽線→3本目が
+    陰線で2本目の実体内から始まりGapへ戻すが、1本目の高値までは埋め
+    きらない(Gapの一部が残る)。Gap前提のパターンのためFXではほぼ発生
+    しない(TradingView等との照合は未検証)。"""
+    bar1_bullish = bullish_candle(open_, close).shift(2).fillna(False)
+    bar2_bullish = bullish_candle(open_, close).shift(1).fillna(False)
+    gap_up = open_.shift(1) > high.shift(2)
+    bar3_bearish = bearish_candle(open_, close)
+    bar2_top = np.maximum(open_.shift(1), close.shift(1))
+    bar2_bottom = np.minimum(open_.shift(1), close.shift(1))
+    opens_within_bar2_body = (open_ < bar2_top) & (open_ > bar2_bottom)
+    gap_not_fully_closed = close > high.shift(2)
+    return (bar1_bullish & bar2_bullish & gap_up & bar3_bearish & opens_within_bar2_body & gap_not_fully_closed).fillna(False)
+
+
+def tasuki_gap_downside(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """Mirror image of tasuki_gap_upside."""
+    bar1_bearish = bearish_candle(open_, close).shift(2).fillna(False)
+    bar2_bearish = bearish_candle(open_, close).shift(1).fillna(False)
+    gap_down = open_.shift(1) < low.shift(2)
+    bar3_bullish = bullish_candle(open_, close)
+    bar2_top = np.maximum(open_.shift(1), close.shift(1))
+    bar2_bottom = np.minimum(open_.shift(1), close.shift(1))
+    opens_within_bar2_body = (open_ < bar2_top) & (open_ > bar2_bottom)
+    gap_not_fully_closed = close < low.shift(2)
+    return (bar1_bearish & bar2_bearish & gap_down & bar3_bullish & opens_within_bar2_body & gap_not_fully_closed).fillna(False)

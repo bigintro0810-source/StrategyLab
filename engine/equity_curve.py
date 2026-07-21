@@ -29,6 +29,8 @@ def build_equity_curve(trade_log: pd.DataFrame) -> pd.DataFrame:
             "equity_high",
             "drawdown",
             "exit_reason",
+            "mae",
+            "mfe",
         ]
     ]
 

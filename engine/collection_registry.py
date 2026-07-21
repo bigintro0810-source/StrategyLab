@@ -18,11 +18,17 @@ def load_collections() -> list[dict]:
 
 
 def _write_collections(collections: list[dict]) -> None:
+    # 一時ファイル+アトミックrename方式 - strategy_registry.py::_write_
+    # registryと同じ理由(直接write_text()すると、同時書き込みが競合した
+    # 時にファイルが壊れたJSONになり得るため、実際にregistry.json側で
+    # 踏んだ不具合と同じクラスのバグをここでも予防する)。
     REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    REGISTRY_FILE.write_text(
+    tmp_path = REGISTRY_FILE.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps(collections, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    tmp_path.replace(REGISTRY_FILE)
 
 
 def get_collection(collection_id: str) -> dict:

@@ -1,15 +1,27 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchExplorationCategories } from '../api'
-import ConditionRow from './ConditionRow'
+import { groupIndicatorsByGenre } from '../conditionGenres'
+import ConditionRow, { defaultParamsFor } from './ConditionRow'
 import type { BacktestStatus, ConditionNode, IndicatorInfo } from '../types'
 
 type ExplorationMode = 'manual' | 'structure' | 'structure_genetic'
 
 const RR_PRESETS = [1.0, 1.2, 1.5, 2.0, 2.5, 3.0]
 
-function defaultMandatoryCondition(): ConditionNode {
-  return { indicator: 'close', operator: '>', value: 0, params: {}, value_params: {} }
+// デフォルト指標は一番上のジャンル「インジケーター」の先頭(EMAなど)にする
+// (ユーザー報告:「インジケーター等ジャンルを選択する際に最初価格データが
+// 選択されてる。一番上がインジケーターだからインジケーターを選択して
+// いてほしい」- ConditionTreeEditor.tsxのdefaultConditionと同じ規則)。
+function defaultMandatoryCondition(indicators: IndicatorInfo[]): ConditionNode {
+  const first = groupIndicatorsByGenre(indicators)[0]?.items[0]
+  return {
+    indicator: first?.id ?? 'close',
+    operator: '>',
+    value: 0,
+    params: defaultParamsFor(first),
+    value_params: {},
+  }
 }
 
 // 実測ベースの概算(dev軽量モード、structure=ランダム探索、候補500件で約
@@ -394,7 +406,7 @@ export default function AutoExplorationScreen({
             ))}
             <button
               type="button"
-              onClick={() => setMandatoryConditions((prev) => [...prev, defaultMandatoryCondition()])}
+              onClick={() => setMandatoryConditions((prev) => [...prev, defaultMandatoryCondition(indicators)])}
               className="text-xs text-purple-300 hover:underline"
             >
               + 必須条件を追加

@@ -4,7 +4,9 @@ export type Operator = '>' | '<' | '>=' | '<=' | '==' | 'crosses_above' | 'cross
 // uses "period"+"num_std", macd uses "fast"+"slow"+"signal", etc - see
 // IndicatorInfo.params for which keys a given indicator actually reads).
 export interface ConditionParams {
-  [key: string]: number
+  // ボリンジャーバンドのsource(例: "hl2")のような文字列パラメータも
+  // 数値パラメータと同じ辞書に混在する。
+  [key: string]: number | string
 }
 
 // Mirrors engine/conditions.py::Condition.to_dict()
@@ -31,24 +33,49 @@ export interface GroupNode {
 export type TreeNode = ConditionNode | GroupNode
 
 export function isGroup(node: TreeNode): node is GroupNode {
-  return 'op' in node
+  // 'op' in node は node がオブジェクトでない(文字列/null等)場合に
+  // TypeErrorで例外を投げる - APIから来るcondition_tree系の値は型定義上は
+  // 常にオブジェクトだが、実際にはバックエンド側の未パース(Python repr
+  // 文字列のまま)等で壊れた値が来ることがある(実際に踏んだ不具合:
+  // ランキング一覧が「条件」列のレンダリングで丸ごとクラッシュし、画面が
+  // 真っ白になった)。ここで防御的にチェックすることで、この関数を使う
+  // 全箇所(コンポーネントツリー全体をクラッシュさせずに済む)を一括で守る。
+  return typeof node === 'object' && node !== null && 'op' in node
 }
 
 // type="choice" means only the listed `choices` are meaningful (e.g.
 // Fibonacci's ratio) - the UI renders a <select> instead of a free-entry
-// number input for those.
+// number input for those. type="string_choice" is the same idea but for a
+// string-valued param (e.g. Bollinger Bandsのsource) - kept as a separate
+// type rather than overloading "choice" because the <select> onChange must
+// NOT coerce the selected value with Number() for these.
 export interface IndicatorParamSpec {
   name: string
   label: string
-  default: number
-  type: 'int' | 'float' | 'choice'
+  default: number | string
+  type: 'int' | 'float' | 'choice' | 'string_choice'
   choices?: number[]
+  string_choices?: { value: string; label: string }[]
 }
 
 export interface IndicatorInfo {
   id: string
   label: string
   params: IndicatorParamSpec[]
+  // api_server.pyのGET /api/indicatorsが付与するジャンル("indicator"/
+  // "price_action"/"chart_pattern"/"ict"/"time_filter") - conditionGenres.ts
+  // でConditionRow.tsxのドロップダウンをoptgroup分けする時に使う。
+  category: string
+  // EMA/高値/安値などの価格系指標、ATRなどのボラティリティ系指標は、
+  // シンボルごとに価格帯が違いすぎるため固定の数値と比較する意味がない
+  // (指標同士の比較のみ意図された設計) - falseの時はConditionRow.tsxの
+  // 「固定値」選択肢自体を出さない。
+  allow_literal: boolean
+  // engine/indicator_pool.pyのkind("price_level"/"oscillator_0_100"/
+  // "boolean_signal"など)。ConditionRow.tsxが、kind==="price_level"の指標を
+  // 終値と比較する時に「より上/より下」を価格目線(EMA200より上=価格が
+  // EMA200を上回っている)で解釈するために使う。
+  kind: string | null
 }
 
 export type Direction = 'short' | 'long'
@@ -265,6 +292,24 @@ export interface RankingRow {
   cagr: number
   calmar_ratio: number
   rr: number
+  // MAE/MFE(最大逆行幅/最大追い風幅) - mae/mfeは全トレード中の最悪/最良の
+  // 1トレードぶんの値(最大値)、_avg/_medianはそれぞれ全トレードの平均・
+  // 中央値(main.py::run_one_backtestで集計)。
+  mae: number
+  mfe: number
+  mae_avg: number
+  mfe_avg: number
+  mae_median: number
+  mfe_median: number
+  // 勝ちトレード/負けトレードだけに絞った利益・損失の集計値(main.py::
+  // run_one_backtestで集計) - 期待値(勝ち負けをならした値)とは別に、
+  // 勝ち/負けそれぞれの傾向を見るためのもの。損失側は符号付き(マイナス)。
+  max_win: number
+  max_loss: number
+  avg_win: number
+  avg_loss: number
+  median_win: number
+  median_loss: number
   // Only present when position sizing was enabled for the run.
   final_account_balance?: number
   total_profit_currency?: number
@@ -282,6 +327,10 @@ export interface TradeRow {
   entry_price: number
   exit_price: number
   profit: number
+  // MAE(最大逆行幅)/MFE(最大追い風幅) - 保有中に価格が最も不利/有利に
+  // 動いた幅(entry_priceからの絶対値、profitと同じ単位)。
+  mae: number
+  mfe: number
   exit_reason: string
   // Only present for trades from a simultaneous Long+Short dual-direction
   // backtest, where direction varies per trade rather than being fixed for
@@ -304,6 +353,10 @@ export interface EquityPoint {
   equity_high: number
   drawdown: number
   exit_time: string
+  entry_price?: number
+  exit_price?: number
+  mae?: number
+  mfe?: number
   [key: string]: unknown
 }
 

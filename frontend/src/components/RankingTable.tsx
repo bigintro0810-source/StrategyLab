@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react'
-import { ascendingIsBetter, buildMetricColumns, type MetricColumn } from '../rankingColumns'
+import { ascendingIsBetter, buildMetricColumns, passesFilters, type MetricColumn, type MetricRowLike } from '../rankingColumns'
 import FavoriteButton from './FavoriteButton'
 import type { IndicatorInfo, RankingRow } from '../types'
 
 interface RowMeta {
   isChecked: boolean
-  isCompareChecked: boolean
-  isCompositeChecked: boolean
+  isReverseChecked: boolean
+  // 既にこの行から反転を作成済み(このセッション中)。反転チェックボックス
+  // の代わりに白塗りの印を出し、操作できないようにする(App.tsx参照)。
+  isReverseCreated: boolean
   isSaved: boolean
   isFavorite: boolean
   isPending: boolean
@@ -20,8 +22,10 @@ interface Props {
   rowMeta: Record<number, RowMeta>
   onRenameRow: (rank: number, name: string) => void
   onToggleChecked: (rank: number) => void
-  onToggleCompare: (rank: number) => void
-  onToggleComposite: (rank: number) => void
+  onToggleReverse: (rank: number) => void
+  // 「反転ストラテジー」タブ自身の一覧ではこの列を出さない(すでに反転済みの
+  // 結果を並べているだけなので、再反転する意味がない)。
+  showReverseColumn?: boolean
   onBookmark: (rank: number) => void
   onFavorite: (rank: number) => void
   indicators: IndicatorInfo[]
@@ -38,9 +42,10 @@ interface Props {
   scrollTopRef: React.MutableRefObject<number>
 }
 
-// 「名称」「条件」はソートしても意味がない(名称は日付+連番、条件は文字列
-// なので数値ソートが効かない)ため、この2列だけクリックでの並び替えを禁止する。
-const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['rank', 'symbol', 'condition_tree']
+// 「条件」は文字列で数値ソートが効かないため並び替えを禁止する。「名称」
+// (キーはrank、セルはNameTextで描画)は文字列として個別に比較する
+// (下のsorted参照)。
+const UNSORTABLE_KEYS: (keyof RankingRow)[] = ['symbol', 'condition_tree']
 
 // 名称・通貨/時間足列(専用セルで描画)だけこの画面固有 - 残りの指標列は
 // ライブラリ画面と共通のbuildMetricColumns(rankingColumns.ts)から取る。
@@ -120,9 +125,13 @@ function NameText({
   }
 
   return (
+    // 名称が長い場合、列自体を広げず(他の列を圧迫せず)省略記号で切り詰め、
+    // カーソルを当てるとネイティブのtitleツールチップで全文を表示する -
+    // 常時表示する幅は「2026/07/16-0000000000」(21文字)が収まる程度で
+    // 十分というユーザー指定に合わせる。
     <span
-      className="cursor-pointer whitespace-nowrap hover:underline"
-      title="クリックして名称を変更"
+      className="block max-w-[21ch] cursor-pointer truncate hover:underline"
+      title={name}
       onClick={() => {
         setDraft(name)
         setEditing(true)
@@ -141,8 +150,8 @@ export default function RankingTable({
   rowMeta,
   onRenameRow,
   onToggleChecked,
-  onToggleCompare,
-  onToggleComposite,
+  onToggleReverse,
+  showReverseColumn = true,
   onBookmark,
   onFavorite,
   indicators,
@@ -151,6 +160,7 @@ export default function RankingTable({
 }: Props) {
   const [sortKey, setSortKey] = useState<keyof RankingRow>('profit_factor')
   const [sortAsc, setSortAsc] = useState(false)
+  const [filters, setFilters] = useState<Record<string, string>>({})
   const scrollElRef = useRef<HTMLDivElement | null>(null)
 
   if (rows.length === 0) {
@@ -166,8 +176,9 @@ export default function RankingTable({
     } else {
       setSortKey(key)
       // 初回クリックは「良い順」で表示する - ほとんどの指標は大きい方が
-      // 良い(降順)が、DDだけ小さい方が良い(昇順)。
-      setSortAsc(ascendingIsBetter(String(key)))
+      // 良い(降順)が、DDだけ小さい方が良い(昇順)。名称は良し悪しが無い
+      // ので素直にA→Z(昇順)から始める。
+      setSortAsc(key === 'rank' ? true : ascendingIsBetter(String(key)))
     }
   }
 
@@ -184,7 +195,15 @@ export default function RankingTable({
   })()
   const duplicateCount = rows.length - deduped.length
 
-  const sorted = deduped.slice().sort((a, b) => {
+  const filteredRows = deduped.filter((row) => passesFilters(row as unknown as MetricRowLike, filters, columns))
+
+  const sorted = filteredRows.slice().sort((a, b) => {
+    if (sortKey === 'rank') {
+      const an = names[Number(a.rank)] ?? `Strat${Number(a.rank)}`
+      const bn = names[Number(b.rank)] ?? `Strat${Number(b.rank)}`
+      const cmp = an.localeCompare(bn)
+      return sortAsc ? cmp : -cmp
+    }
     const av = Number(a[sortKey])
     const bv = Number(b[sortKey])
     if (Number.isNaN(av) || Number.isNaN(bv)) return 0
@@ -193,8 +212,8 @@ export default function RankingTable({
 
   const emptyMeta: RowMeta = {
     isChecked: false,
-    isCompareChecked: false,
-    isCompositeChecked: false,
+    isReverseChecked: false,
+    isReverseCreated: false,
     isSaved: false,
     isFavorite: false,
     isPending: false,
@@ -211,9 +230,13 @@ export default function RankingTable({
         )
       }
       if (col.key === 'symbol') {
+        // 反転ストラテジー一覧はライブラリ由来の複数通貨/時間足が混ざり得る
+        // ため、行自身がtimeframeを持っていればそちらを優先する(通常の
+        // ランキング一覧は1回のバックテスト=1つの通貨/時間足なので、行に
+        // timeframeが無く共通propにフォールバックする)。
         return (
           <td key="symbol" className="whitespace-nowrap px-1 py-1 text-gray-300">
-            {row.symbol as string}/{timeframe}
+            {row.symbol as string}/{(row.timeframe as string | undefined) ?? timeframe}
           </td>
         )
       }
@@ -226,8 +249,8 @@ export default function RankingTable({
           title={col.key === 'condition_tree' ? text : undefined}
           className={
             col.key === 'condition_tree'
-              ? 'max-w-[220px] truncate px-1 py-1 font-mono text-[11px] text-gray-400'
-              : `whitespace-nowrap px-1 py-1 ${colorClass}`
+              ? `max-w-[220px] truncate ${col.headerPadLeft ?? 'pl-1'} pr-1 py-1 font-mono text-[11px] text-gray-400`
+              : `whitespace-nowrap px-1 py-1 ${col.numeric ? 'text-right' : ''} ${colorClass}`
           }
         >
           {text}
@@ -241,6 +264,11 @@ export default function RankingTable({
       {duplicateCount > 0 && (
         <div className="mb-1 flex-none px-1 text-[11px] text-gray-500">
           {`同一の結果が${duplicateCount}件あったため非表示にしています(${deduped.length}件を表示)`}
+        </div>
+      )}
+      {Object.values(filters).some((v) => v !== '') && (
+        <div className="mb-1 flex-none px-1 text-[11px] text-gray-500">
+          {`絞り込み条件により${filteredRows.length}/${deduped.length}件を表示`}
         </div>
       )}
       {/* 画面に収まる固定高さの枠内で自分だけスクロールする。ストラテジー
@@ -269,8 +297,7 @@ export default function RankingTable({
           <thead className="sticky top-0 z-10 bg-[#0c0d17]">
             <tr className="border-b border-white/10 text-gray-400">
               <th className="whitespace-nowrap px-1 py-1 font-medium">詳細</th>
-              <th className="whitespace-nowrap px-1 py-1 font-medium">比較</th>
-              <th className="whitespace-nowrap px-1 py-1 font-medium">合成</th>
+              {showReverseColumn && <th className="whitespace-nowrap px-1 py-1 font-medium">反転</th>}
               <th className="px-1 py-1 font-medium" />
               <th className="px-1 py-1 font-medium" />
               {columns.map((col) => {
@@ -280,7 +307,7 @@ export default function RankingTable({
                     key={String(col.key)}
                     onClick={sortable ? () => handleSort(col.key) : undefined}
                     title={col.tooltip}
-                    className={`select-none whitespace-nowrap px-1 py-1 font-medium ${
+                    className={`select-none whitespace-nowrap ${col.headerPadLeft ?? 'pl-1'} pr-1 py-1 font-medium ${col.numeric ? 'text-right' : ''} ${
                       sortable ? 'cursor-pointer hover:text-gray-200' : ''
                     } ${sortKey === col.key ? 'bg-blue-500/30 text-blue-100' : ''}`}
                   >
@@ -289,6 +316,23 @@ export default function RankingTable({
                   </th>
                 )
               })}
+            </tr>
+            <tr className="border-b border-white/10 bg-white/[0.02]">
+              <th className="px-1 py-1" colSpan={showReverseColumn ? 4 : 3} />
+              {columns.map((col) => (
+                <th key={String(col.key)} className={`px-1 py-0.5 font-normal ${col.numeric ? 'text-right' : ''}`}>
+                  {col.filterable && (
+                    <input
+                      type="number"
+                      value={filters[col.key] ?? ''}
+                      onChange={(e) => setFilters((prev) => ({ ...prev, [col.key]: e.target.value }))}
+                      placeholder={ascendingIsBetter(col.key) ? '以下' : '以上'}
+                      title={`${col.label} ${ascendingIsBetter(col.key) ? '以下' : '以上'}で絞り込み`}
+                      className="glass-input w-14 rounded px-1 py-0.5 text-[10px]"
+                    />
+                  )}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -306,22 +350,24 @@ export default function RankingTable({
                   <td className="px-1 py-1">
                     <input type="checkbox" checked={meta.isChecked} disabled={disabled} onChange={() => onToggleChecked(rank)} />
                   </td>
-                  <td className="px-1 py-1">
-                    <input
-                      type="checkbox"
-                      checked={meta.isCompareChecked}
-                      disabled={disabled}
-                      onChange={() => onToggleCompare(rank)}
-                    />
-                  </td>
-                  <td className="px-1 py-1">
-                    <input
-                      type="checkbox"
-                      checked={meta.isCompositeChecked}
-                      disabled={disabled}
-                      onChange={() => onToggleComposite(rank)}
-                    />
-                  </td>
+                  {showReverseColumn && (
+                    <td className="px-1 py-1">
+                      {meta.isReverseCreated ? (
+                        <span
+                          title="既にこの行から反転を作成済みです"
+                          className="inline-block h-3 w-3 rounded-sm border border-white/30 bg-white"
+                        />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={meta.isReverseChecked}
+                          disabled={disabled}
+                          onChange={() => onToggleReverse(rank)}
+                          title="エントリー方向を反転して再検証する対象に含める"
+                        />
+                      )}
+                    </td>
+                  )}
                   <td className="px-1 py-1">
                     {/* 🔖はカラー絵文字グリフなのでCSSのtext-colorでは色が変わらない
                         (常にその絵文字本来の色で描画される) - grayscaleフィルター+
