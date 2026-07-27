@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   createChart,
   CandlestickSeries,
@@ -7,7 +7,7 @@ import {
   type IChartApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import type { ChartIndicatorSeries } from '../api'
+import type { ChartIndicatorSeries, PatternMarkerEvent } from '../api'
 import { indicatorLabel, paramsLabel } from '../conditionTreeUtils'
 import type { IndicatorInfo, PriceBar, TradeRow } from '../types'
 
@@ -24,6 +24,17 @@ interface Props {
   // trade.direction(双方向バックテストのみ持つ)が無い時のフォールバック -
   // 単方向ストラテジーは全トレードがこの向きで固定。
   defaultDirection?: 'long' | 'short'
+  // ダブルトップ/ボトム系の条件が実際に成立/決着した回の根拠(2つの山/谷)。
+  // api_server.py::_compute_pattern_markers参照。
+  patternMarkers?: PatternMarkerEvent[]
+  // 表示中の範囲(スクロール/ズーム位置)を呼び出し元(App.tsx)がrank/id単位で
+  // 保持する - このコンポーネント自身のsavedRangeRefだけだと、タブを離れて
+  // 戻った時にコンポーネント自体がアンマウントされ、遡って見ていた位置が
+  // 最新足にリセットされてしまう(ユーザー報告:「チャート過去に遡ったまま
+  // タブ離れたら最新のチャートに戻っちゃう」- activeTab/onTabChangeと同じ
+  // 理由)。
+  initialVisibleRange?: { from: number; to: number } | null
+  onVisibleRangeChange?: (range: { from: number; to: number }) => void
 }
 
 const OVERLAY_COLORS = ['#f59e0b', '#22d3ee', '#e879f9', '#a3e635', '#fb7185', '#38bdf8', '#facc15', '#818cf8']
@@ -114,12 +125,69 @@ function computeATR(highs: number[], lows: number[], closes: number[], period: n
   return result
 }
 
-export default function ChartPanel({ bars, trades, emaLength = 20, symbol, indicators, indicatorInfos, defaultDirection }: Props) {
+type PivotPoint = { time: UTCTimestamp; kind: 'high' | 'low' }
+
+// デバッグ用: 山(高値)/谷(安値)のピボット判定を実チャート上で目視確認できる
+// ようにする(エンジン側のengine/chart_patterns.py::_detect_pivot_highs/lows
+// と同じ「前後leftBars/rightBars本の中で最大/最小」というロジックのJS版)。
+// ダブルトップ等の検出品質を左右するleft/rightを実際に動かしながら確認する
+// ための機能で、パターン検出自体の判定には使われない(表示専用)。
+function detectPivots(bars: PriceBar[], left: number, right: number, times: UTCTimestamp[]): PivotPoint[] {
+  const points: PivotPoint[] = []
+  if (left < 1 || right < 1) return points
+  for (let i = left; i < bars.length - right; i++) {
+    const window = bars.slice(i - left, i + right + 1)
+    const windowHigh = Math.max(...window.map((b) => b.high))
+    const windowLow = Math.min(...window.map((b) => b.low))
+    if (bars[i].high === windowHigh) points.push({ time: times[i], kind: 'high' })
+    if (bars[i].low === windowLow) points.push({ time: times[i], kind: 'low' })
+  }
+  return points
+}
+
+export default function ChartPanel({
+  bars,
+  trades,
+  emaLength = 20,
+  symbol,
+  indicators,
+  indicatorInfos,
+  defaultDirection,
+  patternMarkers,
+  initialVisibleRange,
+  onVisibleRangeChange,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  const [showPivots, setShowPivots] = useState(false)
+  const [pivotLeft, setPivotLeft] = useState(25)
+  const [pivotRight, setPivotRight] = useState(25)
+  const [showPatternMarkers, setShowPatternMarkers] = useState(true)
+  // ピボット表示等のチェックボックスを切り替えるだけでもこのeffect全体が
+  // 再実行され、チャートを作り直す(=fitContent()で最新足まで表示し直す)
+  // ため、ユーザーが見ていたスクロール/ズーム位置が毎回失われていた
+  // (ユーザー報告:「デバック用にチェックつけてたらチャートがいま見ている
+  // 位置から一番新しいところに戻ってしまう」)。barsそのものが変わった
+  // (=別のストラテジー/銘柄に切り替えた)時だけfitContent()し、表示
+  // トグルだけの再実行では直前の表示範囲を保ったままにする。
+  const prevBarsRef = useRef<PriceBar[] | null>(null)
+  // 初期値はinitialVisibleRange(呼び出し元がrank/id単位で覚えている前回の
+  // 表示範囲) - このコンポーネント自体が再マウントされた直後の最初の
+  // effect実行では、prevBarsRef.currentがnullなのでbarsChangedが常にtrue
+  // になり(=別データに切り替わった時と区別が付かない)、それだけで
+  // fitContent()に落ちてしまう。isFirstMountRefで「再マウント直後の1回目」
+  // だけ特別扱いし、initialVisibleRangeがあればbarsChangedを無視して復元
+  // する。
+  const savedRangeRef = useRef<{ from: number; to: number } | null>(initialVisibleRange ?? null)
+  const isFirstMountRef = useRef(true)
 
   useEffect(() => {
     if (!containerRef.current) return
+
+    const barsChanged = prevBarsRef.current !== bars
+    prevBarsRef.current = bars
+    const isFirstMount = isFirstMountRef.current
+    isFirstMountRef.current = false
 
     const chart = createChart(containerRef.current, {
       layout: { background: { color: 'transparent' }, textColor: '#d1d5db' },
@@ -236,42 +304,114 @@ export default function ChartPanel({ bars, trades, emaLength = 20, symbol, indic
       if (i > 0) pane.setHeight(80)
     })
 
-    if (trades.length > 0) {
+    const priceDecimals = priceFormatFor(symbol).precision
+    const tradeMarkers = trades.flatMap((t) => {
       // ロング: エントリーはローソク足の下に上向き矢印(買い)、決済は上に
       // 下向き矢印(売り)。ショートはその逆。矢印の下(belowBar)/上
       // (aboveBar)にはそれぞれの価格を表示する - 損益ではなく実際の
       // 約定価格の方が、チャート上の実際の値動きと直接見比べられる。
-      const priceDecimals = priceFormatFor(symbol).precision
-      const markers = trades
-        .flatMap((t) => {
-          const direction = (t.direction as 'long' | 'short' | undefined) ?? defaultDirection ?? 'long'
-          const isLong = direction === 'long'
-          return [
+      const direction = (t.direction as 'long' | 'short' | undefined) ?? defaultDirection ?? 'long'
+      const isLong = direction === 'long'
+      return [
+        {
+          time: toChartTime(t.entry_time),
+          position: (isLong ? 'belowBar' : 'aboveBar') as const,
+          color: '#3b82f6',
+          shape: (isLong ? 'arrowUp' : 'arrowDown') as const,
+          // lightweight-charts(SeriesMarkersRenderer.drawText)はマーカーの
+          // textを1本のfillText呼び出しで描画するだけで、\nを改行として
+          // 解釈する処理が無い(コード確認済み) - 埋め込んでも改行され
+          // ないため、スペース区切りの1行で我慢する。
+          text: `${Number(t.entry_price).toFixed(priceDecimals)} Entry`,
+        },
+        {
+          time: toChartTime(t.exit_time),
+          position: (isLong ? 'aboveBar' : 'belowBar') as const,
+          color: t.profit >= 0 ? '#22c55e' : '#ef4444',
+          shape: (isLong ? 'arrowDown' : 'arrowUp') as const,
+          text: `${Number(t.exit_price).toFixed(priceDecimals)} Exit`,
+        },
+      ]
+    })
+
+    const pivotMarkers = showPivots
+      ? detectPivots(bars, pivotLeft, pivotRight, times).map((p) => ({
+          time: p.time,
+          position: (p.kind === 'high' ? 'aboveBar' : 'belowBar') as const,
+          color: '#ff17d1',
+          shape: 'circle' as const,
+          text: p.kind === 'high' ? '山' : '谷',
+        }))
+      : []
+
+    const patternMarkerPoints =
+      showPatternMarkers && patternMarkers
+        ? patternMarkers.flatMap((e) => [
             {
-              time: toChartTime(t.entry_time),
-              position: (isLong ? 'belowBar' : 'aboveBar') as const,
-              color: '#3b82f6',
-              shape: (isLong ? 'arrowUp' : 'arrowDown') as const,
-              // lightweight-charts(SeriesMarkersRenderer.drawText)はマーカーの
-              // textを1本のfillText呼び出しで描画するだけで、\nを改行として
-              // 解釈する処理が無い(コード確認済み) - 埋め込んでも改行され
-              // ないため、スペース区切りの1行で我慢する。
-              text: `${Number(t.entry_price).toFixed(priceDecimals)} Entry`,
+              time: toChartTime(e.top1_time),
+              position: (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const,
+              color: '#ff17d1',
+              shape: 'circle' as const,
+              text: e.kind === 'top' ? '山1' : '谷1',
             },
             {
-              time: toChartTime(t.exit_time),
-              position: (isLong ? 'aboveBar' : 'belowBar') as const,
-              color: t.profit >= 0 ? '#22c55e' : '#ef4444',
-              shape: (isLong ? 'arrowDown' : 'arrowUp') as const,
-              text: `${Number(t.exit_price).toFixed(priceDecimals)} Exit`,
+              time: toChartTime(e.top2_time),
+              position: (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const,
+              color: '#ff17d1',
+              shape: 'circle' as const,
+              text: e.kind === 'top' ? '山2' : '谷2',
             },
-          ]
+            // ネックライン(2つの山/谷の間の谷/山) - 山側パターンなら谷なので
+            // belowBar、谷側パターンなら山なのでaboveBar(山/谷マーカーとは
+            // 逆側)。ユーザー指摘:「ネックラインは谷がないとわからない
+            // よね?谷も条件に必要でしょ」への対応。
+            {
+              time: toChartTime(e.neckline_time),
+              position: (e.kind === 'top' ? 'belowBar' : 'aboveBar') as const,
+              color: '#f59e0b',
+              shape: 'circle' as const,
+              text: 'ネック',
+            },
+          ])
+        : []
+
+    // 2つの山/谷とネックラインの関係を一目で追えるよう、ネックラインの
+    // 実際の価格水準を、ネック確定バーからパターン成立/決着バーまでの
+    // 破線でつなぐ(単なる印だけだと「このライン基準で判定した」がチャート
+    // から読み取りにくいため)。
+    if (showPatternMarkers && patternMarkers) {
+      for (const e of patternMarkers) {
+        const neckTime = toChartTime(e.neckline_time)
+        const endTime = toChartTime(e.event_time)
+        if (endTime <= neckTime) continue
+        const necklineSeries = chart.addSeries(LineSeries, {
+          color: '#f59e0b',
+          lineWidth: 1,
+          lineStyle: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
         })
-        .sort((a, b) => (a.time as number) - (b.time as number))
-      createSeriesMarkers(candleSeries, markers)
+        necklineSeries.setData([
+          { time: neckTime, value: e.neckline_price },
+          { time: endTime, value: e.neckline_price },
+        ])
+      }
     }
 
-    chart.timeScale().fitContent()
+    const markers = [...tradeMarkers, ...pivotMarkers, ...patternMarkerPoints].sort(
+      (a, b) => (a.time as number) - (b.time as number),
+    )
+    if (markers.length > 0) createSeriesMarkers(candleSeries, markers)
+
+    if (isFirstMount && savedRangeRef.current) {
+      // 再マウント直後の1回目 - barsChangedは常にtrueになるが無視して
+      // 前回の表示範囲(initialVisibleRange)を復元する。
+      chart.timeScale().setVisibleLogicalRange(savedRangeRef.current)
+    } else if (barsChanged || !savedRangeRef.current) {
+      chart.timeScale().fitContent()
+    } else {
+      chart.timeScale().setVisibleLogicalRange(savedRangeRef.current)
+    }
 
     const resizeObserver = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -284,10 +424,79 @@ export default function ChartPanel({ bars, trades, emaLength = 20, symbol, indic
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      // chart.remove()で破棄される前に、その時点の表示範囲を保存しておく
+      // (次のeffect実行がbarsChangedでなければ、これをfitContent()の
+      // 代わりに復元する)。onVisibleRangeChangeで呼び出し元(App.tsx)にも
+      // 伝え、このコンポーネント自体がアンマウントされても(=savedRangeRef
+      // ごと消えても)復元できるようにする。
+      const range = chart.timeScale().getVisibleLogicalRange()
+      if (range) {
+        savedRangeRef.current = range
+        onVisibleRangeChange?.(range)
+      }
       resizeObserver.disconnect()
       chart.remove()
     }
-  }, [bars, trades, emaLength, symbol, indicators, indicatorInfos, defaultDirection])
+  }, [
+    bars,
+    trades,
+    emaLength,
+    symbol,
+    indicators,
+    indicatorInfos,
+    defaultDirection,
+    showPivots,
+    pivotLeft,
+    pivotRight,
+    showPatternMarkers,
+    patternMarkers,
+  ])
 
-  return <div ref={containerRef} className="h-full min-h-[300px] w-full" />
+  return (
+    <div className="flex h-full min-h-[300px] w-full flex-col">
+      <div className="mb-1 flex flex-none flex-wrap items-center gap-2 text-xs text-gray-400">
+        {patternMarkers && patternMarkers.length > 0 && (
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={showPatternMarkers}
+              onChange={(e) => setShowPatternMarkers(e.target.checked)}
+            />
+            エントリーに使用した山/谷のみ表示
+          </label>
+        )}
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={showPivots} onChange={(e) => setShowPivots(e.target.checked)} />
+          山/谷ピボット全表示(デバッグ用)
+        </label>
+        {showPivots && (
+          <>
+            <label className="flex items-center gap-1">
+              左
+              <input
+                type="number"
+                min={1}
+                value={pivotLeft}
+                onChange={(e) => setPivotLeft(Math.max(1, Number(e.target.value) || 1))}
+                className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-gray-200"
+              />
+              本
+            </label>
+            <label className="flex items-center gap-1">
+              右
+              <input
+                type="number"
+                min={1}
+                value={pivotRight}
+                onChange={(e) => setPivotRight(Math.max(1, Number(e.target.value) || 1))}
+                className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-gray-200"
+              />
+              本
+            </label>
+          </>
+        )}
+      </div>
+      <div ref={containerRef} className="min-h-0 w-full flex-1" />
+    </div>
+  )
 }

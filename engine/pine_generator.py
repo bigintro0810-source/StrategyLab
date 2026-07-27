@@ -2661,6 +2661,85 @@ def _b_ha_strong(bullish: bool):
 # ---------------------------------------------------------------------------
 
 
+def _b_swing_state_asym(suffix: str, params: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    """_b_swing_state_fullの非対称版(左右のバー数を別々に指定できる) -
+    ダブルトップ/ボトムの厳密仕様(ユーザー提供仕様書の"Pivot Left Bars"/
+    "Pivot Right Bars")向け。Pineのta.pivothigh/ta.pivotlowはもともと
+    leftbars/rightbarsを別々に取れるので、engine/chart_patterns.py::
+    _detect_pivot_highs/_detect_pivot_lowsのような自前のベクトル化実装を
+    Pine側で再現する必要はない(単に引数を分けて渡すだけでよい)。"""
+    left = int(params.get("pivot_left_bars", 25))
+    right = int(params.get("pivot_right_bars", 25))
+    atr_v = f"csAtr{suffix}"
+    hraw = f"csHRaw{suffix}"
+    lraw = f"csLRaw{suffix}"
+    h0, h1 = f"csH0{suffix}", f"csH1{suffix}"
+    hb0, hb1 = f"csHB0{suffix}", f"csHB1{suffix}"
+    l0, l1 = f"csL0{suffix}", f"csL1{suffix}"
+    lb0, lb1 = f"csLB0{suffix}", f"csLB1{suffix}"
+    lines = [
+        f"{atr_v} = ta.rma(ta.tr(true), 14)",
+        f"{hraw} = ta.pivothigh(high, {left}, {right})",
+        f"{lraw} = ta.pivotlow(low, {left}, {right})",
+        f"var float {h0} = na", f"var float {h1} = na",
+        f"var int {hb0} = na", f"var int {hb1} = na",
+        f"var float {l0} = na", f"var float {l1} = na",
+        f"var int {lb0} = na", f"var int {lb1} = na",
+        f"if not na({hraw})",
+        f"    {h1} := {h0}",
+        f"    {h0} := {hraw}",
+        f"    {hb1} := {hb0}",
+        f"    {hb0} := bar_index - {right}",
+        f"if not na({lraw})",
+        f"    {l1} := {l0}",
+        f"    {l0} := {lraw}",
+        f"    {lb1} := {lb0}",
+        f"    {lb0} := bar_index - {right}",
+    ]
+    names = {
+        "atr": atr_v, "hraw": hraw, "lraw": lraw,
+        "h0": h0, "h1": h1, "hb0": hb0, "hb1": hb1,
+        "l0": l0, "l1": l1, "lb0": lb0, "lb1": lb1,
+    }
+    return lines, names
+
+
+def _pine_threshold_expr(reference_expr: str, atr_expr: str, kind: str, amount: float) -> str:
+    """engine/chart_patterns.py::_threshold_seriesのPine版 - ATR倍率/Pips/
+    価格に対する%のどれで許容誤差・最低深さを指定しても、価格の生単位の
+    式に揃える。"""
+    if kind == "pips":
+        return f"({_pine_num(amount)} * pipSize)"
+    if kind == "percent":
+        return f"(math.abs({reference_expr}) * {_pine_num(amount / 100.0)})"
+    return f"({atr_expr} * {_pine_num(amount)})"
+
+
+def _b_first_occurrence_after_within_lines(
+    suffix: str, formed_expr: str, trigger_expr: str, bars_since_formed_expr: str, max_bars: int
+) -> tuple[list[str], str]:
+    """_b_first_occurrence_after_linesと同じだが、formedからmax_bars本以内に
+    triggerが来なければ待機状態を打ち切る(engine/chart_patterns.py::
+    _first_occurrence_after_within、ユーザー提供仕様書の"Maximum Bars After
+    Second Top")。max_bars<=0なら無制限(_b_first_occurrence_after_linesと
+    同じ)。"""
+    if max_bars <= 0:
+        return _b_first_occurrence_after_lines(suffix, formed_expr, trigger_expr)
+    flag = f"foaWaiting{suffix}"
+    var = f"foa{suffix}"
+    lines = [
+        f"var bool {flag} = false",
+        f"if {formed_expr}",
+        f"    {flag} := true",
+        f"if {flag} and ({bars_since_formed_expr} > {max_bars})",
+        f"    {flag} := false",
+        f"{var} = {flag} and (not ({formed_expr})) and ({trigger_expr})",
+        f"if {var}",
+        f"    {flag} := false",
+    ]
+    return lines, var
+
+
 def _b_swing_state_full(suffix: str, params: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     lookback = int(params.get("swing_lookback", 5))
     atr_v = f"csAtr{suffix}"
@@ -2715,18 +2794,161 @@ def _b_first_occurrence_after_lines(suffix: str, formed_expr: str, trigger_expr:
     return lines, var
 
 
-def _b_double_top_bottom(bullish: bool):
+def _b_double_top_bottom_state(suffix: str, params: dict[str, Any], bullish: bool) -> tuple[list[str], dict[str, str]]:
+    """engine/chart_patterns.py::_double_top_bottom_stateのPine版 -
+    「パターンの検出(exists)」と「売買方向を持つシグナル(resolve/failed)」
+    を分離した設計をPine側でも再現する(ユーザー要望:「チャートパターンの
+    検出とエントリーシグナルを分離して設計したい」)。3つとも同じ状態機械
+    から切り出すだけなので、ここで1回だけ計算し、_b_double_top_exists/
+    _resolve/_failedがそれぞれ欲しい変数名を選ぶだけにする。
+
+    2026-07-23修正: ネックラインを「直近の確定スイング安値/高値」という
+    近似から、「山1/谷1と山2/谷2の実際のバーの間にある生の安値/高値の
+    最安/最高値」に変更(Python版と同じ理由 - 古いネックを拾ったり、
+    resolve待ちの間に値が動いたりする不具合を避ける)。あわせて対称性
+    (symmetry_ratio_*)・トレンドライン乖離(trendline_tolerance_pct)・
+    ブレイク猶予比率(breakout_deadline_ratio_*)の3条件を追加。"""
+    min_bars = int(params.get("min_bars_between_tops", 10))
+    max_bars = int(params.get("max_bars_between_tops", 80))
+    top_tolerance_type = str(params.get("top_tolerance_type", "atr"))
+    top_tolerance = float(params.get("top_tolerance", 0.5))
+    depth_type = str(params.get("min_valley_depth_type", "atr"))
+    depth_amount = float(params.get("min_valley_depth", 1.0))
+    symmetry_min = float(params.get("symmetry_ratio_min", 0.5))
+    symmetry_max = float(params.get("symmetry_ratio_max", 1.5))
+    trend_tol_pct = float(params.get("trendline_tolerance_pct", 20.0))
+    breakout_type = str(params.get("breakout_type", "close"))
+    breakout_buffer = float(params.get("breakout_buffer", 0.1))
+    deadline_min_ratio = float(params.get("breakout_deadline_ratio_min", 0.5))
+    deadline_max_ratio = float(params.get("breakout_deadline_ratio_max", 1.5))
+
+    lines, sw = _b_swing_state_asym(suffix, params)
+
+    if bullish:
+        extreme2, extreme1 = sw["l0"], sw["l1"]
+        bar2, bar1 = sw["lb0"], sw["lb1"]
+        raw = sw["lraw"]
+        src = "high"
+        better_op = ">"
+    else:
+        extreme2, extreme1 = sw["h0"], sw["h1"]
+        bar2, bar1 = sw["hb0"], sw["hb1"]
+        raw = sw["hraw"]
+        src = "low"
+        better_op = "<"
+
+    interval_expr = f"({bar2} - {bar1})"
+    interval_ok = f"({interval_expr} >= {min_bars} and {interval_expr} <= {max_bars})"
+
+    top_tol = _pine_threshold_expr(extreme1, sw["atr"], top_tolerance_type, top_tolerance)
+    extremes_similar = f"(math.abs({extreme2} - {extreme1}) <= {top_tol})"
+
+    neck_price = f"ddtNeckPrice{suffix}"
+    neck_bar = f"ddtNeckBar{suffix}"
+    waiting = f"ddtWaiting{suffix}"
+    formed_bar = f"ddtFormedBar{suffix}"
+    deadline_min_v = f"ddtDeadlineMin{suffix}"
+    deadline_max_v = f"ddtDeadlineMax{suffix}"
+    exists_v = f"ddtExists{suffix}"
+    resolve_v = f"ddtResolve{suffix}"
+    failed_v = f"ddtFailed{suffix}"
+
+    avg_expr = f"(({extreme1} + {extreme2}) / 2)"
+    depth_tol = _pine_threshold_expr(avg_expr, sw["atr"], depth_type, depth_amount)
+
+    # ネックライン(2つの山/谷の実際のバーの間にある生値の最安/最高値)・
+    # 対称性・トレンドライン乖離・ブレイク猶予は、山2の候補が確定した瞬間
+    # (not na(raw))にしか計算しようがない(それより前は「間」自体が
+    # 定まらない)。formedNow(全条件がそろった瞬間)でのみddtWaiting等を
+    # 更新することで、resolve待ちの間に候補が動かないようにする
+    # (engine/chart_patterns.py::_double_top_bottom_stateの
+    # `.where(formed_f).ffill()`と同じ役割)。
+    depth_expr_tpl = "({neck} - {avg})" if bullish else "({avg} - {neck})"
+    state_lines = [
+        f"var float {neck_price} = na",
+        f"var int {neck_bar} = na",
+        f"var bool {waiting} = false",
+        f"var int {formed_bar} = na",
+        f"var float {deadline_min_v} = na",
+        f"var float {deadline_max_v} = na",
+        f"formedThisBar{suffix} = false",
+        f"if not na({raw})",
+        f"    barsAgo1{suffix} = bar_index - {bar1}",
+        f"    barsAgo2{suffix} = bar_index - {bar2}",
+        f"    if barsAgo2{suffix} < barsAgo1{suffix}",
+        f"        bestVal{suffix} = {src}[barsAgo2{suffix}]",
+        f"        bestBar{suffix} = {bar2}",
+        f"        for j{suffix} = barsAgo2{suffix} + 1 to barsAgo1{suffix}",
+        f"            v{suffix} = {src}[j{suffix}]",
+        f"            if v{suffix} {better_op} bestVal{suffix}",
+        f"                bestVal{suffix} := v{suffix}",
+        f"                bestBar{suffix} := bar_index - j{suffix}",
+        f"        neckPriceCand{suffix} = bestVal{suffix}",
+        f"        neckBarCand{suffix} = bestBar{suffix}",
+        f"        interval1{suffix} = neckBarCand{suffix} - {bar1}",
+        f"        interval2{suffix} = {bar2} - neckBarCand{suffix}",
+        f"        if interval1{suffix} > 0 and interval2{suffix} > 0",
+        f"            ratio{suffix} = interval2{suffix} / interval1{suffix}",
+        f"            symOk{suffix} = ratio{suffix} >= {_pine_num(symmetry_min)} and ratio{suffix} <= {_pine_num(symmetry_max)}",
+        f"            tol1_{suffix} = math.abs(neckPriceCand{suffix} - {extreme1}) * {_pine_num(trend_tol_pct / 100.0)}",
+        f"            seg1Ok{suffix} = true",
+        f"            for j{suffix} = 0 to interval1{suffix}",
+        f"                lineV{suffix} = {extreme1} + (neckPriceCand{suffix} - {extreme1}) * j{suffix} / interval1{suffix}",
+        f"                ja{suffix} = bar_index - ({bar1} + j{suffix})",
+        f"                if math.abs(high[ja{suffix}] - lineV{suffix}) > tol1_{suffix} or math.abs(low[ja{suffix}] - lineV{suffix}) > tol1_{suffix}",
+        f"                    seg1Ok{suffix} := false",
+        f"            tol2_{suffix} = math.abs({extreme2} - neckPriceCand{suffix}) * {_pine_num(trend_tol_pct / 100.0)}",
+        f"            seg2Ok{suffix} = true",
+        f"            for j{suffix} = 0 to interval2{suffix}",
+        f"                lineV2{suffix} = neckPriceCand{suffix} + ({extreme2} - neckPriceCand{suffix}) * j{suffix} / interval2{suffix}",
+        f"                ja2{suffix} = bar_index - (neckBarCand{suffix} + j{suffix})",
+        f"                if math.abs(high[ja2{suffix}] - lineV2{suffix}) > tol2_{suffix} or math.abs(low[ja2{suffix}] - lineV2{suffix}) > tol2_{suffix}",
+        f"                    seg2Ok{suffix} := false",
+        f"            trendOk{suffix} = seg1Ok{suffix} and seg2Ok{suffix}",
+        f"            depthExpr{suffix} = " + depth_expr_tpl.format(neck="neckPriceCand" + suffix, avg=avg_expr),
+        f"            depthOk{suffix} = depthExpr{suffix} >= {depth_tol}",
+        f"            formedNow{suffix} = {interval_ok} and {extremes_similar} and depthOk{suffix} and symOk{suffix} and trendOk{suffix}",
+        f"            if formedNow{suffix}",
+        f"                {neck_price} := neckPriceCand{suffix}",
+        f"                {neck_bar} := neckBarCand{suffix}",
+        f"                {deadline_min_v} := interval2{suffix} * {_pine_num(deadline_min_ratio)}",
+        f"                {deadline_max_v} := interval2{suffix} * {_pine_num(deadline_max_ratio)}",
+        f"                {waiting} := true",
+        f"                {formed_bar} := bar_index",
+        f"                formedThisBar{suffix} := true",
+    ]
+
+    buffer_expr = f"({sw['atr']} * {_pine_num(breakout_buffer)})"
+    if bullish:
+        breakout_source = "high" if breakout_type == "high" else "close"
+        resolve_expr = f"({breakout_source} > ({neck_price} + {buffer_expr}))"
+        worse_extreme_expr = f"(math.min({extreme1}, {extreme2}))"
+        failed_expr = f"(close < ({worse_extreme_expr} - {buffer_expr}))"
+    else:
+        breakout_source = "low" if breakout_type == "low" else "close"
+        resolve_expr = f"({breakout_source} < ({neck_price} - {buffer_expr}))"
+        worse_extreme_expr = f"(math.max({extreme1}, {extreme2}))"
+        failed_expr = f"(close > ({worse_extreme_expr} + {buffer_expr}))"
+
+    state_lines += [
+        f"ddtExpired{suffix} = {waiting} and (bar_index - {formed_bar}) > {deadline_max_v}",
+        f"ddtTooEarly{suffix} = {waiting} and (bar_index - {formed_bar}) < {deadline_min_v}",
+        f"if ddtExpired{suffix}",
+        f"    {waiting} := false",
+        f"{exists_v} = {waiting}",
+        f"{resolve_v} = {waiting} and (not formedThisBar{suffix}) and (not ddtTooEarly{suffix}) and ({resolve_expr})",
+        f"{failed_v} = {waiting} and (not formedThisBar{suffix}) and (not ddtTooEarly{suffix}) and (not {resolve_v}) and ({failed_expr})",
+        f"if {resolve_v} or {failed_v}",
+        f"    {waiting} := false",
+    ]
+    names = {"exists": exists_v, "resolve": resolve_v, "failed": failed_v}
+    return lines + state_lines, names
+
+
+def _b_double_top_bottom(bullish: bool, output: str):
     def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        tolerance_atr_mult = float(params.get("tolerance_atr_mult", 0.5))
-        lines, sw = _b_swing_state_full(suffix, params)
-        if bullish:
-            formed = f"(not na({sw['lraw']})) and (math.abs({sw['l0']} - {sw['l1']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)})"
-            trigger = f"close > {sw['h0']}"
-        else:
-            formed = f"(not na({sw['hraw']})) and (math.abs({sw['h0']} - {sw['h1']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)})"
-            trigger = f"close < {sw['l0']}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
+        lines, names = _b_double_top_bottom_state(suffix, params, bullish)
+        return lines, names[output]
 
     return _builder
 
@@ -3769,8 +3991,12 @@ SUPPORTED_CONDITION_INDICATORS: dict[str, tuple[bool, Any]] = {
     "ha_strong_bullish": (True, _b_ha_strong(True)),
     "ha_strong_bearish": (True, _b_ha_strong(False)),
     # --- chart_patternカテゴリ(46件) ---
-    "double_top_breakdown": (True, _b_double_top_bottom(False)),
-    "double_bottom_breakout": (True, _b_double_top_bottom(True)),
+    "double_top_breakdown": (True, _b_double_top_bottom(False, "resolve")),
+    "double_top_failed": (True, _b_double_top_bottom(False, "failed")),
+    "double_top_exists": (True, _b_double_top_bottom(False, "exists")),
+    "double_bottom_breakout": (True, _b_double_top_bottom(True, "resolve")),
+    "double_bottom_failed": (True, _b_double_top_bottom(True, "failed")),
+    "double_bottom_exists": (True, _b_double_top_bottom(True, "exists")),
     "triple_top_breakdown": (True, _b_triple_top_bottom(False)),
     "triple_bottom_breakout": (True, _b_triple_top_bottom(True)),
     "head_and_shoulders_breakdown": (True, _b_head_shoulders(False)),
@@ -3898,6 +4124,16 @@ class _PineConditionTranslator:
         self._operand_cache[key] = (expr, is_bool)
         return expr, is_bool
 
+    def _apply_offset(self, expr: str, amount: float, mode: str, atr_length: int) -> str:
+        if not amount:
+            return expr
+        if mode == "price_pct":
+            return f"({expr} + close * {_pine_num(amount / 100.0)})"
+        if mode == "atr_pct":
+            atr_expr, _ = self._resolve_operand("atr", {"length": atr_length})
+            return f"({expr} + {atr_expr} * {_pine_num(amount / 100.0)})"
+        return f"({expr} + {_pine_num(amount)} * pipSize)"
+
     def _translate_condition(self, node: dict[str, Any]) -> str:
         left_expr, left_is_bool = self._resolve_operand(node["indicator"], node.get("params", {}))
         value = node["value"]
@@ -3916,10 +4152,41 @@ class _PineConditionTranslator:
                 return f"(not {left_expr})"
             raise ValueError(f"論理系の指標「{node['indicator']}」の比較値は0か1のみ対応しています")
 
+        # +/-○○Pips、価格の±○%、ATR(期間)の±○%のオフセット(ユーザー要望:
+        # 「EMA+○○Pipsや終値-○○Pipsを選択できるようにしてほしい」、続けて
+        # 「オフセットで固定値○○Pipsだけじゃなく価格の+○%、ATR(○)の-○%も
+        # できるようにして」)。pipSizeはこの関数のスクリプト全体で既に宣言
+        # 済みのinput変数(generate_pine_script_from_condition_tree参照)。
+        # price_pctは常に現在のclose基準(ユーザー確認済み: 比較対象自身の
+        # 値ではなく「今の価格スケール」を基準にする)、atr_pctは既存の
+        # ATR builder(_b_atr)を再利用して算出する。
+        left_expr = self._apply_offset(
+            left_expr,
+            float(node.get("offset_pips", 0) or 0),
+            str(node.get("offset_mode") or "pips"),
+            int(node.get("offset_atr_length") or 14),
+        )
+
         if isinstance(value, str):
             right_expr, _right_is_bool = self._resolve_operand(value, node.get("value_params", {}))
+            right_expr = self._apply_offset(
+                right_expr,
+                float(node.get("value_offset_pips", 0) or 0),
+                str(node.get("value_offset_mode") or "pips"),
+                int(node.get("value_offset_atr_length") or 14),
+            )
         else:
-            right_expr = _pine_num(float(value))
+            # 固定値を「価格の%」「ATRの%」として解釈するliteral_mode
+            # (ユーザー要望:「固定値でオフセットと同じように価格の％とATRの
+            # ％を選べるようにしてほしい」) - オフセット用の_apply_offsetと
+            # 同じ計算式だが、既存の指標式に足すのではなく固定値そのものを
+            # 置き換えるため、base式"0"に対してオフセットをかける形で流用する。
+            literal_mode = str(node.get("literal_mode") or "value")
+            if literal_mode != "value":
+                literal_atr_length = int(node.get("literal_atr_length") or 14)
+                right_expr = self._apply_offset("0.0", float(value), literal_mode, literal_atr_length)
+            else:
+                right_expr = _pine_num(float(value))
 
         if operator in (">", "<", ">=", "<=", "=="):
             return f"({left_expr} {operator} {right_expr})"

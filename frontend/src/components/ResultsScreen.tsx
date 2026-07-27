@@ -39,6 +39,7 @@ interface Props {
   reverseCount: number
   onReverseExecute: () => void
   onDetailTabChange: (rank: number, tab: TabId) => void
+  onDetailChartRangeChange: (rank: number, range: { from: number; to: number }) => void
   // 何も開いていない時の「ストラテジー詳細を確認」ピッカー(AddCandidateModal.tsx)用。
   detailCandidates: CompositeCandidate[]
   onToggleDetailInput: (id: string) => void
@@ -70,6 +71,7 @@ export default function ResultsScreen({
   reverseCount,
   onReverseExecute,
   onDetailTabChange,
+  onDetailChartRangeChange,
   detailCandidates,
   onToggleDetailInput,
 }: Props) {
@@ -90,6 +92,7 @@ export default function ResultsScreen({
         onToggleComposite={onToggleComposite}
         onBookmark={onBookmark}
         onTabChange={onDetailTabChange}
+        onChartRangeChange={onDetailChartRangeChange}
         candidates={detailCandidates}
         onToggleInput={onToggleDetailInput}
       />

@@ -527,7 +527,7 @@ def run_backtest(
         # 必須固定条件が黙って無視されていた(実際に踏んだ不具合)。
         condition_tree = wrap_with_mandatory_conditions(condition_tree, p.get("mandatory_conditions"))
         candidate_signal = evaluate_condition_tree(
-            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
+            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip
         )
     else:
         candidate_signal = build_candidate_signal(
@@ -555,7 +555,7 @@ def run_backtest(
     # position is open, the same way it already indexes candidate_signal
     # while flat.
     exit_signal_arr = (
-        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip)
         if tp_basis == "custom"
         else None
     )
@@ -1230,7 +1230,7 @@ def _run_limit_stop_backtest(
         # evaluation, instead.
         condition_tree = wrap_with_mandatory_conditions(condition_tree, p.get("mandatory_conditions"))
         candidate_signal = evaluate_condition_tree(
-            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache
+            condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip
         )
     else:
         ema_length = int(p["ema_length"])
@@ -1257,7 +1257,7 @@ def _run_limit_stop_backtest(
         )
 
     exit_signal_arr = (
-        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip)
         if tp_basis == "custom"
         else None
     )
@@ -1778,18 +1778,18 @@ def _run_dual_direction_backtest(
     if short_tree is not None:
         short_tree = wrap_with_mandatory_conditions(short_tree, mandatory_conditions)
     long_candidate = (
-        evaluate_condition_tree(long_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        evaluate_condition_tree(long_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip)
         if long_tree is not None
         else np.zeros(len(df), dtype=bool)
     )
     short_candidate = (
-        evaluate_condition_tree(short_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        evaluate_condition_tree(short_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip)
         if short_tree is not None
         else np.zeros(len(df), dtype=bool)
     )
 
     exit_signal_arr = (
-        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache)
+        evaluate_condition_tree(exit_condition_tree, df, symbol=p.get("symbol"), cache=indicator_cache, pip_size=pip)
         if tp_basis == "custom"
         else None
     )

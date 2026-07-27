@@ -20,6 +20,9 @@ export interface StrategyTabData {
   // rank単位で持つ(AutoExplorationDetail.tsx参照 - 別画面へ移動して
   // このコンポーネント自体がアンマウントされても復元できるようにするため)。
   activeTab: TabId
+  // チャートのスクロール/ズーム位置も同じ理由でrank単位で持つ
+  // (ChartPanel.tsx参照)。
+  chartVisibleRange: { from: number; to: number } | null
 }
 
 interface Props {
@@ -38,6 +41,7 @@ interface Props {
   onToggleComposite: (rank: number) => void
   onBookmark: (rank: number) => void
   onTabChange: (rank: number, tab: TabId) => void
+  onChartRangeChange: (rank: number, range: { from: number; to: number }) => void
   // 何も開いていない時の「ストラテジー詳細確認対象を追加」ピッカー(AddCandidateModal.tsx)
   // 用 - 比較/合成タブと同じ候補一覧・トグル関数をApp.tsx側から渡す。
   candidates: CompositeCandidate[]
@@ -126,6 +130,7 @@ export default function StrategyDetailTabs({
   onToggleComposite,
   onBookmark,
   onTabChange,
+  onChartRangeChange,
   candidates,
   onToggleInput,
 }: Props) {
@@ -258,6 +263,8 @@ export default function StrategyDetailTabs({
               onBookmark={() => onBookmark(t.rank)}
               activeTab={t.activeTab}
               onTabChange={(tabId) => onTabChange(t.rank, tabId)}
+              chartVisibleRange={t.chartVisibleRange}
+              onChartVisibleRangeChange={(range) => onChartRangeChange(t.rank, range)}
             />
           </div>
         ))}

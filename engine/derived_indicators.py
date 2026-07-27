@@ -817,50 +817,71 @@ def macd_divergence_bullish(df: pd.DataFrame, length: int = 20, **p) -> np.ndarr
     return (made_new_low & (macd_line > macd_at_prior_low_window)).fillna(False).to_numpy(dtype=float)
 
 
-def _ema_perfect_order_state(
-    df: pd.DataFrame, length_1: int, length_2: int, length_3: int, length_4: int
-) -> tuple[pd.Series, pd.Series]:
-    e1 = _ema_level(df, length_1)
-    e2 = _ema_level(df, length_2)
-    e3 = _ema_level(df, length_3)
-    e4 = _ema_level(df, length_4)
-    bullish = (e1 > e2) & (e2 > e3) & (e3 > e4)
-    bearish = (e1 < e2) & (e2 < e3) & (e3 < e4)
+def _ema_perfect_order_state(df: pd.DataFrame, lengths: list[int]) -> tuple[pd.Series, pd.Series]:
+    emas = [_ema_level(df, length) for length in lengths]
+    bullish = emas[0] > emas[1]
+    bearish = emas[0] < emas[1]
+    for i in range(1, len(emas) - 1):
+        bullish = bullish & (emas[i] > emas[i + 1])
+        bearish = bearish & (emas[i] < emas[i + 1])
     return bullish, bearish
 
 
+def _perfect_order_lengths(count: int, length_1: int, length_2: int, length_3: int, length_4: int, length_5: int) -> list[int]:
+    # count(3〜5、既定4)本だけ使う - 未使用ぶんのlength_N入力は無視する
+    # (ユーザー要望:「パーフェクトオーダーは現在4本だけど3〜5本まで選択
+    # できるようにして」)。
+    return [length_1, length_2, length_3, length_4, length_5][: int(count)]
+
+
 def ema_perfect_order_bullish(
-    df: pd.DataFrame, length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, **p
+    df: pd.DataFrame,
+    count: int = 4,
+    length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, length_5: int = 300,
+    **p,
 ) -> np.ndarray:
-    """4 EMAs (fastest to slowest) stacked in descending order
-    (length_1 > length_2 > length_3 > length_4) - the classic "perfect
-    order" trend-strength filter."""
-    bullish, _bearish = _ema_perfect_order_state(df, length_1, length_2, length_3, length_4)
+    """count本(3〜5、既定4)のEMA(最短から最長)が降順に並んでいる状態
+    (length_1 > length_2 > ... > length_N) - 定番の「パーフェクトオーダー」
+    トレンド強度フィルター。"""
+    lengths = _perfect_order_lengths(count, length_1, length_2, length_3, length_4, length_5)
+    bullish, _bearish = _ema_perfect_order_state(df, lengths)
     return bullish.to_numpy(dtype=float)
 
 
 def ema_perfect_order_bearish(
-    df: pd.DataFrame, length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, **p
+    df: pd.DataFrame,
+    count: int = 4,
+    length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, length_5: int = 300,
+    **p,
 ) -> np.ndarray:
-    _bullish, bearish = _ema_perfect_order_state(df, length_1, length_2, length_3, length_4)
+    lengths = _perfect_order_lengths(count, length_1, length_2, length_3, length_4, length_5)
+    _bullish, bearish = _ema_perfect_order_state(df, lengths)
     return bearish.to_numpy(dtype=float)
 
 
 def ema_perfect_order_broken_bullish(
-    df: pd.DataFrame, length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, **p
+    df: pd.DataFrame,
+    count: int = 4,
+    length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, length_5: int = 300,
+    **p,
 ) -> np.ndarray:
     """The bullish perfect order held on the PREVIOUS bar but no longer
     holds now - the moment the stack breaks, not merely "not currently
     stacked" (which would also be true e.g. before it was ever established)."""
-    bullish, _bearish = _ema_perfect_order_state(df, length_1, length_2, length_3, length_4)
+    lengths = _perfect_order_lengths(count, length_1, length_2, length_3, length_4, length_5)
+    bullish, _bearish = _ema_perfect_order_state(df, lengths)
     was_bullish = bullish.shift(1).fillna(False)
     return (was_bullish & ~bullish).to_numpy(dtype=float)
 
 
 def ema_perfect_order_broken_bearish(
-    df: pd.DataFrame, length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, **p
+    df: pd.DataFrame,
+    count: int = 4,
+    length_1: int = 20, length_2: int = 50, length_3: int = 100, length_4: int = 200, length_5: int = 300,
+    **p,
 ) -> np.ndarray:
-    _bullish, bearish = _ema_perfect_order_state(df, length_1, length_2, length_3, length_4)
+    lengths = _perfect_order_lengths(count, length_1, length_2, length_3, length_4, length_5)
+    _bullish, bearish = _ema_perfect_order_state(df, lengths)
     was_bearish = bearish.shift(1).fillna(False)
     return (was_bearish & ~bearish).to_numpy(dtype=float)
 

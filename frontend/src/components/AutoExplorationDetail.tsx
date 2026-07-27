@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchChartIndicators, fetchPriceData } from '../api'
+import { fetchChartIndicators, fetchPatternMarkers, fetchPriceData } from '../api'
 import { describeStrategyConditionJapaneseLines } from '../conditionTreeUtils'
 import { toPips } from '../pipUtils'
 import ChartPanel from './ChartPanel'
@@ -75,6 +75,11 @@ interface Props {
   // (実際に踏んだ不具合)。
   activeTab: TabId
   onTabChange: (tab: TabId) => void
+  // チャートタブのスクロール/ズーム位置(ChartPanel.tsx参照) - activeTab同様、
+  // 呼び出し元がrank/id単位で保持する(ユーザー報告:「チャート過去に遡った
+  // ままタブ離れたら最新のチャートに戻っちゃう」)。
+  chartVisibleRange?: { from: number; to: number } | null
+  onChartVisibleRangeChange?: (range: { from: number; to: number }) => void
 }
 
 const TABS = [
@@ -145,6 +150,8 @@ export default function AutoExplorationDetail({
   strategyId,
   activeTab: tab,
   onTabChange: setTab,
+  chartVisibleRange,
+  onChartVisibleRangeChange,
 }: Props) {
   const [showPineScript, setShowPineScript] = useState(false)
 
@@ -173,7 +180,7 @@ export default function AutoExplorationDetail({
   const chartEnabled = tab === 'chart' && priceSymbol != null && timeframe != null
   const priceQuery = useQuery({
     queryKey: ['auto-detail-chart-price', priceSymbol, timeframe],
-    queryFn: () => fetchPriceData(priceSymbol as string, timeframe as string, 20000),
+    queryFn: () => fetchPriceData(priceSymbol as string, timeframe as string, 200000),
     enabled: chartEnabled,
   })
   const chartIndicatorsQuery = useQuery({
@@ -187,6 +194,28 @@ export default function AutoExplorationDetail({
     ],
     queryFn: () =>
       fetchChartIndicators({
+        symbol: priceSymbol as string,
+        timeframe: timeframe as string,
+        condition_tree: conditionTree,
+        long_condition_tree: longConditionTree,
+        short_condition_tree: shortConditionTree,
+      }),
+    enabled: chartEnabled,
+  })
+  // ダブルトップ/ボトム系の条件があれば、実際にエントリーへ使われた山/谷
+  // だけをチャートに印付けるための材料(ChartPanelの「使用した山/谷のみ
+  // 表示」チェックボックス用)。
+  const patternMarkersQuery = useQuery({
+    queryKey: [
+      'auto-detail-pattern-markers',
+      priceSymbol,
+      timeframe,
+      JSON.stringify(conditionTree ?? null),
+      JSON.stringify(longConditionTree ?? null),
+      JSON.stringify(shortConditionTree ?? null),
+    ],
+    queryFn: () =>
+      fetchPatternMarkers({
         symbol: priceSymbol as string,
         timeframe: timeframe as string,
         condition_tree: conditionTree,
@@ -292,6 +321,9 @@ export default function AutoExplorationDetail({
                 indicators={chartIndicatorsQuery.data?.indicators}
                 indicatorInfos={indicators}
                 defaultDirection={direction}
+                patternMarkers={patternMarkersQuery.data?.events}
+                initialVisibleRange={chartVisibleRange}
+                onVisibleRangeChange={onChartVisibleRangeChange}
               />
             </div>
           ) : (

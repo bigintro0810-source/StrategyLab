@@ -34,6 +34,16 @@ interface Props {
   // 既にこの行から反転を作成済み(このセッション中)のid一覧。反転
   // チェックボックスの代わりに白塗りの印を出し、操作できないようにする。
   alreadyReversedIds?: string[]
+  // ソート/絞り込み状態はApp.tsx側で持つ(ユーザー要望:「ライブラリでも
+  // 画面から離れた際戻ったら同じ画面を表示するようにして」) - このコンポー
+  // ネント自身はmainTabをまたぐナビゲーションのたびにアンマウントされる
+  // ため、ローカルstateのままだと戻るたびにソート順/絞り込みが消えて
+  // しまう(AutoExplorationDetail.tsxのactiveTab/onTabChangeと同じ理由)。
+  sortKey: string
+  sortAsc: boolean
+  onSortChange: (next: { sortKey: string; sortAsc: boolean }) => void
+  filters: Record<string, string>
+  onFiltersChange: (next: Record<string, string>) => void
 }
 
 // entry.metrics(strategy_registry.pyのMETRIC_COLUMNS)はexpected_valueを
@@ -138,12 +148,17 @@ export default function LibraryScreen({
   onToggleReverse,
   onReverseExecute,
   alreadyReversedIds = [],
+  sortKey,
+  sortAsc,
+  onSortChange,
+  filters,
+  onFiltersChange,
 }: Props) {
   const queryClient = useQueryClient()
-  const [sortKey, setSortKey] = useState<string>('profit_factor')
-  const [sortAsc, setSortAsc] = useState(false)
-  const [filters, setFilters] = useState<Record<string, string>>({})
-  // 一括削除用のチェック(詳細/反転とは別、削除専用)。
+  // 一括削除用のチェック(詳細/反転とは別、削除専用) - これは画面遷移を
+  // またいで残ると「チェックが付いたままなのに気づかず別のものまで
+  // 削除してしまう」事故につながるため、あえてローカルstateのまま
+  // (ナビゲーションで消えるのが安全側の挙動)。
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set())
   const [deleteConfirm, setDeleteConfirm] = useState<{ ids: string[]; names: string[] } | null>(null)
 
@@ -184,13 +199,12 @@ export default function LibraryScreen({
   const handleSort = (key: string) => {
     if (key === 'condition_tree') return
     if (key === sortKey) {
-      setSortAsc(!sortAsc)
+      onSortChange({ sortKey, sortAsc: !sortAsc })
     } else {
-      setSortKey(key)
       // 初回クリックは「良い順」で表示する - ほとんどの指標は大きい方が
       // 良い(降順)が、DDだけ小さい方が良い(昇順)。名称は良し悪しが無い
       // ので素直にA→Z(昇順)から始める。
-      setSortAsc(key === 'name' ? true : ascendingIsBetter(key))
+      onSortChange({ sortKey: key, sortAsc: key === 'name' ? true : ascendingIsBetter(key) })
     }
   }
 
@@ -303,7 +317,7 @@ export default function LibraryScreen({
                       <input
                         type="number"
                         value={filters[col.key] ?? ''}
-                        onChange={(e) => setFilters((prev) => ({ ...prev, [col.key]: e.target.value }))}
+                        onChange={(e) => onFiltersChange({ ...filters, [col.key]: e.target.value })}
                         placeholder={ascendingIsBetter(col.key) ? '以下' : '以上'}
                         title={`${col.label} ${ascendingIsBetter(col.key) ? '以下' : '以上'}で絞り込み`}
                         className="glass-input w-14 rounded px-1 py-0.5 text-[10px]"

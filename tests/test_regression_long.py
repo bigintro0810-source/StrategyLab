@@ -12,6 +12,21 @@ breakout strategy: bearish candle, close breaks below the recent 30-bar low, RSI
 Baseline captured 2026-07-05 by actually running this against real USDJPY 15m data
 (data/raw/USDJPY_Data/USDJPY_2003_2026_15m.csv) - not hand-derived.
 
+Baseline REGENERATED 2026-07-25: commit 6bbf156 (2026-07-2x, "画面上に見えていることが
+全て" - condition_tree strategies enter immediately on the next bar's open once the
+condition is true, no longer waiting for the old breakout-confirmation step) changed
+run_backtest()'s condition_tree branch from reusing the legacy signal_bar/lookahead_bars
+confirmation wait to firing pending_entry directly off candidate_signal[i] - a deliberate,
+documented, user-requested behavior change, not a bug (confirmed via git-bisect across
+every commit between the original baseline and HEAD, plus a worktree re-run of the exact
+pre-change code against today's data: pre-change code still reproduces ~2022 trades on
+current data, and the count only jumps once 6bbf156's diff is applied). Removing the
+confirmation wait lets far more of the same 9648 candidate bars convert into trades
+(entry no longer requires price to later break the signal bar's own high/low), hence the
+trade count nearly quadrupling here - unrelated to the small (~0.2%) trade-count drift
+visible elsewhere in this suite from the data file's periodic append-only growth. Also
+re-verified against the current data file (through 2026-07-18).
+
 tests/test_regression.py and tests/test_regression_indicators.py are NOT modified by
 this change and must keep passing byte-for-byte unchanged - that's the acceptance gate
 proving the new condition_tree/direction path is additive, not a rewrite of the
@@ -59,12 +74,12 @@ LONG_BREAKDOWN_TREE = ConditionGroup(
 ).to_dict()
 
 EXPECTED_LONG_BREAKDOWN = {
-    "trades": 2022,
-    "net_profit": -10.0464,
-    "profit_factor": 0.957,
-    "max_dd": 27.0114,
-    "win_rate": 44.36,
-    "recovery_factor": -0.372,
+    "trades": 6986,
+    "net_profit": -40.4978,
+    "profit_factor": 0.791,
+    "max_dd": 43.863,
+    "win_rate": 30.86,
+    "recovery_factor": -0.923,
 }
 
 

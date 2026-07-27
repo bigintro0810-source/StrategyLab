@@ -48,6 +48,17 @@ class IndicatorSpec:
     # continuous "length"-style range.
     param_choices: dict[str, list[float]] = field(default_factory=dict)
     allow_indicator_pair: bool = False
+    # 指標同士の比較で「比較先」候補として出す時の絞り込み単位 - 未設定
+    # (None)ならkindをそのまま使う(今まで通り)。kindは「固定値と比較して
+    # 意味があるか」を決める単位であり、同じkindでも実際の測定単位が違う
+    # ことがある(rsi_deviationはRSIポイント、bb_width_percentは%、
+    # dist_to_round_numberはPips - 全部kind="unitless_ratio"だが単位は
+    # 別物)。これらをkindだけで比較先候補にすると「RSIの移動平均からの
+    # 乖離」と「キリ番までの距離」のような単位が違う指標同士が比較可能に
+    # 見えてしまう(ユーザー報告:「比較元RSIの移動平均からの乖離。比較先
+    # キリ番までの距離っておかしくない?」)。pair_groupを指標名自身にする
+    # ことで「同じ指標同士(パラメータ違い)」の比較だけに絞り込める。
+    pair_group: str | None = None
     literal_range: tuple[float, float] | None = None
     literal_choices: list[float] | None = None
     literal_is_int: bool = False
@@ -71,6 +82,15 @@ class IndicatorSpec:
     # discrete list (no continuous range to templatize in the first place).
     value_presets: dict[str, list[float]] = field(default_factory=dict)
     literal_presets: list[float] | None = None
+    # 定義上そもそも超えられない範囲(下のLITERAL_HARD_BOUNDS参照) - 上の
+    # literal_rangeとは別物で、こちらは手動ビルダーの固定値入力欄を実際に
+    # min/maxで制限するために使う。literal_rangeは自動探索が試す「典型的な
+    # 範囲」に過ぎず(例: RSIのliteral_rangeは20〜80だが、RSI自体は0〜100
+    # まで動ける)、これを制限に流用すると「RSI>90」のような正当な条件が
+    # 打てなくなってしまうため、hard_boundは別フィールドとして厳密に区別
+    # する。片側だけNoneも可("EMAからの距離(ATR倍数)"のように絶対値ベースで
+    # 下限0は確実だが上限は理論上際限が無い、という指標のため)。
+    literal_hard_bound: tuple[float | None, float | None] | None = None
 
 
 # Which operators make sense for each kind. Condition.evaluate() itself
@@ -82,6 +102,8 @@ OPERATORS_BY_KIND: dict[str, list[str]] = {
     "trend_binary": ["=="],
     "volatility": [">", "<", "crosses_above", "crosses_below"],
     "signed_price_diff": [">", "<", "crosses_above", "crosses_below"],
+    # OBV/A・Dライン - 出来高の累積値(スケールが値幅とは無関係)専用のkind。
+    "volume_flow": [">", "<", "crosses_above", "crosses_below"],
     "time_hour": [">", "<", "=="],
     "time_weekday": [">", "<", "=="],
     "time_month": [">", "<", "=="],
@@ -168,53 +190,69 @@ INDICATOR_POOL: list[IndicatorSpec] = [
     ),
     IndicatorSpec(
         "rsi", "oscillator_0_100", param_ranges={"length": (7, 30)},
-        allow_indicator_pair=True, literal_range=(20.0, 80.0),
+        allow_indicator_pair=True, literal_range=(20.0, 80.0), pair_group="rsi",
     ),
+    # adx/plus_di/minus_diは同じADX/DMI計算から出てくる値同士で、+DI>-DIが
+    # 定番のDMIクロス判定なので意図的にpair_group="adx_dmi"でまとめる
+    # (一方RSIのような別系統のオシレーターとは混ざらないようにする -
+    # ユーザー報告:「ADXの比較先RSIは変じゃない?」)。
     IndicatorSpec(
         "adx", "oscillator_0_100", param_ranges={"length": (2, 100)},
-        allow_indicator_pair=True, literal_range=(10.0, 50.0),
+        allow_indicator_pair=True, literal_range=(10.0, 50.0), pair_group="adx_dmi",
     ),
     IndicatorSpec(
         "plus_di", "oscillator_0_100", param_ranges={"length": (2, 100)},
-        allow_indicator_pair=True, literal_range=(10.0, 50.0),
+        allow_indicator_pair=True, literal_range=(10.0, 50.0), pair_group="adx_dmi",
     ),
     IndicatorSpec(
         "minus_di", "oscillator_0_100", param_ranges={"length": (2, 100)},
-        allow_indicator_pair=True, literal_range=(10.0, 50.0),
+        allow_indicator_pair=True, literal_range=(10.0, 50.0), pair_group="adx_dmi",
     ),
     IndicatorSpec(
         "stochastic_k",
         "oscillator_0_100",
         param_ranges={"k_period": (5, 21), "d_period": (3, 5), "smooth": (3, 5)},
-        allow_indicator_pair=True, literal_range=(20.0, 80.0),
+        allow_indicator_pair=True, literal_range=(20.0, 80.0), pair_group="stochastic",
     ),
     IndicatorSpec(
         "stochastic_d",
         "oscillator_0_100",
         param_ranges={"k_period": (5, 21), "d_period": (3, 5), "smooth": (3, 5)},
-        allow_indicator_pair=True, literal_range=(20.0, 80.0),
+        allow_indicator_pair=True, literal_range=(20.0, 80.0), pair_group="stochastic",
     ),
     IndicatorSpec("atr", "volatility", param_ranges={"length": (2, 100)}, allow_indicator_pair=True),
     IndicatorSpec("adr", "volatility", param_ranges={"adr_period": (7, 30)}, allow_indicator_pair=True),
+    # macd_line/macd_signal/macd_histogram/macd_rolling_mean(下の方で定義)は
+    # 同じMACD計算から出てくる、同じ時間軸・同じ単位の値同士なので
+    # pair_group="macd"でまとめて相互比較可能にする(MACDライン>MACD
+    # シグナルは定番のMACDクロス判定 - 意図的に維持)。一方candle_body
+    # (1本の実体)やatr_deviation(ATRの移動平均からの乖離)は同じ
+    # kind="signed_price_diff"というだけで単位こそ同じ価格差だが、測っている
+    # 対象の時間軸も意味も全く違うため、MACD系と混ざらないよう別々の
+    # pair_group(自分自身のみ)にする(ユーザー報告:「インジケーターの
+    # MACDラインの比較先に実体があるのは変じゃない?」)。
     IndicatorSpec(
         "macd_line",
         "signed_price_diff",
         param_ranges={"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
-        allow_indicator_pair=True, literal_choices=[0.0],
+        allow_indicator_pair=True, literal_choices=[0.0], pair_group="macd",
     ),
     IndicatorSpec(
         "macd_signal",
         "signed_price_diff",
         param_ranges={"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
-        allow_indicator_pair=True, literal_choices=[0.0],
+        allow_indicator_pair=True, literal_choices=[0.0], pair_group="macd",
     ),
     IndicatorSpec(
         "macd_histogram",
         "signed_price_diff",
         param_ranges={"fast": (8, 16), "slow": (20, 30), "signal": (7, 11)},
-        allow_indicator_pair=True, literal_choices=[0.0],
+        allow_indicator_pair=True, literal_choices=[0.0], pair_group="macd",
     ),
-    IndicatorSpec("candle_body", "signed_price_diff", allow_indicator_pair=True, literal_choices=[0.0]),
+    IndicatorSpec(
+        "candle_body", "signed_price_diff", allow_indicator_pair=True, literal_choices=[0.0],
+        pair_group="candle_body",
+    ),
     IndicatorSpec("fvg_bullish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("fvg_bearish", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("order_block_bullish", "boolean_signal", literal_choices=[1.0]),
@@ -607,12 +645,21 @@ INDICATOR_POOL.extend([
     IndicatorSpec(
         "atr_deviation", "signed_price_diff",
         param_ranges={"atr_length": (7, 30), "window": (10, 50)}, literal_choices=[0.0],
-        allow_indicator_pair=True,
+        allow_indicator_pair=True, pair_group="atr_deviation",
     ),
     IndicatorSpec("close_rolling_std", "volatility", param_ranges={"length": (10, 50)}, allow_indicator_pair=True),
+    # historical_volatilityはkind="volatility"の他のメンバー(ATR・各dist_*・
+    # 実体/ヒゲの統計等)と違い、対数リターンの標準偏差を年率換算して%表示
+    # した値(engine/derived_indicators.py::historical_volatility参照) -
+    # 生の値幅(pips)ではなく無次元の%なので、ATR等と比較先候補として
+    # 混ざると単位が合わない(ユーザー要望「比較元と比較先が適合しているか
+    # 入念にチェックして」で発覚)。kindをunitless_ratioにし、専用の
+    # pair_group(自分自身=期間違いの比較のみ)に切り離す。%なので銘柄間で
+    # も意味が通る値である点も踏まえ、固定値比較(literal_range)も追加する。
     IndicatorSpec(
-        "historical_volatility", "volatility",
+        "historical_volatility", "unitless_ratio", literal_range=(5.0, 30.0),
         param_ranges={"period": (10, 50)}, allow_indicator_pair=True,
+        pair_group="historical_volatility",
     ),
     IndicatorSpec(
         "equal_high", "boolean_signal", literal_choices=[1.0],
@@ -631,20 +678,22 @@ INDICATOR_POOL.extend([
     IndicatorSpec(
         "rsi_rolling_mean", "oscillator_0_100",
         param_ranges={"rsi_length": (7, 30), "window": (10, 50)},
-        allow_indicator_pair=True, literal_range=(20.0, 80.0),
+        allow_indicator_pair=True, literal_range=(20.0, 80.0), pair_group="rsi",
     ),
     IndicatorSpec(
         "rsi_deviation", "unitless_ratio", literal_range=(-15.0, 15.0),
         param_ranges={"rsi_length": (7, 30), "window": (10, 50)}, allow_indicator_pair=True,
+        pair_group="rsi_deviation",
     ),
     IndicatorSpec(
         "adx_rolling_mean", "oscillator_0_100",
         param_ranges={"adx_length": (7, 30), "window": (10, 50)},
-        allow_indicator_pair=True, literal_range=(15.0, 40.0),
+        allow_indicator_pair=True, literal_range=(15.0, 40.0), pair_group="adx_dmi",
     ),
     IndicatorSpec(
         "macd_rolling_mean", "signed_price_diff",
         param_ranges={"window": (10, 50)}, literal_choices=[0.0], allow_indicator_pair=True,
+        pair_group="macd",
     ),
     IndicatorSpec(
         "percentile_rank_rsi", "unitless_ratio", literal_range=(0.0, 100.0),
@@ -681,15 +730,20 @@ INDICATOR_POOL.extend([
         param_ranges={"rsi_length": (7, 30), "window": (50, 300)},
     ),
     # エントリー専用イベント
+    # bb_widthは(Upper-Lower)/Middleの無次元比率(engine/derived_indicators.
+    # py::bb_width参照、bb_width_percentはこれの×100版)であり、kind=
+    # "volatility"の他メンバー(ATR等、生の値幅/pips)とは単位が異なる -
+    # historical_volatilityと同じ理由でunitless_ratioに切り離す。
+    # bb_width_percentとも桁が100倍違うため同じpair_groupにはしない。
     IndicatorSpec(
-        "bb_width", "volatility",
+        "bb_width", "unitless_ratio", literal_range=(0.0, 0.2),
         param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
-        allow_indicator_pair=True,
+        allow_indicator_pair=True, pair_group="bb_width",
     ),
     IndicatorSpec(
         "bb_width_percent", "unitless_ratio", literal_range=(0.0, 20.0),
         param_ranges={"period": (10, 50)}, param_choices={"num_std": [1.0, 1.5, 2.0, 2.5, 3.0]},
-        allow_indicator_pair=True,
+        allow_indicator_pair=True, pair_group="bb_width_percent",
     ),
     IndicatorSpec(
         "bb_squeeze", "boolean_signal", literal_choices=[1.0],
@@ -835,17 +889,83 @@ INDICATOR_POOL.extend([
     IndicatorSpec(
         "dist_to_round_number", "unitless_ratio",
         param_choices={"pip_size": [0.01, 0.001, 0.0001], "round_interval": [0.1, 0.5, 1.0, 5.0, 10.0]},
-        allow_indicator_pair=True, literal_range=(0.0, 30.0),
+        allow_indicator_pair=True, literal_range=(0.0, 30.0), pair_group="dist_to_round_number",
     ),
     # チャートパターン(engine/chart_patterns.py) - 全てboolean_signal。
     # tolerance/margin類はATR倍率で正規化済み(symbol/timeframe非依存)。
+    # double_top_breakdown/failed/existsとdouble_bottom_breakout/failed/
+    # existsは、同じ「パターン構造」判定を土台に「検出(exists)」と
+    # 「方向を持つシグナル(breakdown・failed)」を分離した設計(ユーザー
+    # 要望:「ダブルトップは本来ショートエントリー用の反転パターンだが...
+    # チャートパターンの検出とエントリーシグナルを分離して設計したい」)。
     IndicatorSpec(
         "double_top_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.3, 0.5, 0.75, 1.0]},
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_top_failed", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_top_exists", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
     ),
     IndicatorSpec(
         "double_bottom_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.3, 0.5, 0.75, 1.0]},
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_bottom_failed", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_bottom_exists", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
+    # Retest/Expired)をstateパラメータで選ぶ統合版(ユーザー要望:「チャート
+    # パターンは基本的にはすべてこの運用にする」)。stateは文字列選択肢な
+    # ので、数値サンプリング用のparam_choicesには含めない(自動探索側での
+    # state選択はapi_server.py::INDICATOR_PARAM_SPECSのstring_choiceで
+    # 手動ビルダーからのみ選ぶ、現状の設計)。
+    IndicatorSpec(
+        "double_top", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_bottom", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    # 谷2(山2)の探索方法だけがdouble_top/double_bottomと違う別版
+    # (ユーザー要望:「谷2の探索方法をピボット安値バージョンで別に実装
+    # して。今の構造はそのまま別に残して」)。
+    IndicatorSpec(
+        "double_top_pivot", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_bottom_pivot", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
+    ),
+    IndicatorSpec(
+        "double_top_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
+    ),
+    IndicatorSpec(
+        "double_bottom_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
     IndicatorSpec(
         "triple_top_breakdown", "boolean_signal", literal_choices=[1.0],
@@ -947,11 +1067,11 @@ INDICATOR_POOL.extend([
     ),
     IndicatorSpec(
         "aroon_up", "oscillator_0_100", param_ranges={"period": (2, 100)},
-        allow_indicator_pair=True, literal_range=(0.0, 100.0),
+        allow_indicator_pair=True, literal_range=(0.0, 100.0), pair_group="aroon",
     ),
     IndicatorSpec(
         "aroon_down", "oscillator_0_100", param_ranges={"period": (2, 100)},
-        allow_indicator_pair=True, literal_range=(0.0, 100.0),
+        allow_indicator_pair=True, literal_range=(0.0, 100.0), pair_group="aroon",
     ),
     IndicatorSpec(
         "aroon_oscillator", "unitless_ratio", literal_range=(-100.0, 100.0), param_ranges={"period": (10, 30)},
@@ -971,8 +1091,16 @@ INDICATOR_POOL.extend([
         "keltner_lower", "price_level", allow_indicator_pair=True,
         param_ranges={"period": (10, 50), "atr_period": (7, 20)}, param_choices={"multiplier": [1.5, 2.0, 2.5]},
     ),
-    IndicatorSpec("obv", "volatility", allow_indicator_pair=True),
-    IndicatorSpec("ad_line", "volatility", allow_indicator_pair=True),
+    # kind="volatility"は「対称通貨ペアで価格帯が違いすぎるため固定値とは
+    # 比較不可・同じkind同士(ATRや各種distなど)とだけ比較する」という設計
+    # だが、OBV/A・Dラインはボラティリティ(値幅)ではなく出来高の累積値
+    # (データ開始時点からの累計で、スケールも符号も価格の値幅とは無関係)
+    # のため、誤ってvolatility扱いになっていると「終値とEMAの距離」等の
+    # 比較先候補にOBVが出てしまう不具合があった(ユーザー報告:「終値と
+    # EMAの距離の比較先一覧っておかしくない?」)。専用kindに分離し、
+    # 同じ出来高累積系同士(OBV⇔A/Dライン)でだけ比較できるようにする。
+    IndicatorSpec("obv", "volume_flow", allow_indicator_pair=True),
+    IndicatorSpec("ad_line", "volume_flow", allow_indicator_pair=True),
     IndicatorSpec("mfi", "oscillator_0_100", param_ranges={"period": (7, 30)}, literal_range=(20.0, 80.0)),
     IndicatorSpec("cmf", "unitless_ratio", literal_range=(-0.3, 0.3), param_ranges={"period": (10, 30)}),
     IndicatorSpec("woodie_pivot", "price_level", allow_indicator_pair=True),
@@ -1301,7 +1429,13 @@ INDICATOR_POOL.extend([
     ),
     IndicatorSpec(
         "correlation_close_ema", "unitless_ratio", literal_range=(-1.0, 1.0),
-        param_ranges={"length": (10, 50), "ema_length": (10, 50)},
+        # length(相関を計算するローリング期間)は10〜50のままで妥当だが、
+        # ema_length(相関を取る相手のEMA自体の期間)は他のEMA系指標と同じ
+        # 10〜300(目安9/20/50/100/200)にしないと、20/50/100/200のような
+        # 定番のEMA期間と相関を見たい時に合わない(ユーザー報告:「終値と
+        # EMAの相関係数のEMA期間の目安10,20,34,50ってなってるけど、
+        # 25,50,100,200とかが普通じゃない?」)。
+        param_ranges={"length": (10, 50), "ema_length": (10, 300)},
     ),
     IndicatorSpec(
         "correlation_oscillator", "unitless_ratio", literal_range=(-1.0, 1.0),
@@ -1427,6 +1561,76 @@ def _apply_value_presets(pool: list[IndicatorSpec]) -> None:
 
 
 _apply_value_presets(INDICATOR_POOL)
+
+
+# 定義上(数式そのものの構造上)絶対に超えられない範囲だけを手入力する
+# ホワイトリスト - 「だいたいこの範囲に収まる」程度の推測では入れない
+# (ユーザー報告:「角度の固定値1000とか入れたらどうなるの?」で発覚 -
+# 固定値入力欄に上限が一切無く、絶対に真にも偽にもならない意味のない
+# 条件を打ててしまっていた)。oscillator_0_100 kind全体は下の
+# _apply_literal_hard_bounds()で一括0〜100にしているため、ここには
+# それ以外のkindの指標だけを個別に列挙する。
+_LITERAL_HARD_BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "hour": (0.0, 23.0),
+    "weekday": (0.0, 6.0),
+    "month": (1.0, 12.0),
+    # arctan()ベースの角度指標 - 定義上-90度・90度を超えられない
+    # (engine/derived_indicators.py::ema_slope_degrees/linreg_angle_degrees)。
+    "ema_slope_degrees": (-90.0, 90.0),
+    "linreg_angle_degrees": (-90.0, 90.0),
+    # Pearson相関係数 - 定義上-1〜1。
+    "correlation_close_ema": (-1.0, 1.0),
+    "correlation_oscillator": (-1.0, 1.0),
+    # ローリング百分位順位 - 定義上0〜100(engine/derived_indicators.py::
+    # _rolling_percentile_rank)。
+    "percentile_rank_rsi": (0.0, 100.0),
+    "percentile_rank_atr": (0.0, 100.0),
+    "percentile_rank_body": (0.0, 100.0),
+    # Aroon Oscillator = Aroon Up - Aroon Down、両方0〜100なので-100〜100。
+    "aroon_oscillator": (-100.0, 100.0),
+    # Williams %R - 定義上-100〜0(engine/technical_indicators.py::williams_r)。
+    "williams_r": (-100.0, 0.0),
+    # Chande Momentum Oscillator = 100*(上昇分合計-下降分合計)/(上昇分合計+
+    # 下降分合計) - 分子の絶対値は定義上必ず分母以下になるため-100〜100
+    # (engine/derived_indicators.py::cmo)。
+    "cmo": (-100.0, 100.0),
+    # 当日レンジ内での位置 - 分母が当日自身の高値/安値そのものなので
+    # 定義上0〜1を超えられない(ボリンジャー%B等、過去N本の高安が分母の
+    # 指標は価格がバンド外に出ると1を超え得るため対象外、literal_rangeが
+    # -0.2〜1.2なのはそのため)。
+    "today_range_position": (0.0, 1.0),
+    # 以下、絶対値(距離)ベースで下限0は確実だが、上限は理論上際限が無い
+    # ため片側だけ制限する(ユーザー報告:「EMAからの距離(ATR倍数)の固定値
+    # はどんな値を入れればいいの?」→この指標が絶対値÷ATRで必ず0以上に
+    # なることの確認から発覚)。minutes_since_london_open/ny_openは一見
+    # 距離っぽいが、セッション開始前は負の値を取る設計のため対象外
+    # (engine/derived_indicators.py::_minutes_since_session_openの
+    # docstring参照)。
+    "dist_to_ema_atr_ratio": (0.0, None),
+    "dist_close_ema_pct": (0.0, None),
+    "today_range_pct_of_adr": (0.0, None),
+    "dist_to_round_number": (0.0, None),
+    # (Upper-Lower)/Middle*100 - Upper>=Lower、Middleは価格なので常に正、
+    # よって必ず0以上(engine/derived_indicators.py::bb_width/bb_width_percent)。
+    "bb_width_percent": (0.0, None),
+    "bb_width": (0.0, None),
+    # 対数リターンの標準偏差×√annualization_factor×100 - 標準偏差ベース
+    # なので必ず0以上(engine/derived_indicators.py::historical_volatility)。
+    "historical_volatility": (0.0, None),
+}
+
+
+def _apply_literal_hard_bounds(pool: list[IndicatorSpec]) -> None:
+    for spec in pool:
+        if spec.name in _LITERAL_HARD_BOUNDS:
+            spec.literal_hard_bound = _LITERAL_HARD_BOUNDS[spec.name]
+        elif spec.kind == "oscillator_0_100":
+            # RSI/ADX/DI/Stochastic/MFI/Aroon Up・Down/Choppiness Index/
+            # Connors RSI等、このkind全体が定義上0〜100のため一括指定。
+            spec.literal_hard_bound = (0.0, 100.0)
+
+
+_apply_literal_hard_bounds(INDICATOR_POOL)
 
 
 def pool_by_category(pool: list[IndicatorSpec] = INDICATOR_POOL) -> dict[str, list[IndicatorSpec]]:

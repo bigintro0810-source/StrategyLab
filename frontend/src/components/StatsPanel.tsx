@@ -6,13 +6,20 @@ interface Props {
   symbol: string | undefined
 }
 
-function fmt(v: number | undefined, digits = 2): string {
-  if (v === undefined || Number.isNaN(v)) return '-'
+// バックエンドはpandasのto_json()経由でNaNをJSONのnullとしてシリアライズ
+// する(main.py/api_server.pyの既存の挙動) - DD=0でCalmar/Recoveryが
+// ゼロ除算になる等、トレード数が少ない結果では珍しくない。v === undefined
+// だけのガードだとnullをすり抜けてしまい、null.toFixed()で例外を投げて
+// <StatsPanel>ごとクラッシュしていた(ユーザー報告:「ストラテジー詳細
+// 画面を開くとブラックアウトする」- エラーバウンダリが無いため画面全体が
+// 真っ黒になっていた)。
+function fmt(v: number | null | undefined, digits = 2): string {
+  if (v == null || Number.isNaN(v)) return '-'
   return v.toFixed(digits)
 }
 
-function signedFmt(v: number | undefined, digits: number): string {
-  if (v === undefined || Number.isNaN(v)) return '-'
+function signedFmt(v: number | null | undefined, digits: number): string {
+  if (v == null || Number.isNaN(v)) return '-'
   return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}`
 }
 

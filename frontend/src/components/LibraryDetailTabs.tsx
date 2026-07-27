@@ -25,6 +25,9 @@ export interface LibraryTabData {
   // 単位で持つ(AutoExplorationDetail.tsx参照 - 別画面へ移動してこの
   // コンポーネント自体がアンマウントされても復元できるようにするため)。
   activeTab: TabId
+  // チャートのスクロール/ズーム位置も同じ理由でid単位で持つ(ChartPanel.tsx
+  // 参照)。
+  chartVisibleRange: { from: number; to: number } | null
 }
 
 interface Props {
@@ -40,6 +43,7 @@ interface Props {
   onToggleCompare: (id: string) => void
   onToggleComposite: (id: string) => void
   onTabChange: (id: string, tab: TabId) => void
+  onChartRangeChange: (id: string, range: { from: number; to: number }) => void
   // 何も開いていない時の「ストラテジー詳細確認対象を追加」ピッカー(AddCandidateModal.tsx)
   // 用 - 比較/合成タブと同じ候補一覧・トグル関数をApp.tsx側から渡す。
   candidates: CompositeCandidate[]
@@ -116,6 +120,7 @@ export default function LibraryDetailTabs({
   onToggleCompare,
   onToggleComposite,
   onTabChange,
+  onChartRangeChange,
   candidates,
   onToggleInput,
 }: Props) {
@@ -244,6 +249,8 @@ export default function LibraryDetailTabs({
               onToggleComposite={() => onToggleComposite(t.id)}
               activeTab={t.activeTab}
               onTabChange={(tabId) => onTabChange(t.id, tabId)}
+              chartVisibleRange={t.chartVisibleRange}
+              onChartVisibleRangeChange={(range) => onChartRangeChange(t.id, range)}
             />
           </div>
         ))}

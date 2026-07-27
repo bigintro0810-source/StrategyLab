@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ascendingIsBetter, buildMetricColumns, passesFilters, type MetricColumn, type MetricRowLike } from '../rankingColumns'
 import FavoriteButton from './FavoriteButton'
 import type { IndicatorInfo, RankingRow } from '../types'
@@ -41,6 +41,17 @@ interface Props {
   // ref callbackで復元・継続記録する。
   scrollTopRef: React.MutableRefObject<number>
 }
+
+// 探索結果は数万行に及ぶことがあり、全行を<tr>としてDOMに載せると
+// 描画・スクロールが固まるほど重くなる(実測済み)。画面に映る範囲の前後
+// 少しだけを実描画し、残りは上下1本ずつのダミー行(高さのみ確保)で
+// スクロール量を辻褄合わせする簡易仮想化。行の高さはtext-xs+py-1+
+// border-bの実測値に近い値を固定で仮定し、OVERSCAN分だけ多めに描画して
+// 見積もりのズレを吸収する(スクロール総量はtotalRows*ROW_HEIGHT_PXで
+// 決まるため、見積もりが多少ズレても表示位置がズレるだけでスクロール
+// バーの動き自体は狂わない)。
+const ROW_HEIGHT_PX = 25
+const OVERSCAN_ROWS = 15
 
 // 「条件」は文字列で数値ソートが効かないため並び替えを禁止する。「名称」
 // (キーはrank、セルはNameTextで描画)は文字列として個別に比較する
@@ -162,6 +173,16 @@ export default function RankingTable({
   const [sortAsc, setSortAsc] = useState(false)
   const [filters, setFilters] = useState<Record<string, string>>({})
   const scrollElRef = useRef<HTMLDivElement | null>(null)
+  const [scrollTop, setScrollTop] = useState(scrollTopRef.current)
+  const [viewportHeight, setViewportHeight] = useState(600)
+
+  useEffect(() => {
+    const el = scrollElRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => setViewportHeight(el.clientHeight))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   if (rows.length === 0) {
     return <div className="p-4 text-sm text-gray-500">まだ結果がありません</div>
@@ -259,6 +280,15 @@ export default function RankingTable({
     })
   }
 
+  const fixedColumnCount = showReverseColumn ? 4 : 3
+  const totalColSpan = fixedColumnCount + columns.length
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS)
+  const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT_PX) + OVERSCAN_ROWS * 2
+  const endIndex = Math.min(sorted.length, startIndex + visibleCount)
+  const visibleRows = sorted.slice(startIndex, endIndex)
+  const topSpacerHeight = startIndex * ROW_HEIGHT_PX
+  const bottomSpacerHeight = (sorted.length - endIndex) * ROW_HEIGHT_PX
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {duplicateCount > 0 && (
@@ -283,6 +313,7 @@ export default function RankingTable({
           if (el) {
             el.scrollTop = scrollTopRef.current
             scrollElRef.current = el
+            setViewportHeight(el.clientHeight)
           } else if (scrollElRef.current) {
             scrollTopRef.current = scrollElRef.current.scrollTop
             scrollElRef.current = null
@@ -290,6 +321,7 @@ export default function RankingTable({
         }}
         onScroll={(e) => {
           scrollTopRef.current = e.currentTarget.scrollTop
+          setScrollTop(e.currentTarget.scrollTop)
         }}
         className="min-h-0 flex-1 overflow-y-auto"
       >
@@ -336,13 +368,18 @@ export default function RankingTable({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row, i) => {
+            {topSpacerHeight > 0 && (
+              <tr aria-hidden style={{ height: topSpacerHeight }}>
+                <td colSpan={totalColSpan} />
+              </tr>
+            )}
+            {visibleRows.map((row) => {
               const rank = Number(row.rank)
               const meta = rowMeta[rank] ?? emptyMeta
               const disabled = jobId === null
               return (
                 <tr
-                  key={i}
+                  key={rank}
                   className={`border-b border-white/5 hover:bg-white/[0.04] ${
                     selectedRank != null && rank === selectedRank ? 'bg-emerald-500/10' : ''
                   }`}
@@ -401,6 +438,11 @@ export default function RankingTable({
                 </tr>
               )
             })}
+            {bottomSpacerHeight > 0 && (
+              <tr aria-hidden style={{ height: bottomSpacerHeight }}>
+                <td colSpan={totalColSpan} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

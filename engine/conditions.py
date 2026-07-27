@@ -790,7 +790,20 @@ INDICATOR_REGISTRY.update({
 # directly rather than the whole df, so each needs a thin unpacking lambda.
 INDICATOR_REGISTRY.update({
     "double_top_breakdown": lambda df, **p: _chart.double_top_breakdown(df["high"], df["low"], df["close"], **p),
+    "double_top_failed": lambda df, **p: _chart.double_top_failed(df["high"], df["low"], df["close"], **p),
+    "double_top_exists": lambda df, **p: _chart.double_top_exists(df["high"], df["low"], df["close"], **p),
     "double_bottom_breakout": lambda df, **p: _chart.double_bottom_breakout(df["high"], df["low"], df["close"], **p),
+    "double_bottom_failed": lambda df, **p: _chart.double_bottom_failed(df["high"], df["low"], df["close"], **p),
+    "double_bottom_exists": lambda df, **p: _chart.double_bottom_exists(df["high"], df["low"], df["close"], **p),
+    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
+    # Retest/Expired)をstateパラメータで選べる統合版 - 上のbreakdown/
+    # failed/exists(既存の保存済みストラテジー互換のため残置)とは別枠。
+    "double_top": lambda df, **p: _chart.double_top(df["high"], df["low"], df["close"], **p),
+    "double_bottom": lambda df, **p: _chart.double_bottom(df["high"], df["low"], df["close"], **p),
+    "double_top_pivot": lambda df, **p: _chart.double_top_pivot(df["high"], df["low"], df["close"], **p),
+    "double_bottom_pivot": lambda df, **p: _chart.double_bottom_pivot(df["high"], df["low"], df["close"], **p),
+    "double_top_shape": lambda df, **p: _chart.double_top_shape(df["high"], df["low"], df["close"], **p),
+    "double_bottom_shape": lambda df, **p: _chart.double_bottom_shape(df["high"], df["low"], df["close"], **p),
     "triple_top_breakdown": lambda df, **p: _chart.triple_top_breakdown(df["high"], df["low"], df["close"], **p),
     "triple_bottom_breakout": lambda df, **p: _chart.triple_bottom_breakout(df["high"], df["low"], df["close"], **p),
     "head_and_shoulders_breakdown": lambda df, **p: _chart.head_and_shoulders_breakdown(df["high"], df["low"], df["close"], **p),
@@ -980,6 +993,8 @@ INDICATOR_REGISTRY.update({
 })
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}
+_OFFSET_MODES = {"pips", "price_pct", "atr_pct"}
+_LITERAL_MODES = {"value", "pips", "price_pct", "atr_pct"}
 
 
 def _cache_key(indicator: str, params: dict[str, Any], timeframe: str | None = None) -> tuple:
@@ -1094,7 +1109,60 @@ class Condition:
     reference a DIFFERENT timeframe's data for the same symbol - e.g. a 15m
     backtest filtering entries by a 1h or daily EMA. Causally safe: only the
     most recently CLOSED bar of that other timeframe is ever visible to a
-    given base bar (see _align_mtf_series)."""
+    given base bar (see _align_mtf_series).
+
+    offset_pips/value_offset_pips (both optional, default 0.0) add an offset
+    to that side's resolved series before comparing - e.g. "終値 > EMA +
+    20pips" (ユーザー要望:「EMA+○○Pipsや終値-○○Pipsを選択できるように
+    してほしい」). What the number MEANS is controlled by offset_mode/
+    value_offset_mode(ユーザー要望:「オフセットで固定値○○Pipsだけじゃなく
+    価格の+○％、ATR(○)の-○％もできるようにして」):
+        "pips"      - a fixed pip count. Symbol-independent unlike a raw
+                      literal value (which is exactly why price_level/
+                      volatility-kind indicators disable literal comparison
+                      in the first place - see indicator_pool.py's
+                      docstring) - the pip SIZE itself is looked up
+                      per-symbol at evaluate time (evaluate_condition_tree's
+                      pip_size argument), only the pip COUNT is stored here.
+        "price_pct" - a percentage of the CURRENT CLOSE price (not of the
+                      side's own resolved value - confirmed with the user:
+                      a single, consistent "today's price scale" reference
+                      regardless of which indicator the offset is attached
+                      to, matching how ATR-based stop distances are usually
+                      quoted). Recomputed per-bar (dynamic array, not a
+                      scalar) since close price moves.
+        "atr_pct"   - a percentage of that side's own ATR(offset_atr_length)
+                      value, also recomputed per-bar.
+    offset_atr_length/value_offset_atr_length (default 14) only matter when
+    the corresponding mode is "atr_pct". Meaningless for non-price-unit
+    kinds (RSI, booleans, etc) - engine/indicator_pool.py's frontend-facing
+    kind list is what the UI uses to only offer this on kinds actually
+    denominated in price units (price_level/volatility/signed_price_diff);
+    the engine itself doesn't validate this and will just add the offset to
+    whatever series it's given if asked to.
+
+    literal_mode/literal_atr_length (only meaningful when `value` is a plain
+    number, not an indicator reference) reinterpret that number the same way
+    offset_mode does, instead of comparing to it verbatim - e.g. "実体サイズ
+    > 価格の2%" or "実体サイズ > ATRの50%" (ユーザー要望:「固定値でオフ
+    セットと同じように価格の％とATRの％を選べるようにしてほしい」). Reuses
+    _resolve_offset() since the underlying math is identical to what
+    offset_mode already computes:
+        "value"     - the number as-is, no conversion (price_level-kind
+                      indicators - close/high/low/etc - where the literal
+                      IS meant to be a raw price level, e.g. "終値 > 150.5").
+        "pips"      - the number × the symbol's pip size (volatility/
+                      signed_price_diff-kind indicators - avg_body_size等 -
+                      where the literal is a price DIFFERENCE, so Pipsで
+                      入力する方が自然。ユーザー要望:「固定値の種類の
+                      プルダウンに価格とPips追加して。価格そのものが価格。
+                      価格差はPipsにして」).
+        "price_pct" - X% of the current close price.
+        "atr_pct"   - X% of ATR(literal_atr_length).
+    The frontend only ever offers "value" for price_level-kind indicators and
+    "pips" for volatility/signed_price_diff-kind ones (never both on the same
+    indicator) - the engine itself doesn't enforce this pairing and will
+    honor whichever literal_mode it's given."""
 
     indicator: str
     operator: str
@@ -1103,16 +1171,49 @@ class Condition:
     value_params: dict[str, Any] = field(default_factory=dict)
     timeframe: str | None = None
     value_timeframe: str | None = None
+    offset_pips: float = 0.0
+    value_offset_pips: float = 0.0
+    offset_mode: str = "pips"
+    value_offset_mode: str = "pips"
+    offset_atr_length: int = 14
+    value_offset_atr_length: int = 14
+    literal_mode: str = "value"
+    literal_atr_length: int = 14
 
     def __post_init__(self) -> None:
         if self.operator not in _OPERATORS:
             raise ValueError(f"未知のoperatorです: {self.operator}")
+        if self.offset_mode not in _OFFSET_MODES:
+            raise ValueError(f"未知のoffset_modeです: {self.offset_mode}")
+        if self.value_offset_mode not in _OFFSET_MODES:
+            raise ValueError(f"未知のvalue_offset_modeです: {self.value_offset_mode}")
+        if self.literal_mode not in _LITERAL_MODES:
+            raise ValueError(f"未知のliteral_modeです: {self.literal_mode}")
+
+    def _resolve_offset(
+        self, df: pd.DataFrame, cache: dict, amount: float, mode: str, atr_length: int, pip_size: float
+    ) -> Any:
+        if mode == "price_pct":
+            return df["close"].to_numpy(dtype=float) * (amount / 100.0)
+        if mode == "atr_pct":
+            atr_series = _resolve_series(df, cache, "atr", {"length": int(atr_length)})
+            return atr_series * (amount / 100.0)
+        return amount * pip_size
 
     def evaluate(self, df: pd.DataFrame, cache: dict) -> np.ndarray:
+        pip_size = cache.get("__pip_size__", 0.0001)
         left = _resolve_series(df, cache, self.indicator, self.params, self.timeframe)
+        if self.offset_pips:
+            left = left + self._resolve_offset(df, cache, self.offset_pips, self.offset_mode, self.offset_atr_length, pip_size)
 
         if isinstance(self.value, str):
             right = _resolve_series(df, cache, self.value, self.value_params, self.value_timeframe)
+            if self.value_offset_pips:
+                right = right + self._resolve_offset(
+                    df, cache, self.value_offset_pips, self.value_offset_mode, self.value_offset_atr_length, pip_size
+                )
+        elif self.literal_mode != "value":
+            right = self._resolve_offset(df, cache, float(self.value), self.literal_mode, self.literal_atr_length, pip_size)
         else:
             right = float(self.value)
 
@@ -1145,6 +1246,14 @@ class Condition:
             "value_params": self.value_params,
             "timeframe": self.timeframe,
             "value_timeframe": self.value_timeframe,
+            "offset_pips": self.offset_pips,
+            "value_offset_pips": self.value_offset_pips,
+            "offset_mode": self.offset_mode,
+            "value_offset_mode": self.value_offset_mode,
+            "offset_atr_length": self.offset_atr_length,
+            "value_offset_atr_length": self.value_offset_atr_length,
+            "literal_mode": self.literal_mode,
+            "literal_atr_length": self.literal_atr_length,
         }
 
     @staticmethod
@@ -1160,6 +1269,14 @@ class Condition:
             value_params=dict(data.get("value_params", {})),
             timeframe=data.get("timeframe"),
             value_timeframe=data.get("value_timeframe"),
+            offset_pips=float(data.get("offset_pips", 0.0) or 0.0),
+            value_offset_pips=float(data.get("value_offset_pips", 0.0) or 0.0),
+            offset_mode=str(data.get("offset_mode") or "pips"),
+            value_offset_mode=str(data.get("value_offset_mode") or "pips"),
+            offset_atr_length=int(data.get("offset_atr_length") or 14),
+            value_offset_atr_length=int(data.get("value_offset_atr_length") or 14),
+            literal_mode=str(data.get("literal_mode") or "value"),
+            literal_atr_length=int(data.get("literal_atr_length") or 14),
         )
 
 
@@ -1203,9 +1320,14 @@ def node_from_dict(data: dict) -> Union[Condition, ConditionGroup]:
 
 
 def evaluate_condition_tree(
-    tree: dict, df: pd.DataFrame, symbol: str | None = None, cache: dict | None = None
+    tree: dict, df: pd.DataFrame, symbol: str | None = None, cache: dict | None = None, pip_size: float = 0.0001
 ) -> np.ndarray:
     """Entry point used by engine/backtest_engine.py: JSON dict in, boolean array out.
+
+    `pip_size` is the symbol's own pip size (e.g. 0.01 for JPY pairs), used
+    only by Condition nodes with a nonzero offset_pips/value_offset_pips
+    (see Condition's docstring) - callers that never set an offset can
+    ignore this and keep the default.
 
     `symbol` is only required if the tree contains a node with a `timeframe`
     different from the backtest's own base timeframe (multi-timeframe
@@ -1230,4 +1352,5 @@ def evaluate_condition_tree(
         cache = {}
     cache["__symbol__"] = symbol
     cache["__base_timeframe__"] = _infer_timeframe_label(df["datetime"])
+    cache["__pip_size__"] = pip_size
     return node.evaluate(df, cache)

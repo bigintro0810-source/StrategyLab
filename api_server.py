@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from engine import chart_patterns
 from engine.conditions import INDICATOR_REGISTRY, _infer_timeframe_label, _resolve_series
 from engine.indicator_pool import CATEGORIES, INDICATOR_POOL, LEVEL_PRESETS
 from engine.params import reconstruct_params_from_row
@@ -771,9 +772,17 @@ async def get_backtest_status(job_id: str) -> dict:
 
 
 def _read_csv_records(path: Path) -> list[dict]:
-    if not path.exists():
+    if not path.exists() or path.stat().st_size == 0:
         return []
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        # トレード0件のストラテジー(ヘッダー行すら書き出されないCSV)は
+        # エラーではなく単に「結果が空」- 500を返して結果画面ごと出せなく
+        # するのではなく、空リストとして扱う(ユーザー報告:「バックテスト
+        # 実行しても結果が表示されない」- ダブルトップの新条件を厳しくした
+        # ことで実際にトレード0件のケースを踏みやすくなった)。
+        return []
     records = json.loads(df.to_json(orient="records", date_format="iso"))
 
     # condition_tree/long_condition_tree/short_condition_tree cells are Python
@@ -876,20 +885,20 @@ INDICATOR_LABELS: dict[str, str] = {
     "minus_di": "-DI",
     "supertrend_line": "SuperTrendライン",
     "supertrend_direction": "SuperTrend方向(1=上昇/-1=下降)",
-    "fvg_bullish": "FVG(強気)",
-    "fvg_bearish": "FVG(弱気)",
-    "order_block_bullish": "オーダーブロック(強気)",
-    "order_block_bearish": "オーダーブロック(弱気)",
-    "liquidity_sweep_bullish": "流動性スイープ(強気)",
-    "liquidity_sweep_bearish": "流動性スイープ(弱気)",
-    "bos_bullish": "BOS(強気/上昇継続)",
-    "bos_bearish": "BOS(弱気/下降継続)",
-    "choch_bullish": "CHoCH(強気/上昇転換)",
-    "choch_bearish": "CHoCH(弱気/下降転換)",
-    "breaker_block_bullish": "ブレイカーブロック(強気)",
-    "breaker_block_bearish": "ブレイカーブロック(弱気)",
-    "mitigation_block_bullish": "ミティゲーションブロック(強気)",
-    "mitigation_block_bearish": "ミティゲーションブロック(弱気)",
+    "fvg_bullish": "FVG(上昇)",
+    "fvg_bearish": "FVG(下降)",
+    "order_block_bullish": "オーダーブロック(上昇)",
+    "order_block_bearish": "オーダーブロック(下降)",
+    "liquidity_sweep_bullish": "流動性スイープ(上昇)",
+    "liquidity_sweep_bearish": "流動性スイープ(下降)",
+    "bos_bullish": "BOS(上昇継続)",
+    "bos_bearish": "BOS(下降継続)",
+    "choch_bullish": "CHoCH(上昇転換)",
+    "choch_bearish": "CHoCH(下降転換)",
+    "breaker_block_bullish": "ブレイカーブロック(上昇)",
+    "breaker_block_bearish": "ブレイカーブロック(下降)",
+    "mitigation_block_bullish": "ミティゲーションブロック(上昇)",
+    "mitigation_block_bearish": "ミティゲーションブロック(下降)",
     "vwap": "VWAP(出来高加重平均価格・日次リセット)",
     "hour": "時刻(JST)",
     "weekday": "曜日(0=月〜6=日)",
@@ -922,20 +931,20 @@ INDICATOR_LABELS: dict[str, str] = {
     "no_lower_wick": "下ヒゲなし",
     "marubozu_bullish": "陽の丸坊主",
     "marubozu_bearish": "陰の丸坊主",
-    "pin_bar_bullish": "ピンバー(強気)",
-    "pin_bar_bearish": "ピンバー(弱気)",
+    "pin_bar_bullish": "ピンバー(上昇)",
+    "pin_bar_bearish": "ピンバー(下降)",
     "hammer": "ハンマー",
     "hanging_man": "吊り線",
     "inverted_hammer": "逆ハンマー",
     "shooting_star": "シューティングスター",
-    "engulfing_bullish": "包み足(強気)",
-    "engulfing_bearish": "包み足(弱気)",
+    "engulfing_bullish": "包み足(上昇)",
+    "engulfing_bearish": "包み足(下降)",
     "inside_bar": "Inside Bar",
     "outside_bar": "Outside Bar",
     "tweezer_top": "Tweezer Top",
     "tweezer_bottom": "Tweezer Bottom",
-    "harami_bullish": "はらみ足(強気)",
-    "harami_bearish": "はらみ足(弱気)",
+    "harami_bullish": "はらみ足(上昇)",
+    "harami_bearish": "はらみ足(下降)",
     "gap_up": "ギャップアップ",
     "gap_down": "ギャップダウン",
     "morning_star": "Morning Star",
@@ -985,10 +994,10 @@ INDICATOR_LABELS: dict[str, str] = {
     "dist_close_bb_lower": "終値とボリンジャー下限の距離",
     "dist_high_bb_lower": "高値とボリンジャー下限の距離",
     "dist_low_bb_lower": "安値とボリンジャー下限の距離",
-    "dist_order_block_bullish": "直近の強気オーダーブロックまでの距離",
-    "dist_order_block_bearish": "直近の弱気オーダーブロックまでの距離",
-    "dist_fvg_bullish": "直近の強気FVGまでの距離",
-    "dist_fvg_bearish": "直近の弱気FVGまでの距離",
+    "dist_order_block_bullish": "直近の上昇オーダーブロックまでの距離",
+    "dist_order_block_bearish": "直近の下降オーダーブロックまでの距離",
+    "dist_fvg_bullish": "直近の上昇FVGまでの距離",
+    "dist_fvg_bearish": "直近の下降FVGまでの距離",
     "dist_bos_bullish": "直近の上昇スイング高値(BOS節目)までの距離",
     "dist_bos_bearish": "直近の下降スイング安値(BOS節目)までの距離",
     "minutes_since_london_open": "ロンドンオープンからの経過分数",
@@ -1084,39 +1093,59 @@ INDICATOR_LABELS: dict[str, str] = {
     "today_new_high": "当日高値更新",
     "today_new_low": "当日安値更新",
     # 一瞬だけ起きる変化
-    "rsi_divergence_bearish": "RSI弱気ダイバージェンス(簡易版)",
-    "rsi_divergence_bullish": "RSI強気ダイバージェンス(簡易版)",
-    "macd_divergence_bearish": "MACD弱気ダイバージェンス(簡易版)",
-    "macd_divergence_bullish": "MACD強気ダイバージェンス(簡易版)",
-    "ema_perfect_order_bullish": "EMAパーフェクトオーダー成立(強気)",
-    "ema_perfect_order_bearish": "EMAパーフェクトオーダー成立(弱気)",
-    "ema_perfect_order_broken_bullish": "EMAパーフェクトオーダー崩れ(強気→崩壊)",
-    "ema_perfect_order_broken_bearish": "EMAパーフェクトオーダー崩れ(弱気→崩壊)",
+    "rsi_divergence_bearish": "RSI下降ダイバージェンス(簡易版)",
+    "rsi_divergence_bullish": "RSI上昇ダイバージェンス(簡易版)",
+    "macd_divergence_bearish": "MACD下降ダイバージェンス(簡易版)",
+    "macd_divergence_bullish": "MACD上昇ダイバージェンス(簡易版)",
+    "ema_perfect_order_bullish": "EMAパーフェクトオーダー成立(上昇)",
+    "ema_perfect_order_bearish": "EMAパーフェクトオーダー成立(下降)",
+    "ema_perfect_order_broken_bullish": "EMAパーフェクトオーダー崩れ(上昇→崩壊)",
+    "ema_perfect_order_broken_bearish": "EMAパーフェクトオーダー崩れ(下降→崩壊)",
     "first_pullback_after_breakout_bullish": "上抜けブレイクアウト後の初押し",
     "first_pullback_after_breakout_bearish": "下抜けブレイクアウト後の初戻り",
-    "fvg_first_retest_bullish": "強気FVGの初回リテスト",
-    "fvg_first_retest_bearish": "弱気FVGの初回リテスト",
-    "order_block_first_retest_bullish": "強気オーダーブロックの初回リテスト",
-    "order_block_first_retest_bearish": "弱気オーダーブロックの初回リテスト",
+    "fvg_first_retest_bullish": "上昇FVGの初回リテスト",
+    "fvg_first_retest_bearish": "下降FVGの初回リテスト",
+    "order_block_first_retest_bullish": "上昇オーダーブロックの初回リテスト",
+    "order_block_first_retest_bearish": "下降オーダーブロックの初回リテスト",
     # 2026-07-08追加(2巡目): 追加ローソク足パターン
     "long_legged_doji": "足長同時線(両ヒゲとも長い十字線)",
     "dragonfly_doji": "トンボ(下ヒゲのみ長い十字線)",
     "gravestone_doji": "塔婆(上ヒゲのみ長い十字線)",
     "spinning_top": "スピニングトップ(小実体+両ヒゲ均衡)",
-    "kicker_bullish": "蹴り足(強気、ギャップ+大陽線)",
-    "kicker_bearish": "蹴り足(弱気、ギャップ+大陰線)",
-    "belt_hold_bullish": "Belt Hold(強気)",
-    "belt_hold_bearish": "Belt Hold(弱気)",
-    "abandoned_baby_bullish": "捨て子線(強気)",
-    "abandoned_baby_bearish": "捨て子線(弱気)",
+    "kicker_bullish": "蹴り足(上昇、ギャップ+大陽線)",
+    "kicker_bearish": "蹴り足(下降、ギャップ+大陰線)",
+    "belt_hold_bullish": "Belt Hold(上昇)",
+    "belt_hold_bearish": "Belt Hold(下降)",
+    "abandoned_baby_bullish": "捨て子線(上昇)",
+    "abandoned_baby_bearish": "捨て子線(下降)",
     "three_inside_up": "Three Inside Up",
     "three_inside_down": "Three Inside Down",
     "three_outside_up": "Three Outside Up",
     "three_outside_down": "Three Outside Down",
     "dist_to_round_number": "キリ番(ラウンドナンバー)までの距離",
     # チャートパターン (engine/chart_patterns.py)
-    "double_top_breakdown": "ダブルトップ ネックライン割れ",
-    "double_bottom_breakout": "ダブルボトム ネックライン突破",
+    "double_top_breakdown": "ダブルトップ ネックライン割れ(ショート)",
+    "double_top_failed": "ダブルトップ不成立(ロング)",
+    "double_top_exists": "ダブルトップ形成中(フィルター)",
+    "double_bottom_breakout": "ダブルボトム ネックライン突破(ロング)",
+    "double_bottom_failed": "ダブルボトム不成立(ショート)",
+    "double_bottom_exists": "ダブルボトム形成中(フィルター)",
+    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
+    # Retest/Expired)をパラメータで選べる統合版。上のbreakdown/failed/
+    # exists(既存の保存済みストラテジー互換のため残置)とは別の選び方。
+    "double_top": "ダブルトップ",
+    "double_bottom": "ダブルボトム",
+    # 谷2(山2)の探索方法だけがdouble_top/double_bottomと違う別版
+    # (ユーザー要望:「谷2の探索方法をピボット安値バージョンで別に実装
+    # して。今の構造はそのまま別に残して」)。
+    "double_top_pivot": "ダブルトップ(谷2ピボット版)",
+    "double_bottom_pivot": "ダブルボトム(谷2ピボット版)",
+    # 形状判定版(2026-07-25) - 山1/谷1の値幅込みピボット判定・事前トレンド
+    # 確認・値動きのなめらかさ(効率比・直線乖離)・山1前点との対称性等、
+    # 「本物のW字/M字か」をより厳密に判定する完全新規ロジック。既存の
+    # double_top/double_bottom/*_pivotとは無関係の別実装(そちらは無変更)。
+    "double_top_shape": "ダブルトップ(形状判定版)",
+    "double_bottom_shape": "ダブルボトム(形状判定版)",
     "triple_top_breakdown": "トリプルトップ ネックライン割れ",
     "triple_bottom_breakout": "トリプルボトム ネックライン突破",
     "head_and_shoulders_breakdown": "ヘッド&ショルダーズ ネックライン割れ",
@@ -1129,8 +1158,8 @@ INDICATOR_LABELS: dict[str, str] = {
     "falling_wedge_breakout": "下降ウェッジ 上抜けブレイク",
     "bull_flag_breakout": "ブルフラッグ ブレイクアウト",
     "bear_flag_breakdown": "ベアフラッグ ブレイクダウン",
-    "bullish_pennant_breakout": "強気ペナント ブレイクアウト",
-    "bearish_pennant_breakdown": "弱気ペナント ブレイクダウン",
+    "bullish_pennant_breakout": "上昇ペナント ブレイクアウト",
+    "bearish_pennant_breakdown": "下降ペナント ブレイクダウン",
     "in_range_box": "レンジボックス継続中",
     "range_box_breakout_bullish": "レンジボックス 上抜けブレイク",
     "range_box_breakdown_bearish": "レンジボックス 下抜けブレイク",
@@ -1185,8 +1214,8 @@ INDICATOR_LABELS: dict[str, str] = {
     "ttm_squeeze": "TTMスクイーズ(BBがケルトナー内側)",
     "ttm_squeeze_release": "TTMスクイーズ解放",
     "ichimoku_price_vs_cloud": "一目: 価格vs雲(1=上,-1=下,0=中)",
-    "ichimoku_kumo_twist_bullish": "一目: 雲のねじれ(強気転換)",
-    "ichimoku_kumo_twist_bearish": "一目: 雲のねじれ(弱気転換)",
+    "ichimoku_kumo_twist_bullish": "一目: 雲のねじれ(上昇転換)",
+    "ichimoku_kumo_twist_bearish": "一目: 雲のねじれ(下降転換)",
     "ichimoku_chikou_signal": "一目: 遅行スパン相当シグナル(1=上,-1=下)",
     "linreg_slope_atr_ratio": "線形回帰の傾き(ATR倍率)",
     "linreg_angle_degrees": "線形回帰の傾き(角度)",
@@ -1197,19 +1226,19 @@ INDICATOR_LABELS: dict[str, str] = {
     "ha_bearish": "平均足 陰線",
     "ha_strong_bullish": "平均足 強い陽線(下ヒゲなし)",
     "ha_strong_bearish": "平均足 強い陰線(上ヒゲなし)",
-    "gartley_bullish": "ガートレーパターン(強気)",
-    "gartley_bearish": "ガートレーパターン(弱気)",
-    "bat_bullish": "バットパターン(強気)",
-    "bat_bearish": "バットパターン(弱気)",
-    "butterfly_bullish": "バタフライパターン(強気)",
-    "butterfly_bearish": "バタフライパターン(弱気)",
-    "crab_bullish": "クラブパターン(強気)",
-    "crab_bearish": "クラブパターン(弱気)",
+    "gartley_bullish": "ガートレーパターン(上昇)",
+    "gartley_bearish": "ガートレーパターン(下降)",
+    "bat_bullish": "バットパターン(上昇)",
+    "bat_bearish": "バットパターン(下降)",
+    "butterfly_bullish": "バタフライパターン(上昇)",
+    "butterfly_bearish": "バタフライパターン(下降)",
+    "crab_bullish": "クラブパターン(上昇)",
+    "crab_bearish": "クラブパターン(下降)",
     # 2026-07-08追加(4巡目)
-    "ab_cd_bullish": "AB=CDパターン(強気)",
-    "ab_cd_bearish": "AB=CDパターン(弱気)",
-    "three_drives_bullish": "スリードライブ(強気、3連続安値切り下げ後の反転)",
-    "three_drives_bearish": "スリードライブ(弱気、3連続高値切り上げ後の反転)",
+    "ab_cd_bullish": "AB=CDパターン(上昇)",
+    "ab_cd_bearish": "AB=CDパターン(下降)",
+    "three_drives_bullish": "スリードライブ(上昇、3連続安値切り下げ後の反転)",
+    "three_drives_bearish": "スリードライブ(下降、3連続高値切り上げ後の反転)",
     "uptrend_line_break": "上昇トレンドライン割れ",
     "downtrend_line_break": "下降トレンドライン抜け",
     "ascending_channel_break": "上昇平行チャネル下抜け",
@@ -1218,8 +1247,8 @@ INDICATOR_LABELS: dict[str, str] = {
     "false_breakout_bearish_reversal": "フェイクブレイク(上放れ失敗からの反転)",
     "nr4": "NR4(過去4本で最も狭いレンジ)",
     "nr7": "NR7(過去7本で最も狭いレンジ)",
-    "volume_climax_bullish": "出来高クライマックス(強気)",
-    "volume_climax_bearish": "出来高クライマックス(弱気)",
+    "volume_climax_bullish": "出来高クライマックス(上昇)",
+    "volume_climax_bearish": "出来高クライマックス(下降)",
     # 2026-07-08追加(5巡目、HFM記事の未実装分)
     "saucer_top": "ソーサートップ(丸い天井)",
     "saucer_bottom": "ソーサーボトム(丸い底)",
@@ -1232,10 +1261,10 @@ INDICATOR_LABELS: dict[str, str] = {
     "cup_with_handle_breakout": "カップウィズハンドル ブレイクアウト",
     "equal_high": "Equal High(直近高値がほぼ同水準に並ぶ、流動性プール)",
     "equal_low": "Equal Low(直近安値がほぼ同水準に並ぶ、流動性プール)",
-    "mss_bullish": "MSS(強気/Market Structure Shift)",
-    "mss_bearish": "MSS(弱気/Market Structure Shift)",
-    "three_line_strike_bullish": "Three Line Strike(強気)",
-    "three_line_strike_bearish": "Three Line Strike(弱気)",
+    "mss_bullish": "MSS(上昇/Market Structure Shift)",
+    "mss_bearish": "MSS(下降/Market Structure Shift)",
+    "three_line_strike_bullish": "Three Line Strike(上昇)",
+    "three_line_strike_bearish": "Three Line Strike(下降)",
     "tasuki_gap_upside": "上放れタスキ型",
     "tasuki_gap_downside": "下放れタスキ型",
 }
@@ -1269,6 +1298,185 @@ _BOLLINGER_SOURCE_CHOICES: list[dict] = [
 _BREAK_BASIS_CHOICES: list[dict] = [
     {"value": "close", "label": "終値ブレイク"},
     {"value": "wick", "label": "ヒゲ(高値/安値)ブレイク"},
+]
+
+# ダブルトップ/ダブルボトムの厳密仕様(ユーザー提供仕様書) -
+# engine/chart_patterns.py::double_top_breakdown/double_bottom_breakoutの
+# top_tolerance_type/min_valley_depth_typeと1対1対応。
+_PATTERN_TOLERANCE_TYPE_CHOICES: list[dict] = [
+    {"value": "atr", "label": "ATR倍率"},
+    {"value": "pips", "label": "Pips"},
+    {"value": "percent", "label": "価格に対する%"},
+]
+_DOUBLE_TOP_BREAKOUT_TYPE_CHOICES: list[dict] = [
+    {"value": "close", "label": "終値ブレイク"},
+    {"value": "low", "label": "安値(ヒゲ)ブレイク"},
+]
+_DOUBLE_BOTTOM_BREAKOUT_TYPE_CHOICES: list[dict] = [
+    {"value": "close", "label": "終値ブレイク"},
+    {"value": "high", "label": "高値(ヒゲ)ブレイク"},
+]
+
+# ダブルトップ/ダブルボトム系3指標(_breakdown・_failed・_exists、または
+# _breakout・_failed・_exists)は「パターンの検出」と「売買方向を持つ
+# シグナル」を分離した設計(ユーザー要望:「ダブルトップは本来ショート
+# エントリー用の反転パターンであるが...チャートパターンの検出とエントリー
+# シグナルを分離して設計したい」)なので、判定に使う構造パラメータは3指標
+# 共通。
+_DOUBLE_TOP_PARAM_SPEC: list[dict] = [
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 15, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 15, "type": "int"},
+    {"name": "min_bars_between_tops", "label": "山1→谷の間隔(最小本数)", "default": 10, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "山1→谷の間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "top_tolerance_type", "label": "山の水準許容誤差(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "top_tolerance", "label": "山の水準許容誤差", "default": 3.0, "type": "float"},
+    {"name": "min_valley_depth_type", "label": "谷の最低深さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "min_valley_depth", "label": "谷の最低深さ", "default": 5.0, "type": "float"},
+    {"name": "max_valley_depth_type", "label": "谷の最大深さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "max_valley_depth", "label": "谷の最大深さ(999=実質無制限)", "default": 999.0, "type": "float"},
+    {"name": "symmetry_ratio_min", "label": "山2探索窓: 谷からの本数(山1→谷の本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "山2探索窓: 谷からの本数(山1→谷の本数に対する上限倍率)", "default": 2.2, "type": "float"},
+    {"name": "trendline_tolerance_pct", "label": "山1-谷・谷-山2・山2-エントリーの直線からの乖離許容(%)", "default": 80.0, "type": "float"},
+    {"name": "breakout_type", "label": "ネックライン割れ/Failed判定基準", "default": "close", "type": "string_choice", "string_choices": _DOUBLE_TOP_BREAKOUT_TYPE_CHOICES},
+    {"name": "breakout_buffer", "label": "ブレイク判定の余白(ATR倍率)", "default": 0.5, "type": "float"},
+    {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×谷→山2の本数)未満のブレイクは無効", "default": 0.5, "type": "float"},
+    {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×谷→山2の本数)を超えるとブレイク猶予切れ", "default": 2.2, "type": "float"},
+    {"name": "pip_size", "label": "1pipのサイズ(許容誤差/谷の深さがPips指定の時のみ使用)", "default": 0.0001, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
+    {"name": "neck_prior_check_enabled", "label": "ネックの事前妥当性チェック(1=有効/0=無効)", "default": 1, "type": "choice", "choices": [1, 0]},
+    {"name": "neck_prior_lookback_ratio", "label": "ネック事前チェックの参照期間(×山1→ネックの本数)", "default": 2.2, "type": "float"},
+]
+_DOUBLE_BOTTOM_PARAM_SPEC: list[dict] = [
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 15, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 15, "type": "int"},
+    {"name": "min_bars_between_tops", "label": "谷1→山の間隔(最小本数)", "default": 10, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "谷1→山の間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "top_tolerance_type", "label": "谷の水準許容誤差(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "top_tolerance", "label": "谷の水準許容誤差", "default": 1.0, "type": "float"},
+    {"name": "min_valley_depth_type", "label": "山の最低高さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "min_valley_depth", "label": "山の最低高さ", "default": 5.0, "type": "float"},
+    {"name": "max_valley_depth_type", "label": "山の最大高さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
+    {"name": "max_valley_depth", "label": "山の最大高さ(999=実質無制限)", "default": 999.0, "type": "float"},
+    {"name": "symmetry_ratio_min", "label": "谷2探索窓: 山からの本数(谷1→山の本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "谷2探索窓: 山からの本数(谷1→山の本数に対する上限倍率)", "default": 2.2, "type": "float"},
+    {"name": "trendline_tolerance_pct", "label": "谷1-山・山-谷2・谷2-エントリーの直線からの乖離許容(%)", "default": 80.0, "type": "float"},
+    {"name": "breakout_type", "label": "ネックライン抜け/Failed判定基準", "default": "close", "type": "string_choice", "string_choices": _DOUBLE_BOTTOM_BREAKOUT_TYPE_CHOICES},
+    {"name": "breakout_buffer", "label": "ブレイク判定の余白(ATR倍率)", "default": 0.5, "type": "float"},
+    {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×山→谷2の本数)未満のブレイクは無効", "default": 0.5, "type": "float"},
+    {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×山→谷2の本数)を超えるとブレイク猶予切れ", "default": 2.2, "type": "float"},
+    {"name": "pip_size", "label": "1pipのサイズ(許容誤差/山の高さがPips指定の時のみ使用)", "default": 0.0001, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
+    {"name": "neck_prior_check_enabled", "label": "ネックの事前妥当性チェック(1=有効/0=無効)", "default": 1, "type": "choice", "choices": [1, 0]},
+    {"name": "neck_prior_lookback_ratio", "label": "ネック事前チェックの参照期間(×谷1→山の本数)", "default": 2.2, "type": "float"},
+]
+# EA Studio的な5状態モデル(ユーザー要望:「チャートパターンは基本的には
+# すべてこの運用にする」) - Detected(検出)/Confirmed(ネックライン突破)/
+# Failed After Retest(ネック付近到達後にネックライン割れ)/Failed Before
+# Retest(ネック付近未到達でネックライン割れ)/Expired(期限切れ)。
+_PATTERN_STATE_CHOICES = [
+    {"value": "detected", "label": "Detected(検出)"},
+    {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
+    {"value": "failed_after_retest", "label": "Failed After Retest(リテスト後に失敗)"},
+    {"value": "failed_before_retest", "label": "Failed Before Retest(リテスト前に失敗)"},
+    {"value": "expired", "label": "Expired(期限切れ)"},
+]
+_DOUBLE_TOP_STATE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _PATTERN_STATE_CHOICES},
+    *_DOUBLE_TOP_PARAM_SPEC,
+]
+_DOUBLE_BOTTOM_STATE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _PATTERN_STATE_CHOICES},
+    *_DOUBLE_BOTTOM_PARAM_SPEC,
+]
+
+# 形状判定版(double_top_shape/double_bottom_shape)向けの6状態モデル -
+# 早すぎるブレイクを無効化する"Rejected"を、既存の5状態に追加した独自の
+# 状態セット(既存のPATTERN_STATE_CHOICESとは別、既存indicatorは無変更)。
+_SHAPE_PATTERN_STATE_CHOICES = [
+    {"value": "detected", "label": "Detected(検出)"},
+    {"value": "rejected", "label": "Rejected(早すぎるブレイクで無効)"},
+    {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
+    {"value": "failed_after_retest", "label": "Failed After Retest(リテスト後に失敗)"},
+    {"value": "failed_before_retest", "label": "Failed Before Retest(リテスト前に失敗)"},
+    {"value": "expired", "label": "Expired(期限切れ)"},
+]
+_TRENDLINE_DEV_BASIS_CHOICES = [
+    {"value": "atr", "label": "ATR倍率"},
+    {"value": "price_pct", "label": "区間の価格差(%)"},
+]
+_SHAPE_BREAKOUT_TYPE_CHOICES = [
+    {"value": "close", "label": "終値ブレイク"},
+    {"value": "wick", "label": "ヒゲ(高値/安値)ブレイク"},
+]
+# ダブルボトム(形状判定版)のパラメータ仕様 - ユーザーとの設計レビューを
+# そのまま反映(engine/chart_patterns.py::_double_top_bottom_shape_state
+# のモジュール冒頭コメント参照)。ダブルトップ側は同じ仕様を鏡像として
+# 共有する(パラメータの意味自体は左右対称なので、ラベル文言だけ「山/谷」
+# を入れ替える)。
+_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
+    {"name": "prominence_atr_mult", "label": "谷1・谷2・ネックの値幅基準(ATR倍率)", "default": 1.0, "type": "float"},
+    {"name": "pre_trend_check_enabled", "label": "谷1前のトレンド確認(1=有効/0=無効)", "default": 0, "type": "choice", "choices": [1, 0]},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数", "default": 30, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の下げ幅基準(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "min_bars_between_tops", "label": "谷1→ネックの間隔(最小本数)", "default": 5, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "谷1→ネックの間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "symmetry_ratio_min", "label": "谷2探索窓: ネックからの本数(谷1→ネックの本数に対する下限倍率)", "default": 0.3, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "谷2探索窓: ネックからの本数(谷1→ネックの本数に対する上限倍率)", "default": 2.5, "type": "float"},
+    {"name": "top_tolerance_basis", "label": "谷1・谷2の水準許容誤差の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "top_tolerance_atr_mult", "label": "谷1・谷2の水準許容誤差(ATR倍率、基準がATR倍率の時のみ使用)", "default": 2.0, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "谷1・谷2の水準許容誤差(谷1→ネックの値幅に対する%、基準が価格差の時のみ使用)", "default": 15.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、999=実質無制限)", "default": 999.0, "type": "float"},
+    {"name": "breakout_buffer_basis", "label": "ブレイク判定の余白の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "breakout_buffer_atr_mult", "label": "ブレイク判定の余白(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.5, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%、基準が価格差の時のみ使用)", "default": 5.0, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準", "default": 0.1, "type": "float"},
+    {"name": "trendline_dev_basis", "label": "直線乖離の許容幅の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "trendline_dev_atr_mult", "label": "直線乖離の許容幅(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.9, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する%、基準が価格差の時のみ使用)", "default": 80.0, "type": "float"},
+    {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×谷1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"},
+    {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×谷1→ネックの本数)を超えるとブレイク猶予切れ", "default": 2.5, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "interval_symmetry_ratio_max", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.0, "type": "float"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
+]
+# ダブルトップ(形状判定版) - 概念は左右対称だが、既存のdouble_top/
+# double_bottomの命名慣習(「谷の最低深さ」はどちら向きでもネックラインの
+# 谷型を指すので不変、パターン自身の山1/山2はdouble_topでは「山」呼び)に
+# 合わせて、ラベル文言だけ手書きで対応させている(自動置換だと意味が壊れる
+# 箇所があるため - 例えば「谷の最低深さ」はdouble_topでも「谷」のまま)。
+_DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
+    {"name": "prominence_atr_mult", "label": "山1・山2・ネックの値幅基準(ATR倍率)", "default": 1.0, "type": "float"},
+    {"name": "pre_trend_check_enabled", "label": "山1前のトレンド確認(1=有効/0=無効)", "default": 0, "type": "choice", "choices": [1, 0]},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数", "default": 30, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の上げ幅基準(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "min_bars_between_tops", "label": "山1→ネックの間隔(最小本数)", "default": 5, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "山1→ネックの間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "symmetry_ratio_min", "label": "山2探索窓: ネックからの本数(山1→ネックの本数に対する下限倍率)", "default": 0.3, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "山2探索窓: ネックからの本数(山1→ネックの本数に対する上限倍率)", "default": 2.5, "type": "float"},
+    {"name": "top_tolerance_basis", "label": "山1・山2の水準許容誤差の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "top_tolerance_atr_mult", "label": "山1・山2の水準許容誤差(ATR倍率、基準がATR倍率の時のみ使用)", "default": 2.0, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "山1・山2の水準許容誤差(山1→ネックの値幅に対する%、基準が価格差の時のみ使用)", "default": 15.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、999=実質無制限)", "default": 999.0, "type": "float"},
+    {"name": "breakout_buffer_basis", "label": "ブレイク判定の余白の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "breakout_buffer_atr_mult", "label": "ブレイク判定の余白(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.5, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%、基準が価格差の時のみ使用)", "default": 5.0, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準", "default": 0.1, "type": "float"},
+    {"name": "trendline_dev_basis", "label": "直線乖離の許容幅の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
+    {"name": "trendline_dev_atr_mult", "label": "直線乖離の許容幅(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.9, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する%、基準が価格差の時のみ使用)", "default": 80.0, "type": "float"},
+    {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×山1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"},
+    {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 2.5, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "interval_symmetry_ratio_max", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.0, "type": "float"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
 
 INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
@@ -1522,11 +1730,11 @@ _DIST_TARGET_PARAM_SPECS: dict[str, list[dict]] = {
     "donchian_lower": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "bb_upper": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "bb_lower": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
 }
 for _target, _spec in _DIST_TARGET_PARAM_SPECS.items():
@@ -1549,6 +1757,14 @@ _SLOPE_PARAM_SPECS: dict[str, list[dict]] = {
         {"name": "signal", "label": "シグナル期間", "default": 9, "type": "int"},
     ],
     "atr": [{"name": "length", "label": "期間", "default": 14, "type": "int"}],
+    # obv/mfiはengine/derived_indicators.py::_SLOPE_SERIESには含まれている
+    # のに、ここに無かったせいでobv_rising/obv_falling/obv_consecutive_*/
+    # mfi_rising/mfi_falling/mfi_consecutive_*がパラメータ欄0件(lookback/n
+    # すら選べない)になっていた不具合の修正(ユーザー要望「変更できる
+    # パラメーターについても、必要なパラメーターを入力する欄があるか入念に
+    # 確認して」で発覚)。
+    "obv": [],
+    "mfi": [{"name": "length", "label": "期間", "default": 14, "type": "int"}],
 }
 for _series, _spec in _SLOPE_PARAM_SPECS.items():
     for _direction in ("rising", "falling"):
@@ -1559,6 +1775,20 @@ for _series, _spec in _SLOPE_PARAM_SPECS.items():
         INDICATOR_PARAM_SPECS[f"{_series}_{_direction}"] = [
             *_spec, {"name": "n", "label": "連続本数", "default": 3, "type": "int"},
         ]
+
+# EMAパーフェクトオーダー系4指標(bullish/bearish/broken_bullish/
+# broken_bearish)共通のパラメータ - 本数を3〜5から選べるようにし
+# (ユーザー要望:「パーフェクトオーダーは現在4本だけど3〜5本まで選択でき
+# るようにして」)、length_4/length_5は選んだ本数に応じてConditionRow.tsx
+# 側で表示・非表示を切り替える(show_if - countがその本数以上の時だけ表示)。
+_EMA_PERFECT_ORDER_PARAM_SPEC: list[dict] = [
+    {"name": "count", "label": "EMA本数", "default": 4, "type": "choice", "choices": [3, 4, 5]},
+    {"name": "length_1", "label": "EMA1(最短)", "default": 20, "type": "int"},
+    {"name": "length_2", "label": "EMA2", "default": 50, "type": "int"},
+    {"name": "length_3", "label": "EMA3", "default": 100, "type": "int"},
+    {"name": "length_4", "label": "EMA4", "default": 200, "type": "int", "show_if": {"param": "count", "min": 4}},
+    {"name": "length_5", "label": "EMA5(最長)", "default": 300, "type": "int", "show_if": {"param": "count", "min": 5}},
+]
 
 INDICATOR_PARAM_SPECS.update({
     "dist_order_block_bullish": [],
@@ -1591,7 +1821,7 @@ INDICATOR_PARAM_SPECS.update({
     "lower_low": [{"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
     "bb_percent_b": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "donchian_percent_position": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "dist_to_ema_atr_ratio": [
@@ -1684,11 +1914,11 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "bb_width": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "bb_width_percent": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "bull_power": [{"name": "length", "label": "EMA期間", "default": 13, "type": "int"}],
     "bear_power": [{"name": "length", "label": "EMA期間", "default": 13, "type": "int"}],
@@ -1716,13 +1946,13 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "bb_squeeze": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
         {"name": "window", "label": "比較対象期間", "default": 100, "type": "int"},
         {"name": "percentile", "label": "下位何%以下をスクイーズとするか", "default": 10.0, "type": "choice", "choices": [5.0, 10.0, 15.0, 20.0]},
     ],
     "bb_expansion": [
         {"name": "period", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
         {"name": "window", "label": "比較対象期間", "default": 100, "type": "int"},
         {"name": "percentile", "label": "下位何%以下をスクイーズとするか", "default": 10.0, "type": "choice", "choices": [5.0, 10.0, 15.0, 20.0]},
     ],
@@ -1746,30 +1976,10 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "macd_divergence_bearish": [{"name": "length", "label": "価格の高値更新判定期間", "default": 20, "type": "int"}],
     "macd_divergence_bullish": [{"name": "length", "label": "価格の安値更新判定期間", "default": 20, "type": "int"}],
-    "ema_perfect_order_bullish": [
-        {"name": "length_1", "label": "EMA1(最短)", "default": 20, "type": "int"},
-        {"name": "length_2", "label": "EMA2", "default": 50, "type": "int"},
-        {"name": "length_3", "label": "EMA3", "default": 100, "type": "int"},
-        {"name": "length_4", "label": "EMA4(最長)", "default": 200, "type": "int"},
-    ],
-    "ema_perfect_order_bearish": [
-        {"name": "length_1", "label": "EMA1(最短)", "default": 20, "type": "int"},
-        {"name": "length_2", "label": "EMA2", "default": 50, "type": "int"},
-        {"name": "length_3", "label": "EMA3", "default": 100, "type": "int"},
-        {"name": "length_4", "label": "EMA4(最長)", "default": 200, "type": "int"},
-    ],
-    "ema_perfect_order_broken_bullish": [
-        {"name": "length_1", "label": "EMA1(最短)", "default": 20, "type": "int"},
-        {"name": "length_2", "label": "EMA2", "default": 50, "type": "int"},
-        {"name": "length_3", "label": "EMA3", "default": 100, "type": "int"},
-        {"name": "length_4", "label": "EMA4(最長)", "default": 200, "type": "int"},
-    ],
-    "ema_perfect_order_broken_bearish": [
-        {"name": "length_1", "label": "EMA1(最短)", "default": 20, "type": "int"},
-        {"name": "length_2", "label": "EMA2", "default": 50, "type": "int"},
-        {"name": "length_3", "label": "EMA3", "default": 100, "type": "int"},
-        {"name": "length_4", "label": "EMA4(最長)", "default": 200, "type": "int"},
-    ],
+    "ema_perfect_order_bullish": list(_EMA_PERFECT_ORDER_PARAM_SPEC),
+    "ema_perfect_order_bearish": list(_EMA_PERFECT_ORDER_PARAM_SPEC),
+    "ema_perfect_order_broken_bullish": list(_EMA_PERFECT_ORDER_PARAM_SPEC),
+    "ema_perfect_order_broken_bearish": list(_EMA_PERFECT_ORDER_PARAM_SPEC),
     "first_pullback_after_breakout_bullish": [{"name": "length", "label": "ブレイクアウト判定期間", "default": 20, "type": "int"}],
     "first_pullback_after_breakout_bearish": [{"name": "length", "label": "ブレイクアウト判定期間", "default": 20, "type": "int"}],
     "fvg_first_retest_bullish": [],
@@ -1849,14 +2059,18 @@ INDICATOR_PARAM_SPECS.update({
         {"name": "pip_size", "label": "1pipのサイズ(JPYペア/XAUUSD=0.01, XAGUSD=0.001, それ以外=0.0001)", "default": 0.01, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
         {"name": "round_interval", "label": "キリ番間隔(価格の生単位、例:USDJPYで0.5なら50銭刻み)", "default": 1.0, "type": "choice", "choices": [0.1, 0.5, 1.0, 5.0, 10.0]},
     ],
-    "double_top_breakdown": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
-    ],
-    "double_bottom_breakout": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
-    ],
+    "double_top_breakdown": list(_DOUBLE_TOP_PARAM_SPEC),
+    "double_top_failed": list(_DOUBLE_TOP_PARAM_SPEC),
+    "double_top_exists": list(_DOUBLE_TOP_PARAM_SPEC),
+    "double_bottom_breakout": list(_DOUBLE_BOTTOM_PARAM_SPEC),
+    "double_bottom_failed": list(_DOUBLE_BOTTOM_PARAM_SPEC),
+    "double_bottom_exists": list(_DOUBLE_BOTTOM_PARAM_SPEC),
+    "double_top": list(_DOUBLE_TOP_STATE_PARAM_SPEC),
+    "double_bottom": list(_DOUBLE_BOTTOM_STATE_PARAM_SPEC),
+    "double_top_pivot": list(_DOUBLE_TOP_STATE_PARAM_SPEC),
+    "double_bottom_pivot": list(_DOUBLE_BOTTOM_STATE_PARAM_SPEC),
+    "double_top_shape": list(_DOUBLE_TOP_SHAPE_PARAM_SPEC),
+    "double_bottom_shape": list(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC),
     "triple_top_breakdown": [
         {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
         {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
@@ -1937,12 +2151,16 @@ INDICATOR_PARAM_SPECS.update({
 INDICATOR_PARAM_SPECS.update({
     "cci": [{"name": "period", "label": "期間", "default": 20, "type": "int"}],
     "williams_r": [{"name": "period", "label": "期間", "default": 14, "type": "int"}],
+    # af_step(加速係数の増分)は実際の関数(engine側)にはあるのに、ここに
+    # 無くて調整できなかった不具合の修正。
     "parabolic_sar_line": [
         {"name": "af_start", "label": "加速係数初期値", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.03]},
+        {"name": "af_step", "label": "加速係数増分", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.03]},
         {"name": "af_max", "label": "加速係数上限", "default": 0.2, "type": "choice", "choices": [0.1, 0.2, 0.3]},
     ],
     "parabolic_sar_direction": [
         {"name": "af_start", "label": "加速係数初期値", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.03]},
+        {"name": "af_step", "label": "加速係数増分", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.03]},
         {"name": "af_max", "label": "加速係数上限", "default": 0.2, "type": "choice", "choices": [0.1, 0.2, 0.3]},
     ],
     "aroon_up": [{"name": "period", "label": "期間", "default": 14, "type": "int"}],
@@ -1976,14 +2194,14 @@ INDICATOR_PARAM_SPECS.update({
     "fib_pivot_s1": [], "fib_pivot_s2": [], "fib_pivot_s3": [],
     "ttm_squeeze": [
         {"name": "bb_period", "label": "BB期間", "default": 20, "type": "int"},
-        {"name": "bb_num_std", "label": "BB標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "bb_num_std", "label": "BB標準偏差倍率", "default": 2.0, "type": "float"},
         {"name": "kc_period", "label": "ケルトナーEMA期間", "default": 20, "type": "int"},
         {"name": "kc_atr_period", "label": "ケルトナーATR期間", "default": 10, "type": "int"},
         {"name": "kc_multiplier", "label": "ケルトナーATR倍率", "default": 1.5, "type": "choice", "choices": [1.0, 1.5, 2.0]},
     ],
     "ttm_squeeze_release": [
         {"name": "bb_period", "label": "BB期間", "default": 20, "type": "int"},
-        {"name": "bb_num_std", "label": "BB標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "bb_num_std", "label": "BB標準偏差倍率", "default": 2.0, "type": "float"},
         {"name": "kc_period", "label": "ケルトナーEMA期間", "default": 20, "type": "int"},
         {"name": "kc_atr_period", "label": "ケルトナーATR期間", "default": 10, "type": "int"},
         {"name": "kc_multiplier", "label": "ケルトナーATR倍率", "default": 1.5, "type": "choice", "choices": [1.0, 1.5, 2.0]},
@@ -2015,11 +2233,11 @@ INDICATOR_PARAM_SPECS.update({
     "linreg_value": [{"name": "length", "label": "期間", "default": 20, "type": "int"}],
     "linreg_upper": [
         {"name": "length", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "linreg_lower": [
         {"name": "length", "label": "期間", "default": 20, "type": "int"},
-        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
+        {"name": "num_std", "label": "標準偏差倍率", "default": 2.0, "type": "float"},
     ],
     "ha_bullish": [],
     "ha_bearish": [],
@@ -2176,6 +2394,12 @@ _CATEGORY_BY_NAME: dict[str, str] = {spec.name: spec.category for spec in INDICA
 # データ/チャートタブの指標オーバーレイで、価格軸に重ねるか別軸(オシレー
 # ター)にするかの判定に使う(_compute_indicator_series参照)。
 _KIND_BY_NAME: dict[str, str] = {spec.name: spec.kind for spec in INDICATOR_POOL}
+# 指標同士の比較で「比較先」候補を絞り込む単位 - 未指定ならkindをそのまま
+# 使う(engine/indicator_pool.py::IndicatorSpec.pair_groupのdocstring参照 -
+# 同じkindでも測定単位が違う指標同士が比較可能に見えてしまうバグへの対応、
+# ユーザー報告:「比較元RSIの移動平均からの乖離。比較先キリ番までの距離
+# っておかしくない?」)。
+_PAIR_GROUP_BY_NAME: dict[str, str] = {spec.name: (spec.pair_group or spec.kind) for spec in INDICATOR_POOL}
 # 手動探索の条件ビルダーで「固定値」との比較を選べるかどうか(ConditionRow.
 # tsx参照) - price_level(EMA/SMA/高値/安値など)とvolatility(ATRなど)は、
 # シンボルごとに価格帯が違いすぎるため固定の数値と比較する意味がなく、
@@ -2187,6 +2411,120 @@ _KIND_BY_NAME: dict[str, str] = {spec.name: spec.kind for spec in INDICATOR_POOL
 _ALLOW_LITERAL_BY_NAME: dict[str, bool] = {
     spec.name: bool(spec.literal_range or spec.literal_choices) for spec in INDICATOR_POOL
 }
+# 「価格データ」ジャンル(frontend/src/conditionGenres.ts::PRICE_DATA_IDS)は
+# 手動ビルダーに限り固定値比較を解除する(ユーザー要望:「価格データの比較先
+# って多くが固定値も選べるはずだよね。選べなくなってるよ」→適用範囲を確認
+# したところ「手動検索でのみすべて解除」)。「終値 > 150.5」のように銘柄
+# ごとに数字の意味が変わる(USDJPYの終値150前後とEURUSDの1.1前後は同じ
+# 数字でも別物)条件を組めてしまうが、それは手動で1銘柄ずつ組む時の
+# ユーザーの判断に委ねる。自動探索(main.py/structure_generator.py)は
+# このAPIを経由せず、engine/indicator_pool.pyのliteral_range/literal_choices
+# を直接読むため、このオーバーライドの影響を一切受けない(=自動探索側の
+# 「銘柄をまたいで壊れる固定値条件を生成しない」という安全策はそのまま
+# 維持される)。
+_PRICE_DATA_FORCE_LITERAL_NAMES = {
+    "close", "open", "high", "low",
+    "prev_day_high", "prev_day_low", "prev_day_mid",
+    "avg_body_size", "avg_lower_wick", "avg_upper_wick",
+    "body_size_std", "max_body_size", "min_body_size",
+}
+for _name in _PRICE_DATA_FORCE_LITERAL_NAMES:
+    _ALLOW_LITERAL_BY_NAME[_name] = True
+# 手動探索の条件ビルダーで「比較先」を別の指標にできるかどうか
+# (ConditionRow.tsx参照) - ローソク足パターン/チャートパターン/ICT等の
+# boolean_signal・trend_binaryは常に固定値(1.0等)とだけ比較する設計で、
+# 他の指標と比較する意味がない(ユーザー報告:「比較元が「陽線」のときも
+# 比較先で指標を選べるようになっているが、陽線はそもそも比較先がある
+# 指標じゃない」)。indicator_pool.py側でもこの2種は最初から
+# allow_indicator_pair=Falseのまま(Trueにしているのは101件のみ)。
+_ALLOW_INDICATOR_PAIR_BY_NAME: dict[str, bool] = {
+    spec.name: spec.allow_indicator_pair for spec in INDICATOR_POOL
+}
+# 手動探索の条件ビルダーの「方向」(演算子)ドロップダウンで選べる演算子を
+# 絞り込む(ConditionRow.tsx参照) - 「陽線」等boolean_signal/trend_binaryは
+# 1.0/0.0や1/-1しか値を取らず、「一致(==)」以外の演算子(より上/より下/
+# 上抜けなど)を選んでも「陽線 > 0.5」のような遠回しな表現になるか、固定値
+# の入力次第では常にTrue/常にFalseになる意味のない条件になってしまう
+# (ユーザー報告:「陽線＞固定値 これどういう意味?」)。他のkind(オシレー
+# ター/時間フィルター等)は今まで通り全演算子を出す - engine/indicator_pool.
+# pyのOPERATORS_BY_KINDは自動探索の候補生成を絞る目的で>=/<=も除外して
+# いるが、手動ビルダーでの>=/<=は今回のユーザー報告と無関係な機能のため
+# ここでは触らない。
+_BOOLEAN_KINDS = {"boolean_signal", "trend_binary"}
+_ALLOWED_OPERATORS_BY_NAME: dict[str, list[str]] = {
+    spec.name: (["=="] if spec.kind in _BOOLEAN_KINDS else None) for spec in INDICATOR_POOL
+}
+# 「一致(==)」しか選べず、かつ比較できる固定値も1択しかない指標(陽線等の
+# boolean_signal - 全件literal_choices=[1.0]のみ)は、方向/比較先を表示する
+# 意味自体が無い(ユーザー報告:「陽線の時比較先出す必要あるの?」)。
+# trend_binary(SuperTrend方向等)は1/-1/0のどれと比較するかで意味が変わる
+# ため、literal_choicesが複数あり対象外(比較先の数値入力は残す)。
+_LITERAL_CHOICES_BY_NAME: dict[str, list[float] | None] = {
+    spec.name: spec.literal_choices for spec in INDICATOR_POOL
+}
+# 固定値入力欄をmin/maxで実際に制限するための、定義上絶対に超えられない
+# 範囲(engine/indicator_pool.py::_LITERAL_HARD_BOUNDS参照) - literal_range
+# (自動探索用の「典型的な範囲」、RSIなら20〜80等)とは別物で、こちらは
+# ConditionRow.tsxの固定値<input>のmin/maxにそのまま使う(ユーザー報告:
+# 「角度の固定値1000とか入れたらどうなるの?」で発覚した、絶対に真にも
+# 偽にもならない意味のない条件を打ててしまう問題への対応)。
+_LITERAL_HARD_BOUND_BY_NAME: dict[str, tuple[float, float] | None] = {
+    spec.name: spec.literal_hard_bound for spec in INDICATOR_POOL
+}
+# 各パラメータ・固定値欄にカーソルを合わせた時に出す「目安の数値」
+# (engine/indicator_pool.py::IndicatorSpec.value_presets/literal_presets -
+# 元々は自動探索のチェックボックス用に用意されていたのを、手動ビルダーの
+# 数値入力欄でも流用する - ユーザー要望:「すべての指標に共通することで、
+# 数値を入れるところにカーソルを合わせると目安の数値が表示されるように
+# して」)。
+_VALUE_PRESETS_BY_NAME: dict[str, dict[str, list[float]]] = {
+    spec.name: spec.value_presets for spec in INDICATOR_POOL
+}
+_LITERAL_PRESETS_BY_NAME: dict[str, list[float] | None] = {
+    spec.name: spec.literal_presets for spec in INDICATOR_POOL
+}
+# 各パラメータの「設定できる範囲」(engine/indicator_pool.py::IndicatorSpec.
+# param_ranges - 元は自動探索がサンプリングする範囲だが、手動ビルダーの
+# 数値入力欄でカーソルを合わせた時に表示するヒントとしても流用する
+# (ユーザー要望:「変更できるパラメーターについても...カーソルを当てたら
+# 設定できる範囲と目安の値が表示されるようにして。比較元にも比較先にも」)。
+# param_choices(離散値のみ意味を持つパラメータ、Fibonacci比率など)は
+# 範囲という概念がそもそも無いためここには含まれない - その場合は
+# value_presetsによる目安表示だけになる。
+_PARAM_RANGE_BY_NAME: dict[str, dict[str, tuple[int, int]]] = {
+    spec.name: spec.param_ranges for spec in INDICATOR_POOL
+}
+
+
+def _params_with_presets(name: str) -> list[dict]:
+    # INDICATOR_PARAM_SPECSはモジュール読み込み時に1回だけ作られる共有の
+    # dictなので、ここでin-placeにキーを追加すると全リクエスト・全呼び出し
+    # 元で汚染されてしまう - 必ずコピーしてから追加する。
+    presets = _VALUE_PRESETS_BY_NAME.get(name, {})
+    ranges = _PARAM_RANGE_BY_NAME.get(name, {})
+    result = []
+    for spec in INDICATOR_PARAM_SPECS.get(name, []):
+        spec_copy = dict(spec)
+        param_presets = presets.get(spec["name"])
+        if param_presets:
+            spec_copy["presets"] = param_presets
+        param_range = ranges.get(spec["name"])
+        if param_range:
+            spec_copy["range"] = list(param_range)
+        result.append(spec_copy)
+    return result
+
+
+# 統合版(state選択式の"double_top"/"double_bottom")に置き換えられた旧
+# 指標(ネックライン割れ/不成立/形成中の3分割版) - 新規に条件を組む時の
+# フロントエンドのピッカー一覧からは除外するが、既存の保存済み
+# ストラテジーがまだこのidを参照しているため、指標自体・パラメータ定義は
+# 削除しない(ユーザー要望:「古い3種を選択リストから外して、保存済み
+# ストラテジーの読み込み・表示自体は引き続き動く形で」)。
+_LEGACY_INDICATOR_NAMES = {
+    "double_top_breakdown", "double_top_failed", "double_top_exists",
+    "double_bottom_breakout", "double_bottom_failed", "double_bottom_exists",
+}
 
 
 @app.get("/api/indicators")
@@ -2195,13 +2533,22 @@ async def get_indicators() -> list[dict]:
         {
             "id": name,
             "label": INDICATOR_LABELS.get(name, name),
-            "params": INDICATOR_PARAM_SPECS.get(name, []),
+            "params": _params_with_presets(name),
             "category": _CATEGORY_BY_NAME.get(name),
             "allow_literal": _ALLOW_LITERAL_BY_NAME.get(name, True),
+            "allow_indicator_pair": _ALLOW_INDICATOR_PAIR_BY_NAME.get(name, True),
+            "allowed_operators": _ALLOWED_OPERATORS_BY_NAME.get(name),
+            "literal_choices": _LITERAL_CHOICES_BY_NAME.get(name),
+            "literal_hard_bound": _LITERAL_HARD_BOUND_BY_NAME.get(name),
+            "literal_presets": _LITERAL_PRESETS_BY_NAME.get(name),
             # ConditionRow.tsxが「EMA200より上」=「終値がEMA200より上」という
             # 価格目線の自然な意味で演算子を解釈するために使う
             # (kind=="price_level"の時だけ)。
             "kind": _KIND_BY_NAME.get(name),
+            # 比較先候補の絞り込みはkindではなくこちらを使う(_PAIR_GROUP_BY_
+            # NAMEのコメント参照)。
+            "pair_group": _PAIR_GROUP_BY_NAME.get(name),
+            "legacy": name in _LEGACY_INDICATOR_NAMES,
         }
         for name in INDICATOR_REGISTRY
     ]
@@ -2436,8 +2783,165 @@ def _compute_chart_indicators(df: pd.DataFrame, trees: list[dict | None]) -> lis
     return _compute_indicator_series(df, list(collected.values()))
 
 
+# ダブルトップ/ボトム系indicatorがチャート上のどの2つの山/谷を根拠に
+# 発火したかをフロントに返す(ユーザー要望:「これエントリーに使用した場所
+# だけ印付けるようにできない?」- 汎用のピボット全表示だと多すぎるため、
+# 実際にパターンが成立/決着したバーだけに絞る)。bullish=Trueはダブル
+# ボトム系(谷を根拠に判定)、kindは印を山の上に出すか谷の下に出すかの
+# フロント側ヒント。
+_DOUBLE_TOP_BOTTOM_MARKER_SOURCES: dict[str, tuple[bool, str, str]] = {
+    "double_top_breakdown": (False, "resolve", "top"),
+    "double_top_failed": (False, "failed", "top"),
+    "double_top_exists": (False, "exists", "top"),
+    "double_bottom_breakout": (True, "resolve", "bottom"),
+    "double_bottom_failed": (True, "failed", "bottom"),
+    "double_bottom_exists": (True, "exists", "bottom"),
+}
+# 5状態統合版(double_top/double_bottom)はどの状態を見るか(detected/
+# confirmed/failed_after_retest/failed_before_retest/expired)がnode自身の
+# params["state"]で決まるため、上のような固定のoutput_keyを持てない -
+# bullish/kindだけここで固定し、output_keyは_compute_pattern_markers側で
+# 都度paramsから読む。
+_DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
+    "double_top": (False, "top"),
+    "double_bottom": (True, "bottom"),
+    "double_top_pivot": (False, "top"),
+    "double_bottom_pivot": (True, "bottom"),
+    "double_top_shape": (False, "top"),
+    "double_bottom_shape": (True, "bottom"),
+}
+# _DOUBLE_TOP_PARAM_SPEC/_DOUBLE_BOTTOM_PARAM_SPECはUIのデフォルト値の
+# 単一の情報源(このセッションでpivot_left_bars/right_barsの推奨値を
+# 5→25に変えた際もここだけ直せば済んだ) - パターン判定を再実行する際の
+# デフォルト値もここから作り、値を二重管理しない。
+_DOUBLE_TOP_BOTTOM_DEFAULTS: dict[str, Any] = {
+    spec["name"]: spec["default"] for spec in _DOUBLE_TOP_PARAM_SPEC
+}
+# 形状判定版(double_top_shape/double_bottom_shape)は既存版とパラメータ
+# 名前が全く異なる別実装なので、デフォルト値も別に持つ(state以外)。
+_DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = {
+    spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC if spec["name"] != "state"
+}
+_SHAPE_INDICATORS = ("double_top_shape", "double_bottom_shape")
+
+
+def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) -> None:
+    if not node:
+        return
+    if "children" in node:
+        for child in node["children"]:
+            _collect_pattern_marker_specs(child, out)
+        return
+
+    indicator = node.get("indicator")
+    # MTF(他時間足)指定があると、このチャートが読み込んでいるdf(自足)には
+    # 対応する山/谷のバー位置が存在しないため、自足の条件のみ対象にする。
+    is_pattern_indicator = indicator in _DOUBLE_TOP_BOTTOM_MARKER_SOURCES or indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    if is_pattern_indicator and not node.get("timeframe"):
+        params = node.get("params") or {}
+        key = (indicator, tuple(sorted(params.items())))
+        out[key] = (indicator, params)
+
+    value = node.get("value")
+    is_pattern_value = (
+        isinstance(value, str)
+        and (value in _DOUBLE_TOP_BOTTOM_MARKER_SOURCES or value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES)
+    )
+    if is_pattern_value and not node.get("value_timeframe"):
+        value_params = node.get("value_params") or {}
+        key = (value, tuple(sorted(value_params.items())))
+        out[key] = (value, value_params)
+
+
+def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list[dict]:
+    """条件ツリーに含まれるダブルトップ/ボトム系indicatorそれぞれについて、
+    実際にresolve/failed(existsは区間の開始バー)が成立した回だけ、その根拠
+    となった2つの山/谷の時刻・価格を返す。"""
+    collected: dict[tuple, tuple] = {}
+    for tree in trees:
+        _collect_pattern_marker_specs(tree, collected)
+    if not collected:
+        return []
+
+    times = df["datetime"]
+    events: list[dict] = []
+    for indicator, params in collected.values():
+        if indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES:
+            # 5状態統合版(double_top/double_bottom) - 見る状態(output_key)
+            # はnode自身のparams["state"]で決まる(既定はconfirmed)。
+            bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+            output_key = params.get("state", "confirmed")
+        else:
+            bullish, output_key, kind = _DOUBLE_TOP_BOTTOM_MARKER_SOURCES[indicator]
+        if indicator in _SHAPE_INDICATORS:
+            # 形状判定版は既存版と無関係の別実装(engine/chart_patterns.py::
+            # _double_top_bottom_shape_state) - パラメータ名もデフォルトも
+            # 別に持つ。
+            shape_kwargs = {
+                name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+            }
+            state = chart_patterns._double_top_bottom_shape_state(
+                df["high"], df["low"], df["close"], bullish, **shape_kwargs
+            )
+        else:
+            kwargs = {name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_DEFAULTS.items()}
+            # 谷2ピボット版(double_top_pivot/double_bottom_pivot)はtop2_pivot_
+            # basedがユーザー設定パラメータではなく関数呼び出し時の固定引数
+            # (chart_patterns.py::double_top_pivot/double_bottom_pivot参照)
+            # なので、node自身のparamsには現れない - indicator名から明示的に
+            # 判定して渡す。
+            if indicator in ("double_top_pivot", "double_bottom_pivot"):
+                kwargs["top2_pivot_based"] = True
+            state = chart_patterns._double_top_bottom_state(
+                df["high"], df["low"], df["close"], bullish, **kwargs
+            )
+        flag = state[output_key]
+        if output_key == "exists":
+            # existsはパターン形成中ずっとTrueの区間なので、区間の最初の
+            # バー(=2つの山/谷が確定した瞬間)だけを1回のイベントとして扱う。
+            flag = flag & ~flag.shift(1).fillna(False)
+
+        formed_bar = state["formed_bar"]
+        top1_bar, top2_bar = state["top1_bar"], state["top2_bar"]
+        top1_price, top2_price = state["top1_price"], state["top2_price"]
+        neckline_bar, neckline_price = state["neckline_bar"], state["neckline_price"]
+        for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+            # 山1/山2/ネックラインは、resolve/failedが実際に成立したバーでは
+            # なく、2つの山/谷が出揃った(formedした)瞬間のスナップショットで
+            # 固定して読む - formed後にネックラインの元になる安値/高値が
+            # 更に更新され得るため(既存ロジックの正しい挙動)、決着バーの
+            # 時点で読むと「谷が2つ目の山より後」のような時系列が矛盾した
+            # 表示になり得る(実際に発生を確認)。
+            f = formed_bar.iloc[i]
+            if pd.isna(f):
+                continue
+            f = int(f)
+            if not (0 <= f < len(df)):
+                continue
+            b1, b2, b3 = top1_bar.iloc[f], top2_bar.iloc[f], neckline_bar.iloc[f]
+            if pd.isna(b1) or pd.isna(b2) or pd.isna(b3):
+                continue
+            b1, b2, b3 = int(b1), int(b2), int(b3)
+            if not (0 <= b1 < len(df) and 0 <= b2 < len(df) and 0 <= b3 < len(df)):
+                continue
+            events.append(
+                {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                    "top1_time": times.iloc[b1].isoformat(),
+                    "top1_price": float(top1_price.iloc[f]),
+                    "top2_time": times.iloc[b2].isoformat(),
+                    "top2_price": float(top2_price.iloc[f]),
+                    "neckline_time": times.iloc[b3].isoformat(),
+                    "neckline_price": float(neckline_price.iloc[f]),
+                }
+            )
+    return events
+
+
 @app.get("/api/strategies/{strategy_id}/chart-indicators")
-async def get_strategy_chart_indicators(strategy_id: str, limit: int = 20000) -> dict:
+async def get_strategy_chart_indicators(strategy_id: str, limit: int = 200000) -> dict:
     try:
         entry = get_strategy(strategy_id)
     except KeyError:
@@ -2464,7 +2968,7 @@ class ChartIndicatorsRequest(BaseModel):
     condition_tree: dict | None = None
     long_condition_tree: dict | None = None
     short_condition_tree: dict | None = None
-    limit: int = 20000
+    limit: int = 200000
 
 
 @app.post("/api/chart-indicators")
@@ -2480,6 +2984,39 @@ async def post_chart_indicators(req: ChartIndicatorsRequest) -> dict:
     return {"indicators": _compute_chart_indicators(df, trees)}
 
 
+@app.get("/api/strategies/{strategy_id}/pattern-markers")
+async def get_strategy_pattern_markers(strategy_id: str, limit: int = 200000) -> dict:
+    try:
+        entry = get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    symbol = entry["symbol"]
+    timeframe = entry["timeframe"]
+    df = load_price_data(find_data_file(timeframe, symbol))
+    df = df.tail(limit).reset_index(drop=True)
+
+    params = entry.get("params") or {}
+    trees = [
+        params.get("condition_tree"),
+        params.get("long_condition_tree"),
+        params.get("short_condition_tree"),
+    ]
+
+    return {"events": _compute_pattern_markers(df, trees)}
+
+
+@app.post("/api/pattern-markers")
+async def post_pattern_markers(req: ChartIndicatorsRequest) -> dict:
+    """get_strategy_pattern_markersの、保存済みでない候補行向けの版
+    (post_chart_indicatorsと同じ理由)。"""
+    df = load_price_data(find_data_file(req.timeframe, req.symbol))
+    df = df.tail(req.limit).reset_index(drop=True)
+
+    trees = [req.condition_tree, req.long_condition_tree, req.short_condition_tree]
+    return {"events": _compute_pattern_markers(df, trees)}
+
+
 class IndicatorSpecRequest(BaseModel):
     indicator: str
     params: dict = {}
@@ -2490,7 +3027,7 @@ class DataChartIndicatorsRequest(BaseModel):
     symbol: str
     timeframe: str
     indicators: list[IndicatorSpecRequest]
-    limit: int = 20000
+    limit: int = 200000
 
 
 @app.post("/api/data-chart-indicators")
@@ -2627,7 +3164,12 @@ async def remove_strategy_from_collection_endpoint(collection_id: str, strategy_
 
 
 def _read_csv_df(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 @app.get("/api/backtests/{job_id}/report.pdf")

@@ -15,6 +15,20 @@ pytest dependency, no requirements.txt entry for it) - run directly:
 Baselines regenerated 2026-07-04 after replacing data/raw's USDJPY source
 with the broker EET-timestamped export (converted to JST + OHLC-fixed via
 import_broker_csv.py, see tests/test_regression.py's docstring for why).
+
+TRIGGER_CASES REGENERATED AGAIN 2026-07-25: most entries drifted by a small
+(~0.1-0.3%) trade-count amount, fully explained by data/raw's USDJPY file
+having grown (more bars appended - the pipeline keeps pulling fresh data;
+2026-07-04's ~579k-bar file now runs through 2026-07-18) since the last
+regen, not a logic change - re-verified by running the pre-6bbf156 code
+(git worktree at a7dbf8e) against TODAY's data file and confirming it
+reproduces each of those small-drift numbers almost exactly. order_block_bearish
+(trigger) and use_order_block_filter are the one genuine exception: bearish_
+order_block's look-ahead-bias fix (see engine/smc_indicators.py's docstring -
+the flag moved from the order block's origin candle to the confirming candle,
+landed between a7dbf8e and 6bbf156) legitimately collapses use_order_block_filter's
+already-tiny 12-trade baseline to 0 and roughly cuts order_block_bearish's trade
+count by a third - confirmed via the same worktree bisection, not a new bug.
 A 0-trades baseline (several filters, e.g. use_fvg_filter, use_bos_filter)
 is a legitimate, deterministic result given how restrictive ANDing a rare
 SMC condition onto the already-selective default breakout trigger is -
@@ -55,21 +69,21 @@ BASE_PARAMS = {
 # drives the result. "breakout" itself is already covered by
 # tests/test_regression.py.
 TRIGGER_CASES = {
-    "donchian_breakout": {"trades": 5187, "net_profit": 8.1668, "profit_factor": 1.017},
-    "ema_cross": {"trades": 2853, "net_profit": -26.5118, "profit_factor": 0.894},
-    "macd_cross": {"trades": 8579, "net_profit": 30.0358, "profit_factor": 1.049},
-    "bollinger_touch": {"trades": 4841, "net_profit": 21.9124, "profit_factor": 1.05},
-    "ichimoku_cloud_breakout": {"trades": 4271, "net_profit": 0.043, "profit_factor": 1.0},
-    "ichimoku_tk_cross": {"trades": 6946, "net_profit": 18.3194, "profit_factor": 1.038},
-    "stochastic_kd_cross": {"trades": 15674, "net_profit": 0.81, "profit_factor": 1.001},
-    "stochastic_level_cross": {"trades": 8403, "net_profit": 9.242, "profit_factor": 1.016},
-    "fvg_bearish": {"trades": 13230, "net_profit": -39.5318, "profit_factor": 0.964},
-    "order_block_bearish": {"trades": 25116, "net_profit": 6.2762, "profit_factor": 1.004},
-    "bos_bearish": {"trades": 3068, "net_profit": -24.2388, "profit_factor": 0.933},
-    "choch_bearish": {"trades": 4369, "net_profit": -4.9994, "profit_factor": 0.989},
-    "liquidity_sweep_bearish": {"trades": 7466, "net_profit": 52.4506, "profit_factor": 1.089},
-    "supertrend_flip_bearish": {"trades": 4092, "net_profit": -11.6084, "profit_factor": 0.975},
-    "adx_di_cross_bearish": {"trades": 8749, "net_profit": 13.6166, "profit_factor": 1.018},
+    "donchian_breakout": {"trades": 5197, "net_profit": 7.8016, "profit_factor": 1.016},
+    "ema_cross": {"trades": 2861, "net_profit": -26.3388, "profit_factor": 0.895},
+    "macd_cross": {"trades": 8591, "net_profit": 29.0228, "profit_factor": 1.047},
+    "bollinger_touch": {"trades": 4850, "net_profit": 21.7254, "profit_factor": 1.05},
+    "ichimoku_cloud_breakout": {"trades": 4281, "net_profit": 0.582, "profit_factor": 1.002},
+    "ichimoku_tk_cross": {"trades": 6961, "net_profit": 17.6336, "profit_factor": 1.036},
+    "stochastic_kd_cross": {"trades": 15700, "net_profit": 0.6118, "profit_factor": 1.001},
+    "stochastic_level_cross": {"trades": 8419, "net_profit": 7.4804, "profit_factor": 1.013},
+    "fvg_bearish": {"trades": 13254, "net_profit": -39.3766, "profit_factor": 0.964},
+    "order_block_bearish": {"trades": 17308, "net_profit": 0.6316, "profit_factor": 1.0},
+    "bos_bearish": {"trades": 3071, "net_profit": -24.8126, "profit_factor": 0.932},
+    "choch_bearish": {"trades": 4375, "net_profit": -4.5132, "profit_factor": 0.99},
+    "liquidity_sweep_bearish": {"trades": 7478, "net_profit": 51.3696, "profit_factor": 1.087},
+    "supertrend_flip_bearish": {"trades": 4100, "net_profit": -11.5552, "profit_factor": 0.975},
+    "adx_di_cross_bearish": {"trades": 8767, "net_profit": 13.679, "profit_factor": 1.018},
 }
 
 TRIGGER_TEST_OVERRIDES = {
@@ -94,7 +108,7 @@ FILTER_CASES = {
     "use_round_number_filter": {"trades": 27, "net_profit": -1.5766, "profit_factor": 0.76},
     "use_weekday_filter": {"trades": 176, "net_profit": 16.7942, "profit_factor": 1.53},
     "use_fvg_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
-    "use_order_block_filter": {"trades": 12, "net_profit": 3.1504, "profit_factor": 2.499},
+    "use_order_block_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_bos_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_choch_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},
     "use_liquidity_sweep_filter": {"trades": 0, "net_profit": 0.0, "profit_factor": 0.0},

@@ -113,46 +113,1262 @@ def _first_occurrence_after(pattern_formed: pd.Series, trigger: pd.Series) -> np
 
 
 # ---------------------------------------------------------------------------
+# 非対称ピボット(左右の本数を別々に指定できるスイング高値/安値検出) -
+# engine/smc_indicators.py::_detect_swing_highs/_detect_swing_lowsは
+# center=Trueの対称窓(左右が必ず同じ本数)しか使えないため、ダブルトップ/
+# ボトムの厳密な仕様(ユーザー提供仕様書の「Pivot Left Bars」「Pivot Right
+# Bars」)向けにこちらを新設した。BOS/CHoCH等、既存の全指標が使っている
+# 対称版(_swing_high_levels等)には一切手を加えていない。
+#
+# ベクトル化の考え方: 窓[i-left, i+right]内の最大値は、
+# 「[i-left, i]の最大値」と「[i, i+right]の最大値」の大きい方に等しい
+# (どちらもiを含むので、2つの合成が元の窓全体と一致する) - rolling().max()
+# を2回(片方は系列を逆順にしてから)呼ぶだけでよく、バー数ぶんのPythonループ
+# が不要。500k本規模のバックテストでも高速。
+# ---------------------------------------------------------------------------
+
+def _detect_pivot_highs(high: pd.Series, left: int, right: int) -> pd.Series:
+    left_max = high.rolling(window=left + 1).max()
+    right_max = high[::-1].rolling(window=right + 1).max()[::-1]
+    # skipna=False(デフォルトのskipna=Trueを明示的に無効化) - 配列の末尾
+    # right本未満の区間はright_maxがNaN(右側の確認本数が足りず判定不能)に
+    # なるが、デフォルトのskipna=Trueだとmax(axis=1)がそのNaNを無視して
+    # left_maxだけで判定してしまい、右側が全く確認されていないバーまで
+    # 「ピボット高値」と誤判定してしまう(実際に発生: 配列末尾付近の
+    # バーがピボットと誤判定され、そのバーの位置+right本を配列の範囲外
+    # まで使おうとしてIndexErrorになるまで気づかれなかった)。片方でも
+    # NaN(=左右どちらかの確認本数が足りない)ならこのバー自体を判定不能
+    # としてNaNのまま伝播させ、is_pivotのfillna(False)で正しく除外する。
+    overall_max = pd.concat([left_max, right_max], axis=1).max(axis=1, skipna=False)
+    is_pivot = (high == overall_max).fillna(False)
+    return _collapse_consecutive_runs(is_pivot)
+
+
+def _detect_pivot_lows(low: pd.Series, left: int, right: int) -> pd.Series:
+    left_min = low.rolling(window=left + 1).min()
+    right_min = low[::-1].rolling(window=right + 1).min()[::-1]
+    # _detect_pivot_highsと同じ理由でskipna=False。
+    overall_min = pd.concat([left_min, right_min], axis=1).min(axis=1, skipna=False)
+    is_pivot = (low == overall_min).fillna(False)
+    return _collapse_consecutive_runs(is_pivot)
+
+
+def _collapse_consecutive_runs(flags: pd.Series) -> pd.Series:
+    """engine/smc_indicators.py::_collapse_consecutive_runsと同じ(平坦な
+    天井/底が窓の等号判定に複数バーで一致してしまうのを、最初の1本だけに
+    絞る) - こちらは非対称ピボット専用に複製(smc_indicators.py側は
+    プライベート関数でimportして再利用する契約になっていないため)。"""
+    return flags & ~flags.shift(1, fill_value=False)
+
+
+# ---------------------------------------------------------------------------
 # Double / Triple Top & Bottom
 # ---------------------------------------------------------------------------
 
+def _double_top_bottom_state(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    bullish: bool,
+    pivot_left_bars: int, pivot_right_bars: int,
+    min_bars_between_tops: int, max_bars_between_tops: int,
+    top_tolerance_type: str, top_tolerance: float,
+    min_valley_depth_type: str, min_valley_depth: float,
+    symmetry_ratio_min: float, symmetry_ratio_max: float,
+    trendline_tolerance_pct: float,
+    breakout_type: str, breakout_buffer: float,
+    breakout_deadline_ratio_min: float, breakout_deadline_ratio_max: float,
+    pip_size: float,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    top2_pivot_based: bool = False,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+) -> dict[str, pd.Series]:
+    """ダブルトップ/ボトムの共通判定ロジック - 「パターンの検出(市場構造)」
+    と「売買方向を持つシグナル」を分離する設計(ユーザー要望:「ダブルトップ
+    は本来ショートエントリー用の反転パターンであるが...チャートパターンの
+    検出とエントリーシグナルを分離して設計したい」)。
+
+    2026-07-23大幅改訂: 「第2トップ = 独立にピボット検出された次の高値」
+    ではなく、「山1→谷の本数を基準に、谷から一定範囲内で最も山1に近い
+    価格を山2として探す」という、山1と谷が決まった時点で山2の"探索窓"
+    自体を計算する方式に変更(ユーザー要望をそのまま反映)。
+
+    top2_pivot_based: 上記の変更を一部差し戻す形のオプション(デフォルト
+    False=現状維持)。Trueにすると、山2候補として採用できるのは窓の中の
+    「本物のピボット高値/安値」(ext_flags、山1・仮点と同じ判定基準)に
+    限定される(ユーザー要望:「谷2の探索方法をピボット安値バージョンで
+    別に実装して。今の構造はそのまま別に残して」- 一般的なチャート
+    パターン認識ツールは山1・山2の両方を対称にピボットで検出するため)。
+    それ以外の判定(許容誤差ゲート・窓の範囲・直線乖離・5状態モデル等)は
+    Falseの時と完全に共通。ピボット確定にはpivot_right_bars本の確認が
+    必要なため、これもtop1・ネックと同じ先読み防止(confirm_floor)の
+    対象に含める。
+
+    ダブルトップ(bullish=False)を主語に書くと:
+      ① 第1トップ = Pivot High(左pivot_left_bars本・右pivot_right_bars本
+         より高い高値、right本後に確定)
+      ② 谷(ネックライン) = 第1トップより後に確定した最初のPivot Low
+      ③ 山1→谷の本数(interval1)がmin_bars_between_tops〜
+         max_bars_between_tops
+      ④ 第2トップ探索窓 = 谷からinterval1×symmetry_ratio_min本〜
+         interval1×symmetry_ratio_max本の範囲。この窓の中で最高値を山2と
+         する(窓の終わりに達するまで、より高い値が出るたびに山2を更新
+         し続ける - ユーザー要望「この間に上値を更新したときは山2を
+         更新する」)。ただし窓が開くより前(山1→谷の下落〜窓開始直前の
+         上昇)に山1の価格を上回ったら、この山1はダブルトップの起点として
+         無効(ユーザー要望「山1を上回ったときはダブルトップとみなさない」)
+      ④' 窓の途中で(その時点までの暫定山2を基準に)ネックラインを割り、
+         かつその時点の形(⑤⑥⑦)が妥当なら、窓の終わりを待たずにその場で
+         山2を確定させて即エントリーにする(ユーザー要望:「その期間中に
+         ネックラインをブレイクしたときはその時点で山2決定でエントリー
+         にして」)。この経路では⑧⑨のブレイク猶予は評価しない(山2から
+         の経過が定義上0本になるため) - 窓が閉じるまで割れなかった場合に
+         限り、⑤〜⑨の通常経路(窓の最後の最高値を山2として確定)に進む。
+      ⑤ 窓が終わった時点で確定した山2の価格が、山1に対して
+         top_tolerance_type/top_toleranceの範囲外なら、このダブルトップは
+         不成立(ユーザー要望「山2の価格が許容範囲外を超えたときは
+         ダブルトップとみなさない」)
+      ⑥ 谷の深さ((山1+山2)/2 - 谷)がmin_valley_depth_type/
+         min_valley_depth以上、かつmax_valley_depth_type/
+         max_valley_depth以下(デフォルト999=実質無制限 - ユーザー報告:
+         「山1・山2の水準はほぼ同じでも、間のネックラインが極端に高い
+         (大きな一方向の値動きを挟んだだけの)崩れた形をいまだ拾って
+         しまう」に対応。下限のみだったmin_valley_depthに上限を追加)
+      ⑦ 山1→谷、谷→山2それぞれを直線で結んだ時、その間の高値/安値が
+         直線からtrendline_tolerance_pct%(2点間の値幅に対する割合)以上
+         乖離しない
+         → ③〜⑦がすべて揃った瞬間(=山2探索窓の終わり)が"formed"
+      ⑧ 山2確定後、谷→山2の本数(interval2)×breakout_deadline_ratio_min
+         本未満でネックラインを下抜けたら、このダブルトップ自体を無効と
+         する(早すぎるブレイクは「本物のダブルトップではなかった」と
+         みなす - ユーザー要望「（ネックから山2までの本数）×0.5以内に
+         ネックラインを下抜けたときはダブルトップとみなさない」)
+      ⑨ interval2×breakout_deadline_ratio_min本以上・
+         breakout_deadline_ratio_max本以内にbreakout_type(Close/Low)が
+         ネックライン-breakout_bufferを下回れば"breakdown"(ショート方向の
+         シグナル)
+      ⑩ ブレイクダウンより先に、終値が両トップの高い方+breakout_bufferを
+         上抜けたら"failed"(ネックラインを割らずに反転 - ロング方向の
+         シグナル)。⑧と同じ早すぎ無効ルールをfailedにも適用する
+      ⑪ formed〜(breakdown/failedのどちらかが起きる、または猶予本数超過)
+         までの間、"exists"(パターン形成中の状態フィルター)がTrueで
+         あり続ける
+    bullish=Trueならダブルボトムとして高値/安値・上下を反転させた鏡像
+    (谷1→山→谷2)。
+
+    山1→谷→山2という一連の関係が本質的に逐次的(谷が決まらないと山2の
+    探索窓が決まらず、山2が決まらないとブレイク猶予も決まらない)なため、
+    確定したピボットの列を時系列に1件ずつ辿るPythonループで実装している
+    (このモジュールの他のロジックのようなpandas全体のベクトル化はできない
+    - ただし辿る対象は「確定ピボットの一覧」のみで全バー数ではないため、
+    実用上十分高速)。"""
+    n = len(high)
+    idx_index = high.index
+    high_a = high.to_numpy()
+    low_a = low.to_numpy()
+    close_a = close.to_numpy()
+    df = pd.DataFrame({"high": high, "low": low, "close": close})
+    atr_a = _atr_series(df, 14).to_numpy()
+
+    # 「山」= 高値側のピボット、「谷」= 安値側のピボット。ダブルトップは
+    # 山1→谷→山2(山側の2点を比べる)、ダブルボトムはその鏡像(谷1→山→谷2、
+    # 谷側の2点を比べる) - extreme側/neck側どちらの生値を見るかを
+    # bullishで切り替える。
+    is_pivot_ext = (
+        _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+    )
+    is_pivot_neck = (
+        _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+    )
+    ext_price_a = low_a if bullish else high_a
+    neck_price_a = high_a if bullish else low_a
+
+    ext_flags = is_pivot_ext.fillna(False).to_numpy()
+    neck_flags = is_pivot_neck.fillna(False).to_numpy()
+    # _detect_pivot_highs/_detect_pivot_lowsは山/谷の「実際のバー」自体に
+    # Trueが立つ(前後pivot_left_bars/pivot_right_bars本を見て初めて判定
+    # できるが、フラグの位置そのものは確定遅延ぶんシフトされていない) -
+    # ここでi自体をそのまま実際のバー位置として使う(以前i-pivot_right_bars
+    # としていたのは、独立した_confirmed_level_asymヘルパーがshift(right)
+    # で確定バーへずらした"後"の系列に対する変換だったため - このヘルパーは
+    # もう使っていないので、この引き算はもう不要かつ誤り)。
+    ext_events = [i for i in range(n) if ext_flags[i]]
+    neck_events = [i for i in range(n) if neck_flags[i]]
+
+    def _threshold(reference: float, atr: float, kind: str, amount: float) -> float:
+        if kind == "pips":
+            return amount * pip_size
+        if kind == "percent":
+            return abs(reference) * (amount / 100.0)
+        return atr * amount
+
+    def _line_deviation_ok(bar_a: int, price_a: float, bar_b: int, price_b: float) -> bool:
+        # 山1→ネック・ネック→山2・山2→エントリー(Confirmedのみ)の3区間とも
+        # 共通のこのヘルパーを使う(ユーザー仕様「それぞれの区間の両端を
+        # 結んだ直線からの乖離(すべて同じ仕組み)」)。許容幅は
+        # 「2点間の値幅×trendline_tolerance_pct%」(ユーザー仕様
+        # 「許容幅=|区間両端の価格差|×直線からの乖離許容(%)」- 0.5倍は
+        # 撤廃、デフォルト80%)。
+        span = bar_b - bar_a
+        if span <= 0:
+            return True
+        tol = abs(price_b - price_a) * (trendline_tolerance_pct / 100.0)
+        for j in range(bar_a, bar_b + 1):
+            line_v = price_a + (price_b - price_a) * (j - bar_a) / span
+            if max(abs(high_a[j] - line_v), abs(low_a[j] - line_v)) > tol:
+                return False
+        return True
+
+    exists_a = np.zeros(n, dtype=bool)
+    resolve_a = np.zeros(n, dtype=bool)
+    failed_a = np.zeros(n, dtype=bool)
+    # EA Studio的な5状態モデル(Detected/Confirmed/Failed After Retest/
+    # Failed Before Retest/Expired)向けの追加出力(ユーザー要望:「チャート
+    # パターンは基本的にはすべてこの運用にする」)。confirmedはresolveと
+    # 同じなので専用配列は持たない。detectedは「谷2候補が最初に見つかった
+    # バー」(existsの立ち上がりより前になり得る)なので専用配列を持つ。
+    # failed_after_retest/failed_before_retest/expiredも、ここでの判定に
+    # 専用の状態(リテスト有無、猶予切れ)が要るため配列を持つ。
+    detected_a = np.zeros(n, dtype=bool)
+    failed_after_retest_a = np.zeros(n, dtype=bool)
+    failed_before_retest_a = np.zeros(n, dtype=bool)
+    expired_a = np.zeros(n, dtype=bool)
+    top1_bar_a = np.full(n, np.nan)
+    top2_bar_a = np.full(n, np.nan)
+    top1_price_a = np.full(n, np.nan)
+    top2_price_a = np.full(n, np.nan)
+    neckline_bar_a = np.full(n, np.nan)
+    neckline_price_a = np.full(n, np.nan)
+    formed_bar_a = np.full(n, np.nan)
+
+    last_consumed_bar = -1
+    neck_search_from = 0
+
+    for top1_true_bar in ext_events:
+        if top1_true_bar <= last_consumed_bar:
+            continue
+        top1_price = float(ext_price_a[top1_true_bar])
+        # top1_true_barはピボット判定(左pivot_left_bars本・右pivot_right_bars
+        # 本より高い/安い)の「実際のバー」だが、そのバーが本物のピボットだと
+        # 分かるのは右側pivot_right_bars本ぶん先(top1_true_bar+
+        # pivot_right_bars)になってから - それより前にこの山1を根拠にした
+        # 判定(Detected/Confirmed/Failed等)を確定させると、リアルタイムでは
+        # まだ持ち得ない情報を使ったことになる(先読みバイアス・リペイント)。
+        # confirm_floor(下記)の一部として、実際の判定確定を遅らせる。
+        top1_confirm_bar = top1_true_bar + pivot_right_bars
+
+        # neck_search_fromは「top1_true_bar以下の谷候補」だけを恒久的に
+        # 読み飛ばすポインタ(top1_true_barは毎回のイテレーションで単調
+        # 増加するため、あるバー以下の谷はそれ以降のどのtop1候補にとっても
+        # 使えないので安全に捨てられる)。以前は直前に成立した候補の
+        # インデックス(k)まで丸ごと読み飛ばしていたが、それだと「不成立に
+        # 終わった候補が使った谷」を後続の別の(正当な)候補が再利用できず
+        # ネックの取り違えが起きる恐れがあった(山1候補どうしの時間範囲の
+        # 消費をやめたことで、複数の候補が同じ谷を共有し得るようになった
+        # ため)。
+        while neck_search_from < len(neck_events) and neck_events[neck_search_from] <= top1_true_bar:
+            neck_search_from += 1
+        if neck_search_from >= len(neck_events):
+            break  # これ以降、谷候補が確定することはない
+        neck_true_bar = neck_events[neck_search_from]
+        neck_price = float(neck_price_a[neck_true_bar])
+        # top1と同じ理由でネックもpivot_right_bars本ぶんの確定遅延を持つ -
+        # ただし後で(窓が開くまでの監視・窓の中の再判定で)生の高値/安値に
+        # 基づいて更新された場合は、その値は更新された瞬間から既知(生の
+        # 価格そのものなので確定待ちは不要)になる。neck_confirm_barはこの
+        # 「いつからこのネック価格を根拠に判定を確定してよいか」を表す。
+        neck_confirm_bar = neck_true_bar + pivot_right_bars
+
+        interval1 = neck_true_bar - top1_true_bar
+        if interval1 <= 0 or not (min_bars_between_tops <= interval1 <= max_bars_between_tops):
+            continue
+
+        # ネックは、山1から見て「山1→ネックの本数×neck_prior_lookback_ratio」
+        # だけ遡った期間の最高値(ダブルトップなら最安値)より、さらに低い
+        # (ダブルトップなら高い)位置になければならない(ユーザー要望:「ネック
+        # は谷1よりも(谷1〜ネックまでの期間分)前の期間の最高値よりも低い
+        # 位置でなければならない」→その後「期間長を(谷1→ネック)×3.0倍に、
+        # このチェック自体もオン/オフを選べるパラメーターに」)。これを満たさ
+        # ないネックは、山1の手前からすでに続いていた大きな流れの一部でしか
+        # なく、そこだけを切り取って反転パターンとみなすのは不適切と
+        # みなして不成立にする。山1より前のデータが足りない場合は判定
+        # できないのでスキップ(不成立にはしない)。参照期間の長さはここで
+        # 確定したinterval1×neck_prior_lookback_ratioで固定し、この後ネック
+        # が再判定されても変えない - prior_extremeは形の判定時に再判定後の
+        # ネック価格と突き合わせるため、ここでは変数として残しておく。
+        prior_extreme = None
+        if neck_prior_check_enabled:
+            lookback_len = int(round(interval1 * neck_prior_lookback_ratio))
+            lookback_start = top1_true_bar - lookback_len
+            if lookback_start >= 0:
+                prior_extreme = float(
+                    neck_price_a[lookback_start:top1_true_bar].max()
+                    if bullish
+                    else neck_price_a[lookback_start:top1_true_bar].min()
+                )
+                neck_prior_ok = (neck_price < prior_extreme) if bullish else (neck_price > prior_extreme)
+                if not neck_prior_ok:
+                    continue
+
+                # 谷1の前に「仮点」を設ける(ユーザー要望) - 上のネック事前
+                # 妥当性チェックで見ている同じ遡り期間
+                # [lookback_start, top1_true_bar)の中で、終値がネックより
+                # 高い(ダブルトップなら低い)ローソク足のうち、谷1に一番
+                # 近い(バーindexが一番大きい)ものの終値を仮点とする。
+                # 「谷1の直前まで、ネックを上回る水準にいた」ことを表す
+                # 具体的な1点を作り、そこから谷1までが妥当な下落経路(直線
+                # 乖離が許容範囲内)であることを、他の3区間(山1→ネック・
+                # ネック→山2・山2→エントリー)と同じ仕組みで検証する。
+                # 該当するローソク足が1本も無ければ、この山1候補自体を
+                # 不成立にする(=5状態のいずれも成立し得ない、ユーザー
+                # 要望「上記を満たしたときのみ、下記5点の判定が有効」)。
+                # 仮点も他の3点と同じくヒゲ(生の高値/安値)ベース(ユーザー
+                # 要望:「ネックより高値が高いローソク足のうち一番新しい
+                # ローソク足の高値」- neck_price_aが元々high_a(ダブルトップ
+                # なら安値との比較用にlow_a)なので、そのまま流用できる)。
+                provisional_bar = None
+                for k in range(top1_true_bar - 1, lookback_start - 1, -1):
+                    if (neck_price_a[k] > neck_price) if bullish else (neck_price_a[k] < neck_price):
+                        provisional_bar = k
+                        break
+                if provisional_bar is None:
+                    continue
+                provisional_price = float(neck_price_a[provisional_bar])
+                if not _line_deviation_ok(provisional_bar, provisional_price, top1_true_bar, top1_price):
+                    continue
+
+        win_start = neck_true_bar + max(1, round(interval1 * symmetry_ratio_min))
+        win_end = min(neck_true_bar + round(interval1 * symmetry_ratio_max), n - 1)
+        if win_start > win_end:
+            continue
+
+        # 山2探索窓が開くまで(谷への下落〜窓が開く直前の上昇)の間に山1の
+        # 価格を上回ったら、この山1はダブルトップの起点として無効とする
+        # (ユーザー要望「山1を上回ったときはダブルトップとみなさない」)。
+        # 窓の中で山1と同水準/やや上の値が出ること自体は正常(許容誤差判定
+        # で別途扱う)なので、窓が開く直前までだけを見る。
+        # あわせて、谷が確定してから山2ができるまでの間にさらに安値(ダブル
+        # ボトムなら高値)を更新したら、谷を再判定する(ユーザー要望:
+        # 「ネックが確定してから山2ができるまでにネックラインを割った場合
+        # はネックを再判定して。山1〜山2の最安値がネックラインと一致する
+        # ように」) - 窓が開く前の区間(このループ)と窓の中(次のループ)の
+        # 両方で継続して見る。win_start/win_endは元の(再判定前の)谷を基準
+        # に既に計算済みなので、ここでの再判定はそちらに影響しない。
+        pre_window_exceeded = False
+        exceed_bar = win_start
+        running_neck_bar = neck_true_bar
+        running_neck_price = neck_price
+        running_neck_confirm_bar = neck_confirm_bar
+        for j in range(top1_true_bar + 1, win_start):
+            if (low_a[j] < top1_price) if bullish else (high_a[j] > top1_price):
+                pre_window_exceeded = True
+                exceed_bar = j
+                break
+            if j > neck_true_bar:
+                cur_neck_price = float(neck_price_a[j])
+                if (cur_neck_price > running_neck_price) if bullish else (cur_neck_price < running_neck_price):
+                    running_neck_price = cur_neck_price
+                    running_neck_bar = j
+                    # 生の高値/安値による再判定 - このバーjの時点で既に
+                    # 観測済みの実際の価格なので、pivot_right_barsぶんの
+                    # 確定待ちは不要(このバー自体が確定バー)。
+                    running_neck_confirm_bar = j
+        if pre_window_exceeded:
+            continue
+        neck_true_bar = running_neck_bar
+        neck_price = running_neck_price
+        neck_confirm_bar = running_neck_confirm_bar
+
+        # 山2探索窓([win_start, win_end])を1本ずつ進めながら、その最中に
+        # ネックラインを割ったら、その時点の暫定山2(それまでの最高値)を
+        # そのまま確定させて即エントリーにする(ユーザー要望:「山2＝(山1
+        # から谷の間隔)×0.5〜1.5だが、その期間中にネックラインをブレイク
+        # したときはその時点で山2決定でエントリーにして」) - 窓が閉じる
+        # まで待たされてエントリーが遅れる問題(実際にユーザー報告)への
+        # 対応。ブレイクの瞬間に形(許容誤差・谷の深さ・トレンドライン)が
+        # 妥当でなければ即決着にはせず、山2の更新を続けて窓の終わりまで
+        # 進む(=下の「窓が閉じるまで割れなかった場合」の通常経路にそのまま
+        # つながる)。
+        # 窓に入る時点の谷(窓が開くまでの再判定を反映済み)を控えておく。
+        neck_true_bar_pre = neck_true_bar
+        neck_price_pre = neck_price
+
+        # 山2候補は、山1の水準許容誤差(top_tolerance_type/top_tolerance)の
+        # 範囲内に収まっている値しか採用しない(ユーザー要望:「谷の水準
+        # 許容誤差内に入ってないと谷2だと見なさないでほしい」)。候補が
+        # 「新しい安値(高値)を付けたかどうか」自体はraw安値/高値(ext_price_a)
+        # で判定するが、実際に山2候補として採用する価格は終値(ユーザー要望:
+        # 「終値が安値を更新するたびに許容誤差内なら候補として更新する」) -
+        # running_raw_extremeが「新しい安値/高値が出たか」の判定専用、
+        # running_top2_bar/priceが実際の候補(終値ベース)。どちらもまだ
+        # 候補が一つも見つかっていない間はNoneのまま。
+        running_raw_extreme = None
+        running_top2_bar = None
+        running_top2_price = None
+        # top2_pivot_based=Trueの時だけ使う、山2候補(ピボット)が実際に
+        # 確定するバー(pivot_right_bars本の確認終了後、top1_confirm_bar/
+        # neck_confirm_barと同じ考え方) - Falseの時は一度も更新されず、
+        # confirm_floorのmax()に混ぜても他の2つより必ず小さいままなので
+        # 挙動に影響しない。
+        running_top2_confirm_bar = -1
+        # 谷の再判定は「その時点までに確定している山2候補(running_top2_bar)
+        # のバーまで」に限定する - neck_scanned_up_toが、谷の再判定を
+        # 反映し終えた最後のバーを表す。山2候補が更新されるたびに、
+        # そこまで谷スキャンを追いつかせる。山2候補がまだ更新されていない
+        # (=まだ本当の山2ではなく、単なる下落の途中の)バーの安値/高値は
+        # ここに含めない - 含めてしまうと、山2確定後の下落までネックの
+        # 再判定に吸収されてしまい、本来起きるはずのブレイクが消える
+        # (実際に発生: 2026-04-13のダブルトップで山2確定(21:00)後の下落が
+        # すべて谷の再判定に吸収され、ブレイクが起きなくなっていた)。
+        neck_scanned_up_to = neck_true_bar_pre
+        early_exit_bar = None
+        early_exit_kind = None
+        # Detected(検出)= 山1/ネック/山2候補が出揃い、かつ形(谷の深さ・
+        # 2区間の直線乖離・ネックの事前妥当性)も既に妥当と判定された最初の
+        # バー(ユーザー要望:「最初に谷2候補が見つかったタイミングで
+        # 「Detected」とする」- 正確には「候補が見つかり、かつ形も妥当な
+        # 最初のタイミング」。窓が閉じるまで待たずに済むよう、候補が更新
+        # されるたびに毎回チェックする)。
+        detected_bar = None
+        window_invalidated = False
+        for j in range(win_start, win_end + 1):
+            cur_raw = float(ext_price_a[j])
+            cur_close = float(close_a[j])
+            tol_j = _threshold(top1_price, atr_a[j], top_tolerance_type, top_tolerance)
+
+            # 窓の中で一度でも、終値が山1の水準許容誤差を(悪い方向に)外れ
+            # たら、この山1自体を不成立にする(ユーザー要望:「窓の中で
+            # 一度でも許容誤差より低い終値が出現すると、この谷1自体を
+            # 不成立にする」- ダブルトップならその鏡像で「許容誤差より
+            # 高い終値」)。
+            out_of_range_bad_side = (
+                (cur_close < top1_price - tol_j) if bullish else (cur_close > top1_price + tol_j)
+            )
+            if out_of_range_bad_side:
+                window_invalidated = True
+                break
+
+            # top2_pivot_based=Trueの時は、山1・仮点と同じ基準(ext_flags=
+            # 本物のピボット高値/安値)を満たすバーだけを候補更新の対象に
+            # する - それ以外のバーは単なる通過点として無視する(ユーザー
+            # 要望:「谷2の探索方法をピボット安値バージョンで別に実装して」)。
+            if (not top2_pivot_based) or ext_flags[j]:
+                is_new_extreme = running_raw_extreme is None or (
+                    (cur_raw < running_raw_extreme) if bullish else (cur_raw > running_raw_extreme)
+                )
+                if is_new_extreme:
+                    running_raw_extreme = cur_raw
+                    # 谷2の値も谷1・ネックと同じくヒゲ(生の安値/高値)ベースに
+                    # 統一する(ユーザー要望:「3点すべて髭にする」- 谷1/ネックは
+                    # 元々ヒゲ、谷2だけ終値だったのは以前の要望「終値が安値を
+                    # 更新するたびに」によるものだったが、一般的なチャート
+                    # パターンの定義(実際に到達した価格水準=ヒゲ)に合わせて
+                    # 統一した)。
+                    if abs(cur_raw - top1_price) <= tol_j:
+                        running_top2_price = cur_raw
+                        running_top2_bar = j
+                        if top2_pivot_based:
+                            # ピボット確定にはtop1・ネックと同じくpivot_
+                            # right_bars本の確認が要る(先読み防止)。
+                            running_top2_confirm_bar = j + pivot_right_bars
+
+            if running_top2_bar is None:
+                # まだ許容誤差内に収まる山2候補が一つも見つかっていない -
+                # ネックの再判定もブレイク判定もまだ評価できない。
+                continue
+
+            # 山2候補が(このバーまでに)進んだぶんだけ、谷の再判定スキャンを
+            # 追いつかせる。
+            if running_top2_bar > neck_scanned_up_to:
+                for k2 in range(neck_scanned_up_to + 1, running_top2_bar + 1):
+                    cur_neck_price = float(neck_price_a[k2])
+                    if (cur_neck_price > neck_price) if bullish else (cur_neck_price < neck_price):
+                        neck_price = cur_neck_price
+                        neck_true_bar = k2
+                        # 生の高値/安値による再判定なので確定待ち不要(前述と
+                        # 同じ理由)。
+                        neck_confirm_bar = k2
+                neck_scanned_up_to = running_top2_bar
+
+            # 山1・ネックそれぞれが「実際にピボットだと確定する(pivot_
+            # right_bars本の確認が終わる)バー」の遅い方 - これより前の
+            # バーでDetected/Confirmed/Failedを確定させると、リアルタイムでは
+            # まだ持ち得ない情報(未確定のピボット)を使ったことになる
+            # (ユーザー報告により発覚: 実データでConfirmed対象の38%が、
+            # Detected発火時点でネック未確定だった)。top2_pivot_based=True
+            # の時は山2もピボットなので同じ扱いに含める(Falseの時は
+            # running_top2_confirm_barが-1のままなので影響しない)。
+            confirm_floor = max(top1_confirm_bar, neck_confirm_bar, running_top2_confirm_bar)
+
+            # 形(山1との近さ・谷の深さ・2区間の直線乖離・ネックの事前妥当性)
+            # の判定に使うATRは、判定している今のバー(j)ではなく、山2その
+            # ものが確定した時点(running_top2_bar、最後に山2が更新された
+            # 瞬間)のもので固定する(ユーザー要望:「形の判定に使うATRは...
+            # 山2確定時点の値で固定する」)。そうしないと、山2確定後にATR
+            # (ボラティリティ)が変動するだけで「同じ山2が急に形として成立
+            # したりしなかったりする」という直感に反する挙動になっていた
+            # (実際に発生: ネックラインは早期に割れていたのに、ATRが追い
+            # つくまで数時間エントリーが遅れた)。
+            tol_now = _threshold(top1_price, atr_a[running_top2_bar], top_tolerance_type, top_tolerance)
+            extremes_similar_now = abs(running_top2_price - top1_price) <= tol_now
+            avg_now = (top1_price + running_top2_price) / 2
+            depth_tol_now = _threshold(avg_now, atr_a[running_top2_bar], min_valley_depth_type, min_valley_depth)
+            max_depth_tol_now = _threshold(avg_now, atr_a[running_top2_bar], max_valley_depth_type, max_valley_depth)
+            gap_now = (neck_price - avg_now) if bullish else (avg_now - neck_price)
+            depth_ok_now = depth_tol_now <= gap_now <= max_depth_tol_now
+            trend_ok_now = _line_deviation_ok(top1_true_bar, top1_price, neck_true_bar, neck_price) and _line_deviation_ok(
+                neck_true_bar, neck_price, running_top2_bar, running_top2_price
+            )
+            # ネックが窓の中で再判定されている場合があるので、山1より前の
+            # 期間との比較も再判定後の価格で確認し直す(前述のprior_extreme
+            # チェックと同じ理由)。
+            neck_prior_ok_now = prior_extreme is None or (
+                (neck_price < prior_extreme) if bullish else (neck_price > prior_extreme)
+            )
+            shape_ok_now = depth_ok_now and trend_ok_now and neck_prior_ok_now
+
+            if detected_bar is None and shape_ok_now and j >= confirm_floor:
+                detected_bar = j
+
+            if j < confirm_floor:
+                # 山1・ネックのどちらかがまだ未確定 - この後のブレイク判定
+                # (resolve_now/failed_now)はここでは評価しない(先読み防止)。
+                # running_top2/ネックの追跡自体はループの次の周回でも続ける。
+                continue
+
+            buf = atr_a[j] * breakout_buffer
+            if bullish:
+                breakdown_price = high_a[j] if breakout_type == "high" else close_a[j]
+                resolve_now = breakdown_price > (neck_price + buf)
+                worse_extreme = max(top1_price, running_top2_price)
+                failed_now = close_a[j] < (worse_extreme - buf)
+            else:
+                breakdown_price = low_a[j] if breakout_type == "low" else close_a[j]
+                resolve_now = breakdown_price < (neck_price - buf)
+                worse_extreme = min(top1_price, running_top2_price)
+                failed_now = close_a[j] > (worse_extreme + buf)
+            # ヒゲだけがネックを越えて終値がまだ戻っている間は無効にしない -
+            # そのまま形成中(existsの範囲)として継続し、resolve_now/
+            # failed_now(判定基準breakout_typeで選んだ価格)が実際に成立する
+            # まで待つ(ユーザー要望「髭がネックを超えてもダブルボトム継続に
+            # して」- 以前はヒゲの時点で形が妥当なら即無効にしていたが、
+            # それをやめる)。
+            if not (resolve_now or failed_now):
+                continue
+
+            if extremes_similar_now and shape_ok_now:
+                early_exit_bar = j
+                early_exit_kind = "resolve" if resolve_now else "failed"
+                break
+
+        if window_invalidated:
+            # 不成立(終値が山1の水準許容誤差を悪い方向に外れた=無効)。
+            # 前述と同じ理由で時間範囲を消費しない。
+            continue
+
+        if early_exit_bar is not None:
+            # 山2確定とエントリーが同じ瞬間 - formed_bar=山2確定バー=
+            # 発火バー。この経路では「山2からのブレイク猶予」の下限/上限
+            # (次のブロックの reject_bars/expire_bars)は評価しない(定義上
+            # 山2からの経過0本になってしまうため) - ユーザーとの合意通り、
+            # このブレイク猶予ルールは「窓の中で割れなかった場合」の通常
+            # 経路にのみ適用する。detected_barはearly_exit_barと同じか
+            # それより前(形が妥当になった時点)のはず。
+            top2_true_bar = running_top2_bar
+            top2_price = running_top2_price
+            formed_bar = early_exit_bar
+            if detected_bar is None:
+                detected_bar = formed_bar
+            exists_a[detected_bar : formed_bar + 1] = True
+            formed_bar_a[detected_bar : formed_bar + 1] = formed_bar
+            detected_a[detected_bar] = True
+            if early_exit_kind == "resolve":
+                resolve_a[formed_bar] = True
+            else:
+                failed_a[formed_bar] = True
+                # 即成立(early exit)は形成とほぼ同時に決着するため、リテスト
+                # (ネック付近への再到達)が起きる時間的余地が無い - 常に
+                # 「リテスト前の失敗」として扱う。
+                failed_before_retest_a[formed_bar] = True
+            top1_bar_a[formed_bar] = top1_true_bar
+            top2_bar_a[formed_bar] = top2_true_bar
+            top1_price_a[formed_bar] = top1_price
+            top2_price_a[formed_bar] = top2_price
+            neckline_bar_a[formed_bar] = neck_true_bar
+            neckline_price_a[formed_bar] = neck_price
+            last_consumed_bar = formed_bar
+            continue
+
+        if running_top2_bar is None:
+            # 窓の中で一度も、山1の水準許容誤差内に収まる山2候補が
+            # 見つからなかった - この山1は不成立(時間範囲は消費しない)。
+            continue
+
+        # 窓の中でネックライン割れが起きなかった(または割れても形が妥当
+        # でなかった) - 従来通り、窓の最後の時点での最高値を山2として確定
+        # し、その後のブレイク猶予(reject_bars/expire_bars)で判定する。
+        top2_true_bar = running_top2_bar
+        top2_price = running_top2_price
+        formed_bar = win_end
+        if detected_bar is None:
+            # 理論上、通常経路が成立する(下のextremes_similar等が全て
+            # 満たされる)なら、窓の最後のイテレーションでdetected_barも
+            # 必ずセットされているはずだが、念のためのフォールバック。
+            # confirm_floor未満にはできない(先読み防止、上のループ内と
+            # 同じ理由)。
+            detected_bar = max(formed_bar, confirm_floor)
+
+        # この時点でneck_true_bar/neck_priceは、ループ内の「山2候補が
+        # 進んだぶんだけ谷スキャンを追いつかせる」処理により、既に
+        # top2_true_bar(山2の値が最後に更新されたバー)まで正しく限定
+        # された値になっている(早期成立しなかった場合、山2候補の更新は
+        # ここが最後のため)。
+
+        # 形の許容誤差に使うATRは、早期成立の経路と同じく山2確定時点
+        # (top2_true_bar、山2が最後に更新されたバー)のもので固定する -
+        # 窓の終わり(formed_bar/win_end)まで待って評価すると、山2自体は
+        # とっくに確定しているのにその後のボラティリティ変化で判定が
+        # 揺れてしまう(早期成立の経路で見つかったのと同じ問題)。
+        tol = _threshold(top1_price, atr_a[top2_true_bar], top_tolerance_type, top_tolerance)
+        extremes_similar = abs(top2_price - top1_price) <= tol
+
+        avg_extreme = (top1_price + top2_price) / 2
+        depth_tol = _threshold(avg_extreme, atr_a[top2_true_bar], min_valley_depth_type, min_valley_depth)
+        max_depth_tol = _threshold(avg_extreme, atr_a[top2_true_bar], max_valley_depth_type, max_valley_depth)
+        gap = (neck_price - avg_extreme) if bullish else (avg_extreme - neck_price)
+        depth_ok = depth_tol <= gap <= max_depth_tol
+
+        trend_ok = _line_deviation_ok(top1_true_bar, top1_price, neck_true_bar, neck_price) and _line_deviation_ok(
+            neck_true_bar, neck_price, top2_true_bar, top2_price
+        )
+
+        # ネックが窓の中で再判定されている場合があるので、山1より前の期間
+        # との比較も再判定後の価格で確認し直す(早期成立の経路と同じ理由)。
+        neck_prior_ok = prior_extreme is None or (
+            (neck_price < prior_extreme) if bullish else (neck_price > prior_extreme)
+        )
+
+        if not (extremes_similar and depth_ok and trend_ok and neck_prior_ok):
+            # 不成立の候補は時間範囲を「消費」しない(ユーザー報告: すぐ近くに
+            # 別の正当なダブルボトムがあるのに検出されないケースを調査した
+            # ところ、直前の全く無関係な候補が不成立に終わったにも関わらず、
+            # その探索窓の終わり(win_end)まで次の山1候補を一切試さなく
+            # なっていたことが原因だった - 不成立の候補が結果的に後続の
+            # 正当な候補まで巻き込んでブロックしてしまう)。continueするだけ
+            # にして、次のext_events(確定ピボット)をすぐに新しい山1候補として
+            # 試す。
+            continue
+
+        interval2 = top2_true_bar - neck_true_bar
+        reject_bars = interval2 * breakout_deadline_ratio_min
+        expire_bars = interval2 * breakout_deadline_ratio_max
+        scan_end = min(top2_true_bar + int(np.ceil(expire_bars)), n - 1)
+
+        # 「山1or山2の高い方を超えたら無効」というヒゲ基準の事前チェックは
+        # 撤去した - failed_now(終値+余白ベース、下記)と同じ境界(worse_
+        # extreme)を見ているのに、ヒゲはほぼ必ず終値より先に境界を超える
+        # ため、このチェックが常にfailed_nowより先に発火してしまい、通常
+        # 経路のfailedが実質的に一度も成立できなくなっていた(リテスト有無
+        # の判定を追加した際に発覚 - ヒゲでの無効化をやめた「髭がネックを
+        # 超えてもダブルボトム継続にして」の要望と同じ理由で、山1/山2側も
+        # 終値ベースのfailed_nowだけで判定する)。
+
+        first_trigger_bar = None
+        first_trigger_kind = None
+        # 山2確定後、一度でもネック付近(ブレイク判定の余白と同じ基準)まで
+        # 価格が戻ってきたら「リテスト」成立とみなす(ユーザー要望:「Failed
+        # After Retest」と「Failed Before Retest」を分ける基準として、
+        # ブレイク余白[ATR倍率]と同じ基準を流用)。最終的にfailedで決着した
+        # 時、この時点までにリテストが起きていたかどうかで2状態に分ける。
+        retested = False
+        for j in range(top2_true_bar + 1, scan_end + 1):
+            buf = atr_a[j] * breakout_buffer
+            if bullish:
+                breakdown_price = high_a[j] if breakout_type == "high" else close_a[j]
+                resolve_now = breakdown_price > (neck_price + buf)
+                worse_extreme = max(top1_price, top2_price)
+                failed_now = close_a[j] < (worse_extreme - buf)
+                # 「ネック付近」＝ネック±ブレイク余白(ユーザー要望「ブレイク
+                # 余白と同じ基準ならネック＋αになるよね？ネック±αにしたい」
+                # - 以前はneck-buf以上を無条件でリテスト扱いにしており、
+                # ネックを遥かに超えて突き抜けた場合もリテスト成立に
+                # なってしまっていた)。
+                near_neck_now = (neck_price - buf) <= high_a[j] <= (neck_price + buf)
+            else:
+                breakdown_price = low_a[j] if breakout_type == "low" else close_a[j]
+                resolve_now = breakdown_price < (neck_price - buf)
+                worse_extreme = min(top1_price, top2_price)
+                failed_now = close_a[j] > (worse_extreme + buf)
+                near_neck_now = (neck_price - buf) <= low_a[j] <= (neck_price + buf)
+            if j < confirm_floor:
+                # 山1・ネックのどちらかがまだ未確定 - リテスト判定・ブレイク
+                # 判定とも、ここではまだ評価しない(先読み防止、上のループと
+                # 同じ理由)。
+                continue
+            if near_neck_now:
+                retested = True
+            # ヒゲだけがネックを越えて終値がまだ戻っている間は無効にしない
+            # (ユーザー要望「髭がネックを超えてもダブルボトム継続にして」) -
+            # resolve_now/failed_now(判定基準breakout_typeで選んだ価格)が
+            # 実際に成立するまで、形成中(exists)のまま待つ。
+            if resolve_now or failed_now:
+                first_trigger_bar = j
+                first_trigger_kind = "resolve" if resolve_now else "failed"
+                break
+
+        if (
+            first_trigger_bar is not None
+            and first_trigger_kind == "resolve"
+            and (first_trigger_bar - top2_true_bar) >= reject_bars
+        ):
+            # 山2とエントリーポイント(実際に発火するバー)を直線で結んだ時、
+            # その間の高値/安値が直線からtrendline_tolerance_pct%(2点間の
+            # 値幅に対する割合)以上乖離したら無効(ユーザー要望「山2と
+            # エントリーポイントを直線で結んだとき...乖離すると許容範囲
+            # 外」) - 早すぎ判定を通過したものだけ対象にする(早すぎ無効は
+            # このあとの分岐でも判定されるため、ここでは形の良し悪しだけ
+            # 見る)。この区間はConfirmed(resolve)の時だけ判定する(ユーザー
+            # 要望:「山2→エントリー(Confirmedのみ)」- Failedにはエントリー
+            # 価格という概念自体が無いため)。
+            fire_bar_candidate = max(first_trigger_bar, formed_bar)
+            if bullish:
+                entry_price = high_a[fire_bar_candidate] if breakout_type == "high" else close_a[fire_bar_candidate]
+            else:
+                entry_price = low_a[fire_bar_candidate] if breakout_type == "low" else close_a[fire_bar_candidate]
+            if not _line_deviation_ok(top2_true_bar, top2_price, fire_bar_candidate, float(entry_price)):
+                # 山1→ネック→山2(①②)は妥当でもこの区間(③)の形が悪い場合、
+                # Confirmedにはしない。ただしDetectedは既に②の時点で成立
+                # しているため、候補ごと握りつぶさず「有効な決着が一度も
+                # 起きなかった」= Expiredとして扱う(ユーザー選択:
+                # 「Expiredとして扱う(推奨)」)。first_trigger自体を無かった
+                # ことにすれば、この下のif/elif/else分岐がそのままExpired
+                # ルートに落ちる。
+                first_trigger_bar = None
+                first_trigger_kind = None
+
+        # 山1/山2/ネックラインのスナップショットはformed_bar(=このパターンが
+        # 出揃ったバー)1点にだけ書く - api_server.py::_compute_pattern_
+        # markersは「事象が起きたバー→formed_barを引く→formed_barの位置で
+        # top1_bar等を読む」という2段引きをする作りなので、formed_barと
+        # 同じ場所に置かないと(以前fire_barに置いていた時のように)読めない
+        # バグになる(実際に発生: resolve自体は成立してもマーカーが1件も
+        # 出ない不具合)。formed_bar自体は、パターンが「生きている」全バー
+        # (exists区間・fire_bar含む)に同じ値を書き込み、どのバーからでも
+        # このformed_barを引けるようにする。
+        if first_trigger_bar is None:
+            # 猶予本数以内にブレイクが一度も起きなかった - 形成中(exists)
+            # のまま猶予切れで終わる。exists自体は本物の出力なのでそのまま
+            # 書き込むが、次の山1候補を試せるようになるのは山1/谷/山2の
+            # 3点が出揃った時点(formed_bar)まででよい - 猶予切れ(exists_end)
+            # まで待たせると、判定不能なまま終わった候補が、近くにある
+            # 別の正当な候補まで巻き込んでブロックしてしまう(前述と同じ
+            # 理由)。
+            exists_end = min(top2_true_bar + int(expire_bars), n - 1)
+            exists_a[detected_bar : exists_end + 1] = True
+            formed_bar_a[detected_bar : exists_end + 1] = formed_bar
+            detected_a[detected_bar] = True
+            expired_a[exists_end] = True
+            top1_bar_a[formed_bar] = top1_true_bar
+            top2_bar_a[formed_bar] = top2_true_bar
+            top1_price_a[formed_bar] = top1_price
+            top2_price_a[formed_bar] = top2_price
+            neckline_bar_a[formed_bar] = neck_true_bar
+            neckline_price_a[formed_bar] = neck_price
+            last_consumed_bar = formed_bar
+        elif (first_trigger_bar - top2_true_bar) < reject_bars:
+            # 早すぎるブレイク - このダブルトップ自体を無効とする(ユーザー
+            # 要望「(ネックから山2までの本数)×0.5以内にネックラインを
+            # 下抜けたときはダブルトップとみなさない」)。exists/resolve/
+            # failedのいずれも立てない。不成立なので時間範囲を消費しない
+            # (前述と同じ理由)。
+            pass
+        else:
+            fire_bar = max(first_trigger_bar, formed_bar)
+            exists_a[detected_bar : fire_bar + 1] = True
+            formed_bar_a[detected_bar : fire_bar + 1] = formed_bar
+            detected_a[detected_bar] = True
+            if first_trigger_kind == "resolve":
+                resolve_a[fire_bar] = True
+            else:
+                failed_a[fire_bar] = True
+                if retested:
+                    failed_after_retest_a[fire_bar] = True
+                else:
+                    failed_before_retest_a[fire_bar] = True
+            top1_bar_a[formed_bar] = top1_true_bar
+            top2_bar_a[formed_bar] = top2_true_bar
+            top1_price_a[formed_bar] = top1_price
+            top2_price_a[formed_bar] = top2_price
+            neckline_bar_a[formed_bar] = neck_true_bar
+            neckline_price_a[formed_bar] = neck_price
+            last_consumed_bar = fire_bar
+
+    exists_series = pd.Series(exists_a, index=idx_index)
+    resolve_series = pd.Series(resolve_a, index=idx_index)
+    return {
+        "exists": exists_series,
+        "resolve": resolve_series,
+        "failed": pd.Series(failed_a, index=idx_index),
+        # EA Studio的な5状態モデル(ユーザー要望:「チャートパターンは基本的
+        # にはすべてこの運用にする」)。
+        # - detected: 谷2候補が最初に見つかった瞬間(窓の途中でも良い)。
+        #   ユーザー仕様⑤「最初に谷2候補が見つかったタイミングで、
+        #   『Detected』とする」- existsの立ち上がりより前に来ることがある。
+        # - confirmed: ネックラインを実際に突破した瞬間(=resolveと同じ)。
+        # - failed_after_retest/failed_before_retest: 山2確定後、決着(失敗)
+        #   までの間に一度でもネック付近(ブレイク余白と同じ基準)まで価格が
+        #   戻ってきていればafter、一度も戻らないまま失敗すればbefore。
+        #   即成立(early exit)経路はリテストする時間的余地が無いため常に
+        #   before扱い。
+        # - expired: 猶予切れで決着がつかないまま終わった瞬間。
+        "detected": pd.Series(detected_a, index=idx_index),
+        "confirmed": resolve_series,
+        "failed_after_retest": pd.Series(failed_after_retest_a, index=idx_index),
+        "failed_before_retest": pd.Series(failed_before_retest_a, index=idx_index),
+        "expired": pd.Series(expired_a, index=idx_index),
+        # 「このバーで確定した2つの山/谷はどのバーだったか」- チャート上に
+        # 実際にエントリーへ使われた山/谷だけを印付けたい(汎用のピボット
+        # 全表示だと多すぎて分かりにくいというユーザー要望)ためのもので、
+        # resolve/failed/existsの判定自体には使わない副産物の情報。
+        "top1_bar": pd.Series(top1_bar_a, index=idx_index),
+        "top2_bar": pd.Series(top2_bar_a, index=idx_index),
+        "top1_price": pd.Series(top1_price_a, index=idx_index),
+        # ネックライン(2つの山/谷の間の谷/山)- 山/谷どうしの近さだけでなく
+        # 「その間がどれだけ深く/高く離れているか」の判定にも、ブレイクの
+        # 基準ラインにも使われる、パターン成立に不可欠な第3の点。
+        "neckline_bar": pd.Series(neckline_bar_a, index=idx_index),
+        "neckline_price": pd.Series(neckline_price_a, index=idx_index),
+        "top2_price": pd.Series(top2_price_a, index=idx_index),
+        "formed_bar": pd.Series(formed_bar_a, index=idx_index),
+    }
+
+
 def double_top_breakdown(
     high: pd.Series, low: pd.Series, close: pd.Series,
-    swing_lookback: int = 5, tolerance_atr_mult: float = 0.5,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
 ) -> np.ndarray:
-    """Two swing highs at a similar level (within `tolerance_atr_mult`
-    ATRs of each other), confirmed on the bar the second one completes,
-    followed by a break below the most recently confirmed swing low (the
-    "neckline") - the classic bearish reversal pattern."""
-    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
-    swing_high = _swing_high_levels(high, swing_lookback)
-    swing_low = _swing_low_levels(low, swing_lookback)
-    lh0, lh1 = _nth_back_level(swing_high, 0), _nth_back_level(swing_high, 1)
-    bh0 = _nth_back_bar_index(swing_high)
-    bar_index = pd.Series(np.arange(len(high)), index=high.index)
+    """ダブルトップのネックライン割れ(ショート方向のシグナル) - 厳密仕様版
+    (ユーザー提供の仕様書通りに実装)。以前の簡易版(2つのスイング高値の水準
+    が近ければ即成立、山の間隔にもブレイクまでの期間にも制限なし)は
+    ユーザー報告:「ダブルトップのエントリーが全然ダブルトップに見えない」
+    の原因だった。判定フローは_double_top_bottom_stateのdocstring参照。"""
+    state = _double_top_bottom_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["resolve"].to_numpy(dtype=float)
 
-    formed = (bar_index == bh0) & _similar(lh0, lh1, atr_values, tolerance_atr_mult)
-    neckline = _nth_back_level(swing_low, 0)
-    breakdown = close < neckline
-    return _first_occurrence_after(formed, breakdown)
+
+def double_top_failed(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """ダブルトップ不成立(ロング方向のシグナル) - ネックライン割れが起きる
+    前に、終値が両トップの高い方+breakout_bufferを上抜けた瞬間に成立する
+    (ユーザー要望の「Double Top Failed」と「Double Top Top Break Up」を
+    1つに統合したもの - 「ネックラインを割らず、終値が高値レベルを上抜け」
+    という同一の価格イベントを指すとユーザーに確認済み)。弱気の反転シナリオ
+    が否定された、という意味でロングエントリー候補になる。"""
+    state = _double_top_bottom_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["failed"].to_numpy(dtype=float)
+
+
+def double_top_exists(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """ダブルトップ形成中(方向を持たない状態フィルター) - 2つのトップが
+    確定してから、ネックライン割れ/Failed成立/猶予本数超過のいずれかで
+    決着するまでの間、常にTrueであり続ける(ユーザー要望:「パターン自体は
+    方向を持たない検出結果として扱い、その後のシグナルで売買方向を決定
+    できるようにしたい」- 例: 「ロング禁止フィルター」としての利用)。"""
+    state = _double_top_bottom_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["exists"].to_numpy(dtype=float)
+
+
+# EA Studio的な5状態モデル(Detected/Confirmed/Failed After Retest/Failed
+# Before Retest/Expired)を1つの指標のパラメータ選択でまとめて選べるように
+# したもの(ユーザー要望:「チャートパターンは基本的にはすべてこの運用に
+# する...エントリー条件を選ぶ際は「チャートパターン」→「ダブルボトム」を
+# 選択。「ダブルボトム」内のパラメーター選択で状態を選べるように」)。
+# double_top_breakdown/failed/existsは既存の保存済みストラテジーとの互換性
+# のためそのまま残し、こちらは新しい選び方として追加する(置き換えでは
+# ない)。ダブルボトムは他のチャートパターンへ展開する前段の実装として、
+# まずこの2つ(ダブルトップ/ダブルボトム)だけに適用する。
+_PATTERN_STATE_KEYS = {
+    "detected": "detected",
+    "confirmed": "confirmed",
+    "failed_after_retest": "failed_after_retest",
+    "failed_before_retest": "failed_before_retest",
+    "expired": "expired",
+}
+
+
+def double_top(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """ダブルトップ - Detected/Confirmed/Failed After Retest/Failed Before
+    Retest/Expiredの5状態をstateパラメータで選べる統合版(EA Studio的な
+    パターンのライフサイクル管理)。判定フローは_double_top_bottom_stateの
+    docstring参照。"""
+    result = _double_top_bottom_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    key = _PATTERN_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
+
+
+def double_top_pivot(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """ダブルトップ(谷2ピボット版) - double_topと全く同じ5状態モデルだが、
+    山2の探索方法だけが違う(ユーザー要望:「谷2の探索方法をピボット安値
+    バージョンで別に実装して。今の構造はそのまま別に残して」)。double_top
+    は「窓の中で山1に近い最高値」を山2として採用するのに対し、こちらは
+    「窓の中の本物のピボット高値(山1・仮点と同じ判定基準)」だけを山2候補
+    にする、一般的なチャートパターン認識ツールにより近い方式。既存の
+    double_topはこの関数と無関係に一切変更していない。"""
+    result = _double_top_bottom_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, True,
+        max_valley_depth_type, max_valley_depth,
+    )
+    key = _PATTERN_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
 
 
 def double_bottom_breakout(
     high: pd.Series, low: pd.Series, close: pd.Series,
-    swing_lookback: int = 5, tolerance_atr_mult: float = 0.5,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
 ) -> np.ndarray:
-    """Mirror image of double_top_breakdown."""
-    atr_values = _atr_series(pd.DataFrame({"high": high, "low": low, "close": close}), 14)
-    swing_low = _swing_low_levels(low, swing_lookback)
-    swing_high = _swing_high_levels(high, swing_lookback)
-    ll0, ll1 = _nth_back_level(swing_low, 0), _nth_back_level(swing_low, 1)
-    bl0 = _nth_back_bar_index(swing_low)
-    bar_index = pd.Series(np.arange(len(low)), index=low.index)
+    """Mirror image of double_top_breakdown - ネックライン(直近の確定
+    スイング高値)を上抜けた瞬間(ロング方向のシグナル)。"""
+    state = _double_top_bottom_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["resolve"].to_numpy(dtype=float)
 
-    formed = (bar_index == bl0) & _similar(ll0, ll1, atr_values, tolerance_atr_mult)
-    neckline = _nth_back_level(swing_high, 0)
-    breakout = close > neckline
-    return _first_occurrence_after(formed, breakout)
+
+def double_bottom_failed(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """Mirror image of double_top_failed - ネックライン上抜けが起きる前に、
+    終値が両ボトムの低い方-breakout_bufferを下抜けた瞬間(ショート方向の
+    シグナル、強気の反転シナリオが否定された)。"""
+    state = _double_top_bottom_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["failed"].to_numpy(dtype=float)
+
+
+def double_bottom_exists(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """Mirror image of double_top_exists - ダブルボトム形成中(方向を持たない
+    状態フィルター)。"""
+    state = _double_top_bottom_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    return state["exists"].to_numpy(dtype=float)
+
+
+def double_bottom(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """Mirror image of double_top - ダブルボトムの5状態統合版(Detected/
+    Confirmed/Failed After Retest/Failed Before Retest/Expired)。"""
+    result = _double_top_bottom_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, False,
+        max_valley_depth_type, max_valley_depth,
+    )
+    key = _PATTERN_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
+
+
+def double_bottom_pivot(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 15,
+    pivot_right_bars: int = 15,
+    min_bars_between_tops: int = 10,
+    max_bars_between_tops: int = 80,
+    top_tolerance_type: str = "atr",
+    top_tolerance: float = 0.5,
+    min_valley_depth_type: str = "atr",
+    min_valley_depth: float = 1.0,
+    symmetry_ratio_min: float = 0.5,
+    symmetry_ratio_max: float = 1.5,
+    trendline_tolerance_pct: float = 80.0,
+    breakout_type: str = "close",
+    breakout_buffer: float = 0.1,
+    breakout_deadline_ratio_min: float = 0.5,
+    breakout_deadline_ratio_max: float = 1.5,
+    pip_size: float = 0.0001,
+    neck_prior_check_enabled: bool = True,
+    neck_prior_lookback_ratio: float = 3.0,
+    max_valley_depth_type: str = "atr",
+    max_valley_depth: float = 999.0,
+    **p,
+) -> np.ndarray:
+    """Mirror image of double_top_pivot - ダブルボトム(谷2ピボット版)。
+    既存のdouble_bottomはこの関数と無関係に一切変更していない。"""
+    result = _double_top_bottom_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, min_bars_between_tops, max_bars_between_tops,
+        top_tolerance_type, top_tolerance, min_valley_depth_type, min_valley_depth,
+        symmetry_ratio_min, symmetry_ratio_max, trendline_tolerance_pct,
+        breakout_type, breakout_buffer, breakout_deadline_ratio_min, breakout_deadline_ratio_max, pip_size,
+        neck_prior_check_enabled, neck_prior_lookback_ratio, True,
+        max_valley_depth_type, max_valley_depth,
+    )
+    key = _PATTERN_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
 
 
 def triple_top_breakdown(
@@ -872,3 +2088,627 @@ def equal_low(
     bar_index = pd.Series(np.arange(len(low)), index=low.index)
     formed = (bar_index == bl0) & _similar(ll0, ll1, atr_values, tolerance_atr_mult)
     return formed.fillna(False).to_numpy(dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# Double Top/Bottom (形状判定版・2026-07-25) - "本物のW字/M字か"をより厳密に
+# 判定する再設計版。既存のdouble_top/double_bottom/double_top_pivot/
+# double_bottom_pivotとは完全に独立した、別のロジック・別の指標として追加
+# (既存のものには一切手を加えていない)。ユーザーとの設計レビューで固まった
+# 仕様をそのまま実装している:
+#
+#   ①山1(bullish=Falseなら谷1、以下山1で統一)の検出: 左右pivot_left_bars/
+#     pivot_right_bars本より高い(安い)、かつ左右の境界の安値(高値)より
+#     ATR×prominence_atr_mult以上高い(低い) - 単なる順位だけでなく、値幅
+#     そのものを問う「本物の反発」基準(ユーザー指摘:「0.1Pipsとかでも安け
+#     ればそれがピボット安値になっちゃう、それは反発とは言えない」)。
+#   ②山1前のトレンド確認(pre_trend_check_enabledでON/OFF): 山1の価格が、
+#     その手前pre_trend_lookback_bars本の価格よりATR×pre_trend_atr_mult
+#     以上高い(低い)こと。100件サンプルチェックで見つかった「谷1がゆるい
+#     上昇トレンドの起点に過ぎない」崩れ方への対策。
+#   ③ネックライン: 山1より後、山2が確定するまでの間に出た、①と同じ基準
+#     (逆方向)を満たす本物のピボットのうち一番低い(高い)もの - 新しい
+#     ピボットが出るたびに更新されるが、既に選んだネックの探索窓を過ぎて
+#     からの後出しピボットは採用しない(そのネックではもう山2を探せない
+#     ため無意味)。
+#   ④山1→ネックの間隔(interval1)がmin_bars_between_tops〜
+#     max_bars_between_topsの範囲内。
+#   ⑤山2の探索窓 = ネックからinterval1×symmetry_ratio_min〜
+#     symmetry_ratio_max本の範囲。
+#   ⑥⑦山2候補: 窓の中で①と同じ基準(値幅込みの本物のピボット)を満たし、
+#     かつ山1との価格差がATR×top_tolerance_atr_mult以内のバーのうち、
+#     時系列で最後に見つかったもの(「条件を満たす最新の候補で更新」 -
+#     複雑な極値追跡はせず、単純に上書きしていく)。窓の中で山1の水準を
+#     許容誤差を超えて突き抜ける値が一度でも出たら、その時点でこの山1
+#     候補ごと不成立にする(ユーザー判断:「許容範囲外の安値が出たらそれは
+#     もうダブルボトムじゃない」)。
+#   ⑧谷(山)の深さ: ネックライン−(山1・山2の平均、絶対値)がATR×
+#     min_valley_depth_atr_mult以上・ATR×max_valley_depth_atr_mult以下。
+#   ⑨山1前点: ネックが確定した時点で山1より過去に遡り、安値≦
+#     (ネック∓余白)≦高値を満たす、山1に一番近い(直近の)バーを探す。
+#     この点の価格はそのバー自身のOHLCではなく水準(ネック∓余白)そのもの。
+#     この水準は⑫のブレイク判定水準と同じ側にする(ユーザー判断
+#     2026-07-27: 以前は符号が逆で、ブレイク水準とは反対側の水準を使って
+#     しまっていた)。見つからなければ候補ごと不成立(ユーザー判断)。
+#     山1前点→ネックの本数を時間0(interval0)とする(以前は山1前点→山1
+#     だったが、⑫の対称性チェックの比較対象を時間1に変更したのに合わせて
+#     変更、ユーザー判断2026-07-27)。
+#   ⑩値動きのなめらかさ(効率比・終値ベース): 各区間(山1前→山1・山1→ネッ
+#     ク・ネック→山2・山2→ブレイク[Confirmed評価時のみ])について、正味の
+#     値動き÷総移動距離がefficiency_ratio_min以上(②のON/OFFとは無関係に
+#     常に判定 - ユーザー判断:「滑らかさも切り離して」)。
+#   ⑪直線からの乖離(高値/安値ベース): ⑩と同じ各区間で、区間の両端を結ぶ
+#     直線からの最大乖離が、trendline_dev_basis(「atr」または
+#     「price_pct」)で選んだ基準以内。
+#   ①〜⑨、および⑩⑪のうち山1前→山1・山1→ネック・ネック→山2の3区間が
+#     揃った瞬間(confirm_floor、先読み防止のため各ピボットの右側確認が
+#     終わるまで遅延させる)が"Detected"。
+#   ⑫決着判定(6状態): Rejected(早すぎるブレイク - formed_barから山1→ネック
+#     の本数(interval1)×breakout_deadline_ratio_min本未満での突破は無効。
+#     山2→ネックの本数ではなくinterval1基準にしたのはユーザー判断
+#     2026-07-27)/Confirmed(ネックライン突破、かつ時間0(山1前点→ネックの
+#     本数)が時間1(ネック→ブレイクの本数、判定バーごとに変わる)×
+#     interval_symmetry_ratio_min〜maxの範囲内、かつ山2→ブレイク区間も
+#     なめらかさ・直線乖離を満たす - 満たさなければRejected。比較対象を
+#     interval1からネック→ブレイクの本数(時間1)に変更したのはユーザー判断
+#     2026-07-27)/Failed After Retest/Failed Before Retest/Expired(interval1×
+#     breakout_deadline_ratio_max本経過しても決着しなければ期限切れ)。
+#     同一バーでConfirmed・Failed両方の条件が成立した場合はFailedを優先
+#     する(ユーザー判断: バックテストエンジン本体のSL/TP同時ヒット時と
+#     同じ「悪い方を優先」という既存の全体方針に合わせた)。
+#
+# 上記どの判定にも、実際にそのピボットが「本物」だと確定するpivot_right_bars
+# 本の確認遅延を先読み防止として組み込んでいる(_double_top_bottom_stateの
+# confirm_floorと同じ考え方)。
+# ---------------------------------------------------------------------------
+
+def _double_top_bottom_shape_state(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    bullish: bool,
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 1.0,
+    pre_trend_check_enabled: bool = False,
+    pre_trend_lookback_bars: int = 30,
+    pre_trend_atr_mult: float = 2.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 2.5,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    min_valley_depth_atr_mult: float = 2.0,
+    max_valley_depth_atr_mult: float = 999.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 5.0,
+    efficiency_ratio_min: float = 0.1,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 80.0,
+    breakout_deadline_ratio_min: float = 0.3,
+    breakout_deadline_ratio_max: float = 2.5,
+    interval_symmetry_ratio_min: float = 0.5,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.0,
+    breakout_type: str = "close",
+) -> dict[str, pd.Series]:
+    """モジュール冒頭のコメント参照。bullish=Trueでダブルボトム、Falseで
+    ダブルトップ(高値/安値・上下を反転させた鏡像)。
+
+    top_tolerance_basis: 山1・山2の水準許容誤差の基準。"atr"は固定ATR倍率
+    (パターンの規模に関わらず一定なので、期間が短い/値動きが小さいパターン
+    では相対的に緩すぎ、期間が長い/値動きが大きいパターンでは相対的に厳し
+    すぎる傾向がある)。"price_pct"は山1→ネックの値幅(山2探索時点で既知の
+    量)に対する%で、trendline_dev_basisと同じ考え方でパターンの規模に応じ
+    て許容誤差がスケールする。
+
+    breakout_buffer_basis: ネックライン付近での「本物のブレイク/失敗」判定
+    に使う余白の基準。top_tolerance_basisと同じ理由で"atr"は固定ATR倍率、
+    "price_pct"は谷の深さ(⑧で計算済み、山1前点探索・ブレイク確定・失敗
+    判定・リテスト判定の全てで谷の深さは既知)に対する%。谷の深さ自体は
+    (min/max_valley_depth_atr_multで判定する)パターンの規模の主指標なので
+    ATR倍率のままにしてある(top_toleranceやbreakout_bufferのような「別の
+    値幅と比較する許容誤差」ではないため)。"""
+    n = len(high)
+    idx_index = high.index
+    high_a = high.to_numpy(dtype=float)
+    low_a = low.to_numpy(dtype=float)
+    close_a = close.to_numpy(dtype=float)
+    df = pd.DataFrame({"high": high, "low": low, "close": close})
+    atr_a = _atr_series(df, 14).to_numpy()
+
+    if breakout_type not in ("close", "wick"):
+        raise ValueError(f"未対応のbreakout_typeです(close/wickのみ対応): {breakout_type}")
+    if trendline_dev_basis not in ("atr", "price_pct"):
+        raise ValueError(f"未対応のtrendline_dev_basisです(atr/price_pctのみ対応): {trendline_dev_basis}")
+
+    # 「山」= 高値側の反転点、「谷」= 安値側の反転点。bullish(ダブルボトム)
+    # は谷1→ネック(高値側)→谷2、ダブルトップはその鏡像。
+    ext_price_a = low_a if bullish else high_a  # 山1/山2側(反転点そのもの)
+    neck_price_a = high_a if bullish else low_a  # ネック側
+
+    # ① 値幅込みのピボット判定 - 通常のピボット判定(_detect_pivot_highs/
+    # _detect_pivot_lows)に、「左右の境界からATR×prominence_atr_mult以上
+    # 離れているか」という値幅の下限を追加でANDする。
+    plain_pivot_ext = (
+        _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+    ).to_numpy()
+    plain_pivot_neck = (
+        _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+    ).to_numpy()
+
+    boundary_other_a = high_a if bullish else low_a  # 反転点側の判定に使う「境界」の反対サイド
+    left_boundary = pd.Series(boundary_other_a).shift(pivot_left_bars).to_numpy()
+    right_boundary = pd.Series(boundary_other_a).shift(-pivot_right_bars).to_numpy()
+    prom_thresh = atr_a * prominence_atr_mult
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_ext = (left_boundary - ext_price_a >= prom_thresh) & (right_boundary - ext_price_a >= prom_thresh)
+        else:
+            prominence_ok_ext = (ext_price_a - left_boundary >= prom_thresh) & (ext_price_a - right_boundary >= prom_thresh)
+    prominence_ok_ext = np.nan_to_num(prominence_ok_ext, nan=0.0).astype(bool)
+    ext_flags = plain_pivot_ext & prominence_ok_ext
+
+    neck_boundary_other_a = low_a if bullish else high_a
+    left_boundary_neck = pd.Series(neck_boundary_other_a).shift(pivot_left_bars).to_numpy()
+    right_boundary_neck = pd.Series(neck_boundary_other_a).shift(-pivot_right_bars).to_numpy()
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_neck = (neck_price_a - left_boundary_neck >= prom_thresh) & (neck_price_a - right_boundary_neck >= prom_thresh)
+        else:
+            prominence_ok_neck = (left_boundary_neck - neck_price_a >= prom_thresh) & (right_boundary_neck - neck_price_a >= prom_thresh)
+    prominence_ok_neck = np.nan_to_num(prominence_ok_neck, nan=0.0).astype(bool)
+    neck_flags = plain_pivot_neck & prominence_ok_neck
+
+    ext_events = [i for i in range(n) if ext_flags[i]]
+    neck_events_all = [i for i in range(n) if neck_flags[i]]
+
+    def _threshold_atr(bar: int, mult: float) -> float:
+        return atr_a[bar] * mult
+
+    def _efficiency_ratio(start_bar: int, end_bar: int) -> float:
+        """正味の値動き(終値ベース)÷実際に動いた総距離。区間が1本以下なら
+        判定不能として満点(1.0)扱い(短すぎる区間をなめらかさの理由で
+        落とさないため)。"""
+        if end_bar <= start_bar:
+            return 1.0
+        segment = close_a[start_bar : end_bar + 1]
+        net_move = abs(segment[-1] - segment[0])
+        path = np.abs(np.diff(segment)).sum()
+        if path <= 0:
+            return 1.0
+        return net_move / path
+
+    def _max_deviation_ok(start_bar: int, start_price: float, end_bar: int, end_price: float) -> bool:
+        """区間の両端を結んだ直線から、高値/安値のヒゲが最大でどれだけ
+        乖離しているかを判定する(_line_deviation_okと同じ考え方だが、
+        許容幅をATR基準/価格差基準のどちらで取るか選べる)。"""
+        span = end_bar - start_bar
+        if span <= 0:
+            return True
+        if trendline_dev_basis == "atr":
+            tol = _threshold_atr(end_bar, trendline_dev_atr_mult)
+        else:
+            tol = abs(end_price - start_price) * (trendline_dev_pct / 100.0)
+        for j in range(start_bar, end_bar + 1):
+            line_v = start_price + (end_price - start_price) * (j - start_bar) / span
+            if max(abs(high_a[j] - line_v), abs(low_a[j] - line_v)) > tol:
+                return False
+        return True
+
+    exists_a = np.zeros(n, dtype=bool)
+    detected_a = np.zeros(n, dtype=bool)
+    rejected_a = np.zeros(n, dtype=bool)
+    resolve_a = np.zeros(n, dtype=bool)  # confirmed
+    failed_after_retest_a = np.zeros(n, dtype=bool)
+    failed_before_retest_a = np.zeros(n, dtype=bool)
+    expired_a = np.zeros(n, dtype=bool)
+    formed_bar_a = np.full(n, np.nan)
+    top1_bar_a = np.full(n, np.nan)
+    top2_bar_a = np.full(n, np.nan)
+    top1_price_a = np.full(n, np.nan)
+    top2_price_a = np.full(n, np.nan)
+    neckline_bar_a = np.full(n, np.nan)
+    neckline_price_a = np.full(n, np.nan)
+
+    # 以前はlast_consumed_barで「既に決着した候補の区間より前の山1候補」を
+    # スキップしていたが、これだと大きいダブルトップの中に小さいダブル
+    # トップがネストしている場合、大きい方が先に決着すると小さい方が丸ごと
+    # スキップされてしまっていた。両方を独立に検出できるようにするため、
+    # 消費済み区間によるスキップを廃止し、全ての山1候補を独立に評価する
+    # (ユーザー判断2026-07-27)。
+    for top1_true_bar in ext_events:
+        top1_price = float(ext_price_a[top1_true_bar])
+        top1_confirm_bar = top1_true_bar + pivot_right_bars
+
+        # ② 山1前のトレンド確認(ON/OFFのオンオフはpre_trend_check_enabled)
+        if pre_trend_check_enabled:
+            ref_bar = top1_true_bar - pre_trend_lookback_bars
+            if ref_bar < 0:
+                continue
+            trend_thresh = _threshold_atr(top1_true_bar, pre_trend_atr_mult)
+            ref_price = float(ext_price_a[ref_bar])
+            if bullish:
+                if not (ref_price - top1_price >= trend_thresh):
+                    continue
+            else:
+                if not (top1_price - ref_price >= trend_thresh):
+                    continue
+
+        # ③ ネックライン探索 - 有効なネック候補(min/max_bars_between_tops
+        # を満たす)のうち、「一番良い(高い/安い)ものだが、それより後に
+        # 出た候補は、既に選んだネックの探索窓を過ぎていたら採用しない」
+        # というルールで確定させる。
+        neck_true_bar = None
+        neck_price = None
+        for k in neck_events_all:
+            if k <= top1_true_bar:
+                continue
+            interval1_candidate = k - top1_true_bar
+            if interval1_candidate > max_bars_between_tops:
+                break  # neck_events_allは昇順なので、これ以降はもっと遠い
+            if interval1_candidate < min_bars_between_tops:
+                continue
+            if neck_true_bar is not None:
+                interval1_prev = neck_true_bar - top1_true_bar
+                prev_win_end = neck_true_bar + int(np.floor(interval1_prev * symmetry_ratio_max))
+                if k > prev_win_end:
+                    break  # 今のネックの探索窓を過ぎてから出た候補はもう無意味
+            is_better = (
+                neck_price is None
+                or (neck_price_a[k] > neck_price if bullish else neck_price_a[k] < neck_price)
+            )
+            if is_better:
+                neck_price = float(neck_price_a[k])
+                neck_true_bar = k
+
+        if neck_true_bar is None:
+            continue
+        neck_confirm_bar = neck_true_bar + pivot_right_bars
+
+        interval1 = neck_true_bar - top1_true_bar
+        win_start = neck_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
+        win_end = min(neck_true_bar + int(np.floor(interval1 * symmetry_ratio_max)), n - 1)
+        if win_start > win_end:
+            continue
+
+        # ⑥⑦ 山2候補 - 窓の中で値幅込みピボット・水準許容誤差を両方満たす
+        # バーを見つけるたびに上書き(「最新の候補で更新」)。許容誤差を
+        # 超えて悪化する値が一度でも出たら候補ごと不成立。
+        # top_tolerance_basisが"price_pct"の場合、山1→ネックの値幅(この
+        # 時点で既知)に対する%を許容誤差とする(パターン規模でスケール)。
+        # "atr"の場合は従来通りバーごとのATR倍率(バーによって変動)。
+        top_tolerance_pct_value = abs(top1_price - neck_price) * (top_tolerance_pct / 100.0)
+        top2_true_bar = None
+        top2_price = None
+        window_invalidated = False
+        for j in range(win_start, win_end + 1):
+            tol_j = top_tolerance_pct_value if top_tolerance_basis == "price_pct" else _threshold_atr(j, top_tolerance_atr_mult)
+            if bullish:
+                breached = low_a[j] < top1_price - tol_j
+            else:
+                breached = high_a[j] > top1_price + tol_j
+            if breached:
+                window_invalidated = True
+                break
+            if ext_flags[j] and abs(ext_price_a[j] - top1_price) <= tol_j:
+                top2_true_bar = j
+                top2_price = float(ext_price_a[j])
+
+        if window_invalidated or top2_true_bar is None:
+            continue
+        top2_confirm_bar = top2_true_bar + pivot_right_bars
+
+        # ⑧ 谷(山)の深さ
+        avg_extreme = (top1_price + top2_price) / 2
+        depth = (neck_price - avg_extreme) if bullish else (avg_extreme - neck_price)
+        depth_min = _threshold_atr(top2_true_bar, min_valley_depth_atr_mult)
+        depth_max = _threshold_atr(top2_true_bar, max_valley_depth_atr_mult)
+        if not (depth_min <= depth <= depth_max):
+            continue
+
+        # breakout_buffer_basisが"price_pct"の場合、谷の深さ(直前の⑧で計算
+        # 済み)に対する%を余白とする。山1前点探索・ブレイク確定・失敗判定・
+        # リテスト判定の全てで共通のこの値を使う("atr"の場合は決着判定の
+        # ループ内でバーごとのATRを都度使うので、そちらは従来通りバーごと
+        # に計算する)。
+        breakout_buffer_pct_value = depth * (breakout_buffer_pct / 100.0)
+
+        # ⑨ 山1前点 - 山1より過去に遡り、安値≦(ネック∓余白)≦高値を満たす
+        # 直近のバーを探す。見つからなければ候補ごと不成立。この水準は
+        # ⑫のブレイク判定水準と揃える(ユーザー判断2026-07-27: 以前は
+        # 符号が逆で、ブレイク水準とは反対側の水準を使ってしまっていた)。
+        pre_buf = breakout_buffer_pct_value if breakout_buffer_basis == "price_pct" \
+            else _threshold_atr(top1_true_bar, breakout_buffer_atr_mult)
+        pre_level = neck_price + pre_buf if bullish else neck_price - pre_buf
+        pre_bar = None
+        for k in range(top1_true_bar - 1, -1, -1):
+            if low_a[k] <= pre_level <= high_a[k]:
+                pre_bar = k
+                break
+        if pre_bar is None:
+            continue
+        # 時間0(山1前点→ネック)。以前は山1前点→山1だったが、対称性チェックの
+        # 比較対象を時間1(ネック→ブレイク)に変更したのに合わせて、時間0も
+        # 同じくネックまでの本数にする(ユーザー判断2026-07-27)。
+        interval0 = neck_true_bar - pre_bar
+
+        # ①〜⑨、および⑩⑪のうち山1前→山1・山1→ネック・ネック→山2の3区間
+        # が先読みなしに揃う最初のバー(confirm_floor)
+        confirm_floor = max(top1_confirm_bar, neck_confirm_bar, top2_confirm_bar)
+        if confirm_floor >= n:
+            continue  # データの末尾で確定しきれない
+
+        # ⑩⑪ 山1前→山1・山1→ネック・ネック→山2のなめらかさ - ②(トレンド
+        # 確認)のON/OFFとは無関係に常に判定する(ユーザー判断:「滑らかさも
+        # 切り離して」- ⑨の谷1前点探索・間隔0自体も元々②とは無関係に常に
+        # 動くようになっているので、それと揃える形)。②でON/OFFが効くのは
+        # 山1の値幅(下げ幅/上げ幅)基準のみ。
+        legs_ok = True
+        if _efficiency_ratio(pre_bar, top1_true_bar) < efficiency_ratio_min:
+            legs_ok = False
+        if legs_ok and not _max_deviation_ok(pre_bar, pre_level, top1_true_bar, top1_price):
+            legs_ok = False
+        if legs_ok and _efficiency_ratio(top1_true_bar, neck_true_bar) < efficiency_ratio_min:
+            legs_ok = False
+        if legs_ok and not _max_deviation_ok(top1_true_bar, top1_price, neck_true_bar, neck_price):
+            legs_ok = False
+        if legs_ok and _efficiency_ratio(neck_true_bar, top2_true_bar) < efficiency_ratio_min:
+            legs_ok = False
+        if legs_ok and not _max_deviation_ok(neck_true_bar, neck_price, top2_true_bar, top2_price):
+            legs_ok = False
+        if not legs_ok:
+            continue
+
+        formed_bar = confirm_floor
+        detected_a[formed_bar] = True
+
+        # ⑫ 決着判定
+        # ブレイク猶予(reject_bars/expire_bars)の基準をネック→山2の本数
+        # (旧interval2)から山1→ネックの本数(interval1)に変更(ユーザー
+        # 判断2026-07-27)。
+        reject_bars = interval1 * breakout_deadline_ratio_min
+        expire_bars = interval1 * breakout_deadline_ratio_max
+        scan_start = max(top2_true_bar + 1, formed_bar)
+        scan_end = min(top2_true_bar + int(np.ceil(expire_bars)), n - 1)
+
+        retest_buf = None  # 遅延評価(バーごとにATRが変わるため)
+        retested = False
+        outcome = None  # "rejected" | "confirmed" | "failed" | "expired"
+        outcome_bar = None
+
+        for j in range(scan_start, scan_end + 1):
+            buf = breakout_buffer_pct_value if breakout_buffer_basis == "price_pct" \
+                else _threshold_atr(j, breakout_buffer_atr_mult)
+            worse_extreme = min(top1_price, top2_price) if bullish else max(top1_price, top2_price)
+
+            if breakout_type == "close":
+                confirm_hit = (close_a[j] > neck_price + buf) if bullish else (close_a[j] < neck_price - buf)
+                fail_hit = (close_a[j] < worse_extreme - buf) if bullish else (close_a[j] > worse_extreme + buf)
+            else:  # "wick"
+                confirm_hit = (high_a[j] > neck_price + buf) if bullish else (low_a[j] < neck_price - buf)
+                fail_hit = (low_a[j] < worse_extreme - buf) if bullish else (high_a[j] > worse_extreme + buf)
+
+            retest_zone_lo = neck_price - buf * retest_buffer_mult
+            retest_zone_hi = neck_price + buf * retest_buffer_mult
+            near_neck_now = (retest_zone_lo <= high_a[j] <= retest_zone_hi) or (retest_zone_lo <= low_a[j] <= retest_zone_hi) or (low_a[j] <= retest_zone_lo and high_a[j] >= retest_zone_hi)
+            if near_neck_now:
+                retested = True
+
+            if not (confirm_hit or fail_hit):
+                continue
+
+            # 同一バーでConfirmed/Failed両方成立した場合はFailedを優先
+            # (ユーザー判断: バックテストエンジン本体のSL/TP同時ヒット時と
+            # 同じ「悪い方を優先」という既存の全体方針に合わせる)。
+            if fail_hit:
+                outcome = "failed"
+                outcome_bar = j
+                break
+
+            # ここに来るのはconfirm_hitのみ成立した場合。「早すぎる」の起点は
+            # 山2のバー(top2_true_bar)ではなくformed_bar(先読み回避のため
+            # 判定を開始できる最初のバー)にする。山2からformed_barまでは
+            # 既にピボット右本数ぶん経過しているので、起点を山2のままに
+            # すると、interval1×breakout_deadline_ratio_min(reject_bars)が
+            # ピボット右本数より小さいパターン(間隔が短いダブルトップに
+            # よくある)で、判定を開始できる時点で既にreject_barsを使い切って
+            # しまい、このガードが実質機能しなくなっていた(ユーザー報告
+            # 2026-07-27: formed_barの1本後に即Confirmedになった実例)。
+            bars_since_formed = j - formed_bar
+            if bars_since_formed < reject_bars:
+                outcome = "rejected"
+                outcome_bar = j
+                break
+
+            # 時間0(山1前点→ネック)と時間1(ネック→ブレイク)の対称性(基準を
+            # 山1→ネックの本数からネック→ブレイクの本数に変更、時間0も
+            # 山1前点→山1からネックまでの本数に変更、ユーザー判断
+            # 2026-07-27)、および山2→ブレイク区間のなめらかさ
+            time1 = j - neck_true_bar
+            symmetric_ok = (
+                time1 * interval_symmetry_ratio_min <= interval0 <= time1 * interval_symmetry_ratio_max
+            )
+            breakout_leg_ok = (
+                symmetric_ok
+                and _efficiency_ratio(top2_true_bar, j) >= efficiency_ratio_min
+                and _max_deviation_ok(top2_true_bar, top2_price, j, float(close_a[j] if breakout_type == "close" else (high_a[j] if bullish else low_a[j])))
+            )
+            if not breakout_leg_ok:
+                outcome = "rejected"
+                outcome_bar = j
+                break
+
+            outcome = "confirmed"
+            outcome_bar = j
+            break
+
+        if outcome is None:
+            outcome = "expired"
+            outcome_bar = scan_end
+
+        exists_end = outcome_bar if outcome_bar is not None else scan_end
+        exists_a[formed_bar : exists_end + 1] = True
+        formed_bar_a[formed_bar : exists_end + 1] = formed_bar
+        top1_bar_a[formed_bar] = top1_true_bar
+        top2_bar_a[formed_bar] = top2_true_bar
+        top1_price_a[formed_bar] = top1_price
+        top2_price_a[formed_bar] = top2_price
+        neckline_bar_a[formed_bar] = neck_true_bar
+        neckline_price_a[formed_bar] = neck_price
+
+        if outcome == "rejected":
+            rejected_a[outcome_bar] = True
+        elif outcome == "confirmed":
+            resolve_a[outcome_bar] = True
+        elif outcome == "failed":
+            if retested:
+                failed_after_retest_a[outcome_bar] = True
+            else:
+                failed_before_retest_a[outcome_bar] = True
+        else:
+            expired_a[outcome_bar] = True
+
+    return {
+        "exists": pd.Series(exists_a, index=idx_index),
+        "detected": pd.Series(detected_a, index=idx_index),
+        "rejected": pd.Series(rejected_a, index=idx_index),
+        "confirmed": pd.Series(resolve_a, index=idx_index),
+        "failed_after_retest": pd.Series(failed_after_retest_a, index=idx_index),
+        "failed_before_retest": pd.Series(failed_before_retest_a, index=idx_index),
+        "expired": pd.Series(expired_a, index=idx_index),
+        "formed_bar": pd.Series(formed_bar_a, index=idx_index),
+        "top1_bar": pd.Series(top1_bar_a, index=idx_index),
+        "top2_bar": pd.Series(top2_bar_a, index=idx_index),
+        "top1_price": pd.Series(top1_price_a, index=idx_index),
+        "top2_price": pd.Series(top2_price_a, index=idx_index),
+        "neckline_bar": pd.Series(neckline_bar_a, index=idx_index),
+        "neckline_price": pd.Series(neckline_price_a, index=idx_index),
+    }
+
+
+_SHAPE_STATE_KEYS = {
+    "detected": "detected",
+    "rejected": "rejected",
+    "confirmed": "confirmed",
+    "failed_after_retest": "failed_after_retest",
+    "failed_before_retest": "failed_before_retest",
+    "expired": "expired",
+}
+
+
+def double_bottom_shape(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 1.0,
+    pre_trend_check_enabled: bool = False,
+    pre_trend_lookback_bars: int = 30,
+    pre_trend_atr_mult: float = 2.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 2.5,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    min_valley_depth_atr_mult: float = 2.0,
+    max_valley_depth_atr_mult: float = 999.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 5.0,
+    efficiency_ratio_min: float = 0.1,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 80.0,
+    breakout_deadline_ratio_min: float = 0.3,
+    breakout_deadline_ratio_max: float = 2.5,
+    interval_symmetry_ratio_min: float = 0.5,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.0,
+    breakout_type: str = "close",
+    **p,
+) -> np.ndarray:
+    """ダブルボトム(形状判定版) - モジュール冒頭のコメント参照。
+    Detected/Rejected/Confirmed/Failed After Retest/Failed Before Retest/
+    Expiredの6状態をstateパラメータで選べる(既存のdouble_bottom/
+    double_bottom_pivotとは完全に独立した実装、そちらは一切変更していない)。"""
+    result = _double_top_bottom_shape_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, prominence_atr_mult,
+        pre_trend_check_enabled, pre_trend_lookback_bars, pre_trend_atr_mult,
+        min_bars_between_tops, max_bars_between_tops,
+        symmetry_ratio_min, symmetry_ratio_max,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        min_valley_depth_atr_mult, max_valley_depth_atr_mult,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        efficiency_ratio_min,
+        trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        breakout_deadline_ratio_min, breakout_deadline_ratio_max,
+        interval_symmetry_ratio_min, interval_symmetry_ratio_max,
+        retest_buffer_mult,
+        breakout_type,
+    )
+    key = _SHAPE_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
+
+
+def double_top_shape(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 1.0,
+    pre_trend_check_enabled: bool = False,
+    pre_trend_lookback_bars: int = 30,
+    pre_trend_atr_mult: float = 2.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 2.5,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    min_valley_depth_atr_mult: float = 2.0,
+    max_valley_depth_atr_mult: float = 999.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 5.0,
+    efficiency_ratio_min: float = 0.1,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 80.0,
+    breakout_deadline_ratio_min: float = 0.3,
+    breakout_deadline_ratio_max: float = 2.5,
+    interval_symmetry_ratio_min: float = 0.5,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.0,
+    breakout_type: str = "close",
+    **p,
+) -> np.ndarray:
+    """Mirror image of double_bottom_shape - ダブルトップ(形状判定版)。"""
+    result = _double_top_bottom_shape_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, prominence_atr_mult,
+        pre_trend_check_enabled, pre_trend_lookback_bars, pre_trend_atr_mult,
+        min_bars_between_tops, max_bars_between_tops,
+        symmetry_ratio_min, symmetry_ratio_max,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        min_valley_depth_atr_mult, max_valley_depth_atr_mult,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        efficiency_ratio_min,
+        trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        breakout_deadline_ratio_min, breakout_deadline_ratio_max,
+        interval_symmetry_ratio_min, interval_symmetry_ratio_max,
+        retest_buffer_mult,
+        breakout_type,
+    )
+    key = _SHAPE_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)

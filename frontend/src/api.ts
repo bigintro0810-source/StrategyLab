@@ -116,7 +116,7 @@ export interface ChartIndicatorSeries {
 
 export async function fetchStrategyChartIndicators(
   strategyId: string,
-  limit = 20000,
+  limit = 200000,
 ): Promise<{ indicators: ChartIndicatorSeries[] }> {
   const res = await client.get<{ indicators: ChartIndicatorSeries[] }>(
     `/strategies/${strategyId}/chart-indicators`,
@@ -155,7 +155,7 @@ export async function fetchDataChartIndicators(
   symbol: string,
   timeframe: string,
   indicators: IndicatorSpec[],
-  limit = 20000,
+  limit = 200000,
 ): Promise<{ indicators: ChartIndicatorSeries[] }> {
   const res = await client.post<{ indicators: ChartIndicatorSeries[] }>('/data-chart-indicators', {
     symbol,
@@ -163,6 +163,47 @@ export async function fetchDataChartIndicators(
     indicators,
     limit,
   })
+  return res.data
+}
+
+// ダブルトップ/ボトム系indicatorが実際に成立/決着した回だけ、根拠となった
+// 2つの山/谷の時刻・価格を返す(api_server.pyの_compute_pattern_markers
+// 参照) - チャートの汎用ピボット全表示だと多すぎるため、エントリーに
+// 使われた場所だけ印付けたいというユーザー要望向け。
+export interface PatternMarkerEvent {
+  indicator: string
+  kind: 'top' | 'bottom'
+  event_time: string
+  top1_time: string
+  top1_price: number
+  top2_time: string
+  top2_price: number
+  // ネックライン(2つの山/谷の間の谷/山) - パターン成立・ブレイク判定の
+  // 基準ラインになる第3の点(ユーザー指摘:「谷も条件に必要でしょ」)。
+  neckline_time: string
+  neckline_price: number
+}
+
+export async function fetchStrategyPatternMarkers(
+  strategyId: string,
+  limit = 200000,
+): Promise<{ events: PatternMarkerEvent[] }> {
+  const res = await client.get<{ events: PatternMarkerEvent[] }>(
+    `/strategies/${strategyId}/pattern-markers`,
+    { params: { limit } },
+  )
+  return res.data
+}
+
+export async function fetchPatternMarkers(params: {
+  symbol: string
+  timeframe: string
+  condition_tree?: TreeNode | null
+  long_condition_tree?: TreeNode | null
+  short_condition_tree?: TreeNode | null
+  limit?: number
+}): Promise<{ events: PatternMarkerEvent[] }> {
+  const res = await client.post<{ events: PatternMarkerEvent[] }>('/pattern-markers', params)
   return res.data
 }
 

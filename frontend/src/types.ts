@@ -22,6 +22,39 @@ export interface ConditionNode {
   // timeframe concept.
   timeframe?: string
   value_timeframe?: string
+  // +/-○○Pips(ユーザー要望:「EMA+○○Pipsや終値-○○Pipsを選択できるように
+  // してほしい」- 「EMA 200 自足 ＞ 終値 +20Pips 自足」のように、価格単位
+  // (price_level/volatility/signed_price_diff kind)の指標にだけ意味を持つ
+  // オフセット)。undefined/0 = オフセットなし(今までの挙動と同じ)。
+  // value_offset_pipsはvalueが指標参照(string)の時だけ意味を持つ。
+  // offset_modeがこの数値の意味を決める(ユーザー要望:「オフセットで固定値
+  // ○○Pipsだけじゃなく価格の+○%、ATR(○)の-○%もできるようにして」):
+  //   "pips"(デフォルト) - 固定Pips数(今まで通り)
+  //   "price_pct"         - 現在の終値のX%(比較対象自身の値ではなく、常に
+  //                         "今の価格スケール"基準 - ユーザー確認済み)
+  //   "atr_pct"           - ATR(offset_atr_length)のX%
+  offset_pips?: number
+  value_offset_pips?: number
+  offset_mode?: 'pips' | 'price_pct' | 'atr_pct'
+  value_offset_mode?: 'pips' | 'price_pct' | 'atr_pct'
+  // offset_mode/value_offset_modeが"atr_pct"の時だけ意味を持つATR期間。
+  // undefined = 14(engine/conditions.py::Conditionのデフォルトと同じ)。
+  offset_atr_length?: number
+  value_offset_atr_length?: number
+  // 固定値(value/compareMode==='literal'の時)をどう解釈するか(ユーザー
+  // 要望:「固定値でオフセットと同じように価格の％とATRの％を選べるように
+  // してほしい」→続けて「固定値の種類のプルダウンに価格とPips追加して。
+  // 価格そのものが価格。価格差はPipsにして」):
+  //   "value"     - そのままの数値(price_level kindの指標向け - 「価格」
+  //                として表示。例: 終値 > 150.5)
+  //   "pips"      - 数値×銘柄のpipサイズ(volatility/signed_price_diff kind
+  //                の指標向け - 「Pips」として表示。例: 実体サイズ > 20Pips)
+  //   "price_pct" - 現在の終値のX%
+  //   "atr_pct"   - ATR(literal_atr_length)のX%
+  // undefined = "value"(今までの挙動と同じ)。
+  literal_mode?: 'value' | 'pips' | 'price_pct' | 'atr_pct'
+  // literal_modeが"atr_pct"の時だけ意味を持つATR期間。undefined = 14。
+  literal_atr_length?: number
 }
 
 // Mirrors engine/conditions.py::ConditionGroup.to_dict()
@@ -56,6 +89,26 @@ export interface IndicatorParamSpec {
   type: 'int' | 'float' | 'choice' | 'string_choice'
   choices?: number[]
   string_choices?: { value: string; label: string }[]
+  // このパラメータの「目安の数値」(engine/indicator_pool.py::IndicatorSpec.
+  // value_presets - 元は自動探索のチェックボックス用リストだが、手動ビル
+  // ダーの数値入力欄にカーソルを合わせた時のヒントとしても流用する。
+  // 未設定/空なら特にヒントは出さない(ユーザー要望:「すべての指標に共通
+  // することで、数値を入れるところにカーソルを合わせると目安の数値が
+  // 表示されるようにして」)。
+  presets?: number[]
+  // このパラメータの「設定できる範囲」(engine/indicator_pool.py::
+  // IndicatorSpec.param_ranges - 元は自動探索がサンプリングする範囲だが、
+  // 手動ビルダーの数値入力欄にカーソルを合わせた時のヒントとしても流用
+  // する)。choice/string_choiceタイプ(既に選択肢が見えている)や、
+  // 自動探索側に対応する範囲情報が無いパラメータでは未設定になる。
+  range?: [number, number]
+  // このパラメータを表示するかどうかが、同じ指標の別のパラメータ(通常は
+  // 個数を選ぶ"choice"タイプ)の現在値に依存する場合に設定される - 例:
+  // EMAパーフェクトオーダーの「EMA5」は「EMA本数」が5の時だけ表示
+  // (ユーザー要望:「パーフェクトオーダーは現在4本だけど3〜5本まで選択
+  // できるようにして」→EMA本数を可変にしつつ、選んでいない分のEMA欄まで
+  // 常時表示すると紛らわしいための対応)。
+  show_if?: { param: string; min: number }
 }
 
 export interface IndicatorInfo {
@@ -71,11 +124,56 @@ export interface IndicatorInfo {
   // (指標同士の比較のみ意図された設計) - falseの時はConditionRow.tsxの
   // 「固定値」選択肢自体を出さない。
   allow_literal: boolean
+  // ローソク足/チャート/ICTパターン等のboolean_signal・trend_binary(陽線、
+  // オーダーブロック、SuperTrend方向など)は常に固定値(1.0等)とだけ比較する
+  // 設計で、他の指標と比較する意味がない - falseの時はConditionRow.tsxの
+  // 「比較先」で「指標」選択肢自体を出さない(ユーザー報告:「比較元が
+  // 「陽線」のときも比較先で指標を選べるのはおかしい」)。
+  allow_indicator_pair: boolean
+  // nullなら全演算子(より上/より下/一致/上抜け/下抜け等)を選べる。
+  // 「陽線」のようなboolean_signal・trend_binaryはコード側で["=="]に絞られて
+  // 返ってくる - 1.0/0.0や1/-1しか値を取らないため「一致」以外の演算子は
+  // 意味を持たない(ユーザー報告:「陽線＞固定値 これどういう意味?」)。
+  allowed_operators: Operator[] | null
+  // 比較できる固定値の選択肢(nullなら自由入力)。「陽線」等のboolean_signal
+  // はここが必ず[1.0]という1択のみになる(=方向・比較先を表示する意味が
+  // 無い、ユーザー報告:「陽線の時比較先出す必要あるの?」) - ConditionRow.
+  // tsxはこれが長さ1の配列の時、方向/比較先ボックスごと隠して代わりに
+  // 固定の説明文を出す。SuperTrend方向等のtrend_binaryは複数選択肢を持つため
+  // 対象外(比較先の数値入力は残る)。
+  literal_choices: number[] | null
+  // 固定値入力欄を実際に制限するmin/max(engine/indicator_pool.py::
+  // _LITERAL_HARD_BOUNDS) - RSIなら[0,100]、EMA角度なら[-90,90]のような
+  // 「定義上絶対に超えられない範囲」だけが入る。nullなら制限なし(自由入力、
+  // 今までの挙動)。ユーザー報告:「角度の固定値1000とか入れたらどうなる
+  // の?」→絶対に真にも偽にもならない意味のない条件を打ててしまう問題への
+  // 対応。
+  literal_hard_bound: [number | null, number | null] | null
+  // 固定値の「目安の数値」(engine/indicator_pool.py::IndicatorSpec.
+  // literal_presets) - literal_hard_boundとは別物で、こちらは「絶対に超え
+  // られない限界」ではなく「よく使われる代表的な値」のリスト(RSIなら
+  // [20,30,...,80]等)。カーソルを合わせた時のヒント表示にのみ使う。
+  literal_presets: number[] | null
   // engine/indicator_pool.pyのkind("price_level"/"oscillator_0_100"/
   // "boolean_signal"など)。ConditionRow.tsxが、kind==="price_level"の指標を
   // 終値と比較する時に「より上/より下」を価格目線(EMA200より上=価格が
   // EMA200を上回っている)で解釈するために使う。
   kind: string | null
+  // 指標同士の比較で「比較先」候補を絞り込む単位 - 通常はkindと同じ値だが、
+  // 同じkindでも測定単位が違う指標(RSIの移動平均からの乖離=RSIポイント、
+  // ボリンジャー幅=%、キリ番までの距離=Pips - 全部kind="unitless_ratio")
+  // は指標ごとに異なる値になり、実質「自分自身(パラメータ違い)としか
+  // 比較できない」ようになる(ユーザー報告:「比較元RSIの移動平均からの
+  // 乖離。比較先キリ番までの距離っておかしくない?」)。ConditionRow.tsxは
+  // 比較先候補の絞り込みにkindではなく必ずこちらを使う。
+  pair_group: string | null
+  // 統合版(ダブルトップ/ダブルボトム等、stateパラメータで5状態を選べる版)
+  // に置き換えられた旧指標(ネックライン割れ/不成立/形成中の3分割版) -
+  // 新規に条件を組む時のピッカー一覧には出さないが、既存の保存済み
+  // ストラテジーがまだ参照しているためAPI/バックエンドからは消さない
+  // (ユーザー要望:「古い3種を選択リストから外して、保存済みストラテジー
+  // の読み込み・表示自体は引き続き動く形で」)。
+  legacy?: boolean
 }
 
 export type Direction = 'short' | 'long'

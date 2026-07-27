@@ -322,10 +322,22 @@ export default function App() {
   // why rr/exit-rule/position-sizing settings don't apply in these modes.
   const [explorationMode, setExplorationMode] = useState<'manual' | 'structure' | 'structure_genetic'>('manual')
   // Two-level nav: mainTab picks one of MAIN_TABS, subTab picks one of that
-  // tab's own subTabs (its id, not index - independent state per mainTab
-  // isn't needed since only one subTab bar is ever visible at a time).
+  // tab's own subTabs (its id, not index). subTabByMainTab remembers the
+  // last subTab visited PER mainTab (ユーザー要望:「ストラテジー詳細画面
+  // でドローダウンやチャート等すべてにおいて、その画面から離れた際戻った
+  // ら同じ画面を表示するようにして。比較や合成、ライブラリや検証でも
+  // すべて同じように」) - previously a single flat subTab string was
+  // shared across all mainTabs and reset to that tab's first subTab on
+  // every top-nav click (handleMainTabClick below), so leaving 検証>
+  // モンテカルロ or ライブラリ>合成 and coming back via the top nav always
+  // landed back on the first subTab instead of where the user actually
+  // was. subTab itself stays a plain derived string (falling back to that
+  // mainTab's first subTab if never visited) so every existing `subTab`/
+  // `setSubTab` call site below keeps working unchanged.
   const [mainTab, setMainTab] = useState<MainTab>('explore')
-  const [subTab, setSubTab] = useState('manual')
+  const [subTabByMainTab, setSubTabByMainTab] = useState<Record<string, string>>({})
+  const subTab = subTabByMainTab[mainTab] ?? MAIN_TABS.find((t) => t.id === mainTab)?.subTabs[0].id ?? ''
+  const setSubTab = (id: string) => setSubTabByMainTab((prev) => ({ ...prev, [mainTab]: id }))
   const queryClient = useQueryClient()
 
   // ランキング一覧は画面に収まる固定高さの枠内で自分だけスクロールする
@@ -336,9 +348,25 @@ export default function App() {
   const rankingScrollTopRef = useRef(0)
   const reverseScrollTopRef = useRef(0)
 
-  const handleMainTabClick = (tab: MainTab) => {
+  // mainTabとsubTabを同時に切り替える時はこちらを使う - setSubTabは現在の
+  // (切り替え前の)mainTabをクロージャで捉えているため、setMainTab(tab)と
+  // setSubTab(sub)を続けて呼んでも、setStateは次の再描画まで反映されず
+  // sub側がまだ古いmainTabに書き込まれてしまう(実際に起きていた不具合:
+  // 探索完了時の自動遷移でsetMainTab('results')の直後にsetSubTab('ranking')
+  // を呼んでいたが、'ranking'が古いmainTab側に記録されてしまっていた)。
+  // 遷移先のタブを明示的に渡すことでこれを避ける。
+  const navigateTo = (tab: MainTab, sub?: string) => {
     setMainTab(tab)
-    setSubTab(MAIN_TABS.find((t) => t.id === tab)?.subTabs[0].id ?? '')
+    if (sub !== undefined) {
+      setSubTabByMainTab((prev) => ({ ...prev, [tab]: sub }))
+    }
+  }
+
+  const handleMainTabClick = (tab: MainTab) => {
+    navigateTo(tab)
+    // subTab自体はsubTabByMainTab[tab]から自動的に導出される(前回そのタブに
+    // いた時のsubTab、未訪問ならそのタブの最初のsubTab) - ここで明示的に
+    // リセットする必要はない。
   }
 
   const handleSubTabClick = (id: string) => {
@@ -424,8 +452,7 @@ export default function App() {
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['collections'] })
       setLibraryTabOrder((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]))
-      setMainTab('library')
-      setSubTab(created.id)
+      navigateTo('library', created.id)
     },
   })
 
@@ -595,6 +622,10 @@ export default function App() {
   // Tabs/AutoExplorationDetail自体がアンマウントされ、戻ってきた時に
   // 累積Pipsへリセットされてしまう(実際に踏んだ不具合)。
   const [detailActiveTabs, setDetailActiveTabs] = useState<Record<number, TabId>>({})
+  // ストラテジー詳細パネルのチャートタブのスクロール/ズーム位置も同じ理由で
+  // rank単位で保持する(ユーザー報告:「チャート過去に遡ったままタブ離れ
+  // たら最新のチャートに戻っちゃう」- ChartPanel.tsx参照)。
+  const [chartVisibleRanges, setChartVisibleRanges] = useState<Record<number, { from: number; to: number }>>({})
 
   // 結果>比較・結果>合成でチェックした行(それぞれ独立、詳細タブのチェックとは
   // 別)。どちらも比較/合成に元データ(equity_curve/trade_log)が要るため、
@@ -620,6 +651,21 @@ export default function App() {
   // idは永続的な文字列なので、こちらも新しいバックテストが始まってもリセット
   // しない。
   const [libraryDetailActiveTabs, setLibraryDetailActiveTabs] = useState<Record<string, TabId>>({})
+  // ライブラリ側ストラテジー詳細パネルのチャートスクロール位置(上の
+  // chartVisibleRangesと同じ理由、id単位)。
+  const [libraryChartVisibleRanges, setLibraryChartVisibleRanges] = useState<
+    Record<string, { from: number; to: number }>
+  >({})
+  // ライブラリ一覧(LibraryScreen.tsx)のソート順/絞り込みも同じ理由で
+  // App.tsx側に持つ(ユーザー要望:「ライブラリでも画面から離れた際戻った
+  // ら同じ画面を表示するようにして」) - 保存済み/お気に入り/各コレクション
+  // タブごとに独立させるため、'saved'/'favorites'/コレクションidをキーに
+  // する。
+  const DEFAULT_LIBRARY_SORT = { sortKey: 'profit_factor', sortAsc: false, filters: {} as Record<string, string> }
+  const [librarySortState, setLibrarySortState] = useState<
+    Record<string, { sortKey: string; sortAsc: boolean; filters: Record<string, string> }>
+  >({})
+  const getLibrarySort = (scope: string) => librarySortState[scope] ?? DEFAULT_LIBRARY_SORT
   // ライブラリ>合成でチェックしたid(比較は既存のcompareIds/CompareScreenを
   // そのまま使うので合成専用の状態だけ追加する)。
   const [libraryCompositeIds, setLibraryCompositeIds] = useState<string[]>([])
@@ -1038,6 +1084,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 探索(手動/自動どちらも同じjobIdを使う)が完了したら結果画面(ランキング)
+  // へ自動で移動する(ユーザー要望:「探索が終わったら自動で結果画面に
+  // 移動するようにして」) - stop_requestedによる途中停止もstatus='done'
+  // として返ってくるので、結果はそのまま表示できる。1件のjobIdにつき
+  // 1回だけ移動する(navigatedJobIdRefで判定) - そうしないと、結果画面から
+  // 探索タブへ手動で戻った後、statusQueryの再フェッチのたびに強制的に
+  // 結果画面へ引き戻されてしまう。
+  const navigatedJobIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (jobId && statusQuery.data?.status === 'done' && navigatedJobIdRef.current !== jobId) {
+      navigatedJobIdRef.current = jobId
+      navigateTo('results', 'ranking')
+    }
+  }, [jobId, statusQuery.data?.status])
+
   const resultsQuery = useQuery<BacktestResults>({
     queryKey: ['backtest-results', jobId],
     queryFn: () => fetchBacktestResults(jobId as string),
@@ -1316,6 +1377,7 @@ export default function App() {
       isCompareChecked: compareIds.includes(id),
       isCompositeChecked: libraryCompositeIds.includes(id),
       activeTab: libraryDetailActiveTabs[id] ?? 'equity',
+      chartVisibleRange: libraryChartVisibleRanges[id] ?? null,
     }
   })
 
@@ -1525,6 +1587,7 @@ export default function App() {
         isCompositeChecked: compositeRanks.includes(rank),
         isSaved: meta != null,
         activeTab: detailActiveTabs[rank] ?? 'equity',
+        chartVisibleRange: chartVisibleRanges[rank] ?? null,
       }
     }
 
@@ -1550,6 +1613,7 @@ export default function App() {
       isCompositeChecked: compositeRanks.includes(rank),
       isSaved: savedMeta[rank] != null,
       activeTab: detailActiveTabs[rank] ?? 'equity',
+      chartVisibleRange: chartVisibleRanges[rank] ?? null,
     }
   })
 
@@ -1685,8 +1749,7 @@ export default function App() {
         if (origin === 'library') setLibraryReverseResults(data.ranking_total)
         else setResultsReverseResults(data.ranking_total)
         if (reverseSourceMainTab) {
-          setMainTab(reverseSourceMainTab)
-          setSubTab('reversed')
+          navigateTo(reverseSourceMainTab, 'reversed')
         }
       })
       .catch(() => setReverseError('反転結果の取得に失敗しました。'))
@@ -2102,28 +2165,42 @@ export default function App() {
             results={results}
           />
         )}
-        {mainTab === 'library' && (subTab === 'saved' || subTab === 'favorites') && (
-          <LibraryScreen
-            title={subTab === 'favorites' ? 'お気に入りの戦略' : '保存済みストラテジー'}
-            emptyMessage={subTab === 'favorites' ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
-            queryKey={['strategies', subTab === 'favorites']}
-            queryFn={() => fetchStrategiesFiltered(subTab === 'favorites')}
-            indicators={indicatorsQuery.data ?? []}
-            openIds={libraryOpenIds}
-            onToggleChecked={toggleLibraryChecked}
-            deleteMode="delete"
-            onDelete={async (ids) => {
-              await Promise.all(ids.map((id) => deleteStrategy(id)))
-              queryClient.invalidateQueries({ queryKey: ['strategies'] })
-            }}
-            reverseIds={reverseIds}
-            onToggleReverse={toggleReverseId}
-            onReverseExecute={handleReverseExecuteFromLibrary}
-            alreadyReversedIds={Array.from(reversedOriginKeys)
-              .filter((k) => k.startsWith('id:'))
-              .map((k) => k.slice(3))}
-          />
-        )}
+        {(() => {
+          if (mainTab !== 'library' || (subTab !== 'saved' && subTab !== 'favorites')) return null
+          const scope = subTab === 'favorites' ? 'favorites' : 'saved'
+          const sort = getLibrarySort(scope)
+          return (
+            <LibraryScreen
+              title={subTab === 'favorites' ? 'お気に入りの戦略' : '保存済みストラテジー'}
+              emptyMessage={subTab === 'favorites' ? 'お気に入りに登録された戦略がありません' : '保存された戦略がありません'}
+              queryKey={['strategies', subTab === 'favorites']}
+              queryFn={() => fetchStrategiesFiltered(subTab === 'favorites')}
+              indicators={indicatorsQuery.data ?? []}
+              openIds={libraryOpenIds}
+              onToggleChecked={toggleLibraryChecked}
+              deleteMode="delete"
+              onDelete={async (ids) => {
+                await Promise.all(ids.map((id) => deleteStrategy(id)))
+                queryClient.invalidateQueries({ queryKey: ['strategies'] })
+              }}
+              reverseIds={reverseIds}
+              onToggleReverse={toggleReverseId}
+              onReverseExecute={handleReverseExecuteFromLibrary}
+              alreadyReversedIds={Array.from(reversedOriginKeys)
+                .filter((k) => k.startsWith('id:'))
+                .map((k) => k.slice(3))}
+              sortKey={sort.sortKey}
+              sortAsc={sort.sortAsc}
+              onSortChange={(next) =>
+                setLibrarySortState((prev) => ({ ...prev, [scope]: { ...sort, ...next } }))
+              }
+              filters={sort.filters}
+              onFiltersChange={(next) =>
+                setLibrarySortState((prev) => ({ ...prev, [scope]: { ...sort, filters: next } }))
+              }
+            />
+          )
+        })()}
         {mainTab === 'library' && subTab === 'reversed' && (
           <div className="glass-panel flex flex-col rounded-2xl p-4" style={{ height: 'calc(100vh - 122px)' }}>
             <div className="mb-3 flex flex-none items-baseline gap-2">
@@ -2152,6 +2229,7 @@ export default function App() {
         {(() => {
           const activeCollection = collectionsQuery.data?.find((c) => c.id === subTab)
           if (mainTab !== 'library' || !activeCollection) return null
+          const sort = getLibrarySort(activeCollection.id)
           return (
             <LibraryScreen
               key={activeCollection.id}
@@ -2172,6 +2250,15 @@ export default function App() {
               }}
               onAddClick={() => setAddToCollectionTarget(activeCollection.id)}
               showReverseColumn={false}
+              sortKey={sort.sortKey}
+              sortAsc={sort.sortAsc}
+              onSortChange={(next) =>
+                setLibrarySortState((prev) => ({ ...prev, [activeCollection.id]: { ...sort, ...next } }))
+              }
+              filters={sort.filters}
+              onFiltersChange={(next) =>
+                setLibrarySortState((prev) => ({ ...prev, [activeCollection.id]: { ...sort, filters: next } }))
+              }
             />
           )
         })()}
@@ -2189,6 +2276,7 @@ export default function App() {
             onToggleCompare={toggleCompareId}
             onToggleComposite={toggleLibraryComposite}
             onTabChange={(id, tabId) => setLibraryDetailActiveTabs((prev) => ({ ...prev, [id]: tabId }))}
+            onChartRangeChange={(id, range) => setLibraryChartVisibleRanges((prev) => ({ ...prev, [id]: range }))}
             candidates={libraryCompositeCandidates}
             onToggleInput={toggleLibraryChecked}
           />
@@ -2274,6 +2362,7 @@ export default function App() {
             reverseCount={reverseRanks.length}
             onReverseExecute={handleReverseExecuteFromResults}
             onDetailTabChange={(rank, tabId) => setDetailActiveTabs((prev) => ({ ...prev, [rank]: tabId }))}
+            onDetailChartRangeChange={(rank, range) => setChartVisibleRanges((prev) => ({ ...prev, [rank]: range }))}
             detailCandidates={resultsCompositeCandidates}
             onToggleDetailInput={(id) => toggleRowChecked(Number(id))}
           />
