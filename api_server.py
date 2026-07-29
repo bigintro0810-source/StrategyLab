@@ -1144,8 +1144,10 @@ INDICATOR_LABELS: dict[str, str] = {
     # 確認・値動きのなめらかさ(効率比・直線乖離)・山1前点との対称性等、
     # 「本物のW字/M字か」をより厳密に判定する完全新規ロジック。既存の
     # double_top/double_bottom/*_pivotとは無関係の別実装(そちらは無変更)。
-    "double_top_shape": "ダブルトップ(形状判定版)",
-    "double_bottom_shape": "ダブルボトム(形状判定版)",
+    "double_top_shape": "ダブルトップ(完成版)",
+    "double_bottom_shape": "ダブルボトム(完成版)",
+    "double_top_shape_v1": "ダブルトップ(形状判定版・旧ブレイク猶予方式)",
+    "double_bottom_shape_v1": "ダブルボトム(形状判定版・旧ブレイク猶予方式)",
     "triple_top_breakdown": "トリプルトップ ネックライン割れ",
     "triple_bottom_breakout": "トリプルボトム ネックライン突破",
     "head_and_shoulders_breakdown": "ヘッド&ショルダーズ ネックライン割れ",
@@ -1415,31 +1417,27 @@ _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
-    {"name": "prominence_atr_mult", "label": "谷1・谷2・ネックの値幅基準(ATR倍率)", "default": 1.0, "type": "float"},
-    {"name": "pre_trend_check_enabled", "label": "谷1前のトレンド確認(1=有効/0=無効)", "default": 0, "type": "choice", "choices": [1, 0]},
-    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数", "default": 30, "type": "int"},
-    {"name": "pre_trend_atr_mult", "label": "トレンド確認の下げ幅基準(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "prominence_atr_mult", "label": "谷1・谷2・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェック: 突出幅の許容(ATR倍率、0=無効)", "default": 1.3, "type": "float"},
+    {"name": "pivot_spike_window_ratio", "label": "谷1・谷2・ネックの孤立度チェック: 隣接区間の本数に対する倍率", "default": 0.5, "type": "float"},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数(0=無効)", "default": 0, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の下げ幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
     {"name": "min_bars_between_tops", "label": "谷1→ネックの間隔(最小本数)", "default": 5, "type": "int"},
-    {"name": "max_bars_between_tops", "label": "谷1→ネックの間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "谷1→ネックの間隔(最大本数、0=無制限)", "default": 500, "type": "int"},
     {"name": "symmetry_ratio_min", "label": "谷2探索窓: ネックからの本数(谷1→ネックの本数に対する下限倍率)", "default": 0.3, "type": "float"},
-    {"name": "symmetry_ratio_max", "label": "谷2探索窓: ネックからの本数(谷1→ネックの本数に対する上限倍率)", "default": 2.5, "type": "float"},
-    {"name": "top_tolerance_basis", "label": "谷1・谷2の水準許容誤差の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "top_tolerance_atr_mult", "label": "谷1・谷2の水準許容誤差(ATR倍率、基準がATR倍率の時のみ使用)", "default": 2.0, "type": "float"},
-    {"name": "top_tolerance_pct", "label": "谷1・谷2の水準許容誤差(谷1→ネックの値幅に対する%、基準が価格差の時のみ使用)", "default": 15.0, "type": "float"},
-    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 2.0, "type": "float"},
-    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、999=実質無制限)", "default": 999.0, "type": "float"},
-    {"name": "breakout_buffer_basis", "label": "ブレイク判定の余白の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "breakout_buffer_atr_mult", "label": "ブレイク判定の余白(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.5, "type": "float"},
-    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%、基準が価格差の時のみ使用)", "default": 5.0, "type": "float"},
-    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準", "default": 0.1, "type": "float"},
-    {"name": "trendline_dev_basis", "label": "直線乖離の許容幅の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "trendline_dev_atr_mult", "label": "直線乖離の許容幅(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.9, "type": "float"},
-    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する%、基準が価格差の時のみ使用)", "default": 80.0, "type": "float"},
-    {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×谷1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"},
-    {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×谷1→ネックの本数)を超えるとブレイク猶予切れ", "default": 2.5, "type": "float"},
-    {"name": "interval_symmetry_ratio_min", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "谷2探索窓: ネックからの本数(谷1→ネックの本数に対する上限倍率)", "default": 3.33, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "谷1・谷2の水準許容誤差(谷1→ネックの値幅に対する%)", "default": 15.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 1.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、0=無制限)", "default": 0.0, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%)", "default": 7.5, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準(各区間の平均)", "default": 0.25, "type": "float"},
+    {"name": "efficiency_ratio_floor", "label": "値動きのなめらかさ(効率比)の下限(区間ごとに個別に満たす必要あり)", "default": 0.07, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する倍率)", "default": 0.8, "type": "float"},
+    {"name": "breakout_deadline_min_bars", "label": "谷2からこの本数未満のブレイクは早すぎるとして無効", "default": 3, "type": "int"},
+    {"name": "breakout_deadline_ratio_max", "label": "この倍率(×谷1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.33, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.67, "type": "float"},
     {"name": "interval_symmetry_ratio_max", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.0, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
 # ダブルトップ(形状判定版) - 概念は左右対称だが、既存のdouble_top/
@@ -1451,33 +1449,58 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
-    {"name": "prominence_atr_mult", "label": "山1・山2・ネックの値幅基準(ATR倍率)", "default": 1.0, "type": "float"},
-    {"name": "pre_trend_check_enabled", "label": "山1前のトレンド確認(1=有効/0=無効)", "default": 0, "type": "choice", "choices": [1, 0]},
-    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数", "default": 30, "type": "int"},
-    {"name": "pre_trend_atr_mult", "label": "トレンド確認の上げ幅基準(ATR倍率)", "default": 2.0, "type": "float"},
+    {"name": "prominence_atr_mult", "label": "山1・山2・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェック: 突出幅の許容(ATR倍率、0=無効)", "default": 1.3, "type": "float"},
+    {"name": "pivot_spike_window_ratio", "label": "山1・山2・ネックの孤立度チェック: 隣接区間の本数に対する倍率", "default": 0.5, "type": "float"},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数(0=無効)", "default": 0, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の上げ幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
     {"name": "min_bars_between_tops", "label": "山1→ネックの間隔(最小本数)", "default": 5, "type": "int"},
-    {"name": "max_bars_between_tops", "label": "山1→ネックの間隔(最大本数)", "default": 500, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "山1→ネックの間隔(最大本数、0=無制限)", "default": 500, "type": "int"},
     {"name": "symmetry_ratio_min", "label": "山2探索窓: ネックからの本数(山1→ネックの本数に対する下限倍率)", "default": 0.3, "type": "float"},
-    {"name": "symmetry_ratio_max", "label": "山2探索窓: ネックからの本数(山1→ネックの本数に対する上限倍率)", "default": 2.5, "type": "float"},
-    {"name": "top_tolerance_basis", "label": "山1・山2の水準許容誤差の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "top_tolerance_atr_mult", "label": "山1・山2の水準許容誤差(ATR倍率、基準がATR倍率の時のみ使用)", "default": 2.0, "type": "float"},
-    {"name": "top_tolerance_pct", "label": "山1・山2の水準許容誤差(山1→ネックの値幅に対する%、基準が価格差の時のみ使用)", "default": 15.0, "type": "float"},
-    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 2.0, "type": "float"},
-    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、999=実質無制限)", "default": 999.0, "type": "float"},
-    {"name": "breakout_buffer_basis", "label": "ブレイク判定の余白の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "breakout_buffer_atr_mult", "label": "ブレイク判定の余白(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.5, "type": "float"},
-    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%、基準が価格差の時のみ使用)", "default": 5.0, "type": "float"},
-    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準", "default": 0.1, "type": "float"},
-    {"name": "trendline_dev_basis", "label": "直線乖離の許容幅の基準", "default": "price_pct", "type": "string_choice", "string_choices": _TRENDLINE_DEV_BASIS_CHOICES},
-    {"name": "trendline_dev_atr_mult", "label": "直線乖離の許容幅(ATR倍率、基準がATR倍率の時のみ使用)", "default": 0.9, "type": "float"},
-    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する%、基準が価格差の時のみ使用)", "default": 80.0, "type": "float"},
-    {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×山1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"},
-    {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 2.5, "type": "float"},
-    {"name": "interval_symmetry_ratio_min", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.5, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "山2探索窓: ネックからの本数(山1→ネックの本数に対する上限倍率)", "default": 3.33, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "山1・山2の水準許容誤差(山1→ネックの値幅に対する%)", "default": 15.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率)", "default": 1.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、0=無制限)", "default": 0.0, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷の深さに対する%)", "default": 7.5, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準(各区間の平均)", "default": 0.25, "type": "float"},
+    {"name": "efficiency_ratio_floor", "label": "値動きのなめらかさ(効率比)の下限(区間ごとに個別に満たす必要あり)", "default": 0.07, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する倍率)", "default": 0.8, "type": "float"},
+    {"name": "breakout_deadline_min_bars", "label": "山2からこの本数未満のブレイクは早すぎるとして無効", "default": 3, "type": "int"},
+    {"name": "breakout_deadline_ratio_max", "label": "この倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.33, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.67, "type": "float"},
     {"name": "interval_symmetry_ratio_max", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.0, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
+# 旧ブレイク猶予方式(2026-07-27にbreakout_deadline_basis="top1_top2"へ
+# 変更する前の方式) - double_top_shape/double_bottom_shapeと完全に同じ
+# ロジックだが、⑫のブレイク猶予だけ山1→ネックの本数×比率(早すぎる判定も
+# 比率)を使う。比較用にユーザー要望で別indicatorとして残している。
+_DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC: list[dict] = []
+for _spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC:
+    if _spec["name"] == "breakout_deadline_min_bars":
+        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(
+            {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×谷1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"}
+        )
+    elif _spec["name"] == "breakout_deadline_ratio_max":
+        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(
+            {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×谷1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.0, "type": "float"}
+        )
+    else:
+        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(_spec)
+_DOUBLE_TOP_SHAPE_V1_PARAM_SPEC: list[dict] = []
+for _spec in _DOUBLE_TOP_SHAPE_PARAM_SPEC:
+    if _spec["name"] == "breakout_deadline_min_bars":
+        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(
+            {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×山1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"}
+        )
+    elif _spec["name"] == "breakout_deadline_ratio_max":
+        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(
+            {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.0, "type": "float"}
+        )
+    else:
+        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(_spec)
+del _spec
 
 INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     "ema": [{"name": "length", "label": "期間", "default": 200, "type": "int"}],
@@ -2071,6 +2094,8 @@ INDICATOR_PARAM_SPECS.update({
     "double_bottom_pivot": list(_DOUBLE_BOTTOM_STATE_PARAM_SPEC),
     "double_top_shape": list(_DOUBLE_TOP_SHAPE_PARAM_SPEC),
     "double_bottom_shape": list(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC),
+    "double_top_shape_v1": list(_DOUBLE_TOP_SHAPE_V1_PARAM_SPEC),
+    "double_bottom_shape_v1": list(_DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC),
     "triple_top_breakdown": [
         {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
         {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
@@ -2809,6 +2834,8 @@ _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
     "double_bottom_pivot": (True, "bottom"),
     "double_top_shape": (False, "top"),
     "double_bottom_shape": (True, "bottom"),
+    "double_top_shape_v1": (False, "top"),
+    "double_bottom_shape_v1": (True, "bottom"),
 }
 # _DOUBLE_TOP_PARAM_SPEC/_DOUBLE_BOTTOM_PARAM_SPECはUIのデフォルト値の
 # 単一の情報源(このセッションでpivot_left_bars/right_barsの推奨値を
@@ -2822,7 +2849,16 @@ _DOUBLE_TOP_BOTTOM_DEFAULTS: dict[str, Any] = {
 _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = {
     spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC if spec["name"] != "state"
 }
+# 旧ブレイク猶予方式(_v1)用 - パラメータ名がbreakout_deadline_min_barsで
+# はなくbreakout_deadline_ratio_minなので別に持つ。_double_top_bottom_
+# shape_state自体は共通(breakout_deadline_basis="interval1"を明示的に
+# 指定することで切り替える)。
+_DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS: dict[str, Any] = {
+    spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC if spec["name"] != "state"
+}
+_DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS["breakout_deadline_basis"] = "interval1"
 _SHAPE_INDICATORS = ("double_top_shape", "double_bottom_shape")
+_SHAPE_V1_INDICATORS = ("double_top_shape_v1", "double_bottom_shape_v1")
 
 
 def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) -> None:
@@ -2873,12 +2909,16 @@ def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list
             output_key = params.get("state", "confirmed")
         else:
             bullish, output_key, kind = _DOUBLE_TOP_BOTTOM_MARKER_SOURCES[indicator]
-        if indicator in _SHAPE_INDICATORS:
+        if indicator in _SHAPE_INDICATORS or indicator in _SHAPE_V1_INDICATORS:
             # 形状判定版は既存版と無関係の別実装(engine/chart_patterns.py::
             # _double_top_bottom_shape_state) - パラメータ名もデフォルトも
-            # 別に持つ。
+            # 別に持つ。_v1(旧ブレイク猶予方式)は同じ実装をbreakout_
+            # deadline_basis="interval1"で呼ぶだけなので、デフォルト辞書だけ
+            # 切り替える。
+            shape_defaults = _DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS if indicator in _SHAPE_V1_INDICATORS \
+                else _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS
             shape_kwargs = {
-                name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+                name: params.get(name, default) for name, default in shape_defaults.items()
             }
             state = chart_patterns._double_top_bottom_shape_state(
                 df["high"], df["low"], df["close"], bullish, **shape_kwargs

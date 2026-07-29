@@ -439,7 +439,12 @@ export function ParamInputs({
           ) : spec.type === 'string_choice' ? (
             <select
               title={spec.label}
-              className="glass-input w-24 rounded-lg px-2 py-1 text-xs"
+              // 選択中の文字列が長いと、ネイティブのプルダウン矢印と重なって
+              // 見えていた(ユーザー報告:「状態のボックス内の文字とプル
+              // ダウンの矢印がかぶってる」)。ボックス幅(w-24)は変えず、矢印
+              // 分の余白をpr-5で確保し、収まらない文字はtruncateで省略する
+              // (ユーザー了承:「文字は今と同じで途中で切れてていい」)。
+              className="glass-input w-24 truncate rounded-lg py-1 pl-2 pr-5 text-xs"
               value={params[spec.name] ?? spec.default}
               onChange={(e) => onChange({ ...params, [spec.name]: e.target.value })}
               onBlur={onBlur}
@@ -639,8 +644,13 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           条件の比較元と比較先と向きのボックスの色を分けて」→その後
           「それぞれの枠はある状態で色を統一して。このUIに合う色にして」
           - 3色に分けていたのを、アプリ全体の基調色(青系: 「+条件を追加」
-          ボタンやバックテスト実行ボタンと同じblue系)に統一した)。 */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
+          ボタンやバックテスト実行ボタンと同じblue系)に統一した)。
+          items-endにしているのは、IndicatorPickerのパンくず(text-[11px])と
+          LabeledFieldのラベル(text-[9px])で上段の高さが違うため、items-
+          centerだと各ボックスの下端が揃わなかったため(ユーザー報告:
+          「チャートパターン」のボックスと「状態」と「ピボット左本数」の
+          ボックスの高さがずれてる。下端でそろえて」)。 */}
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
         <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較元</span>
         {/* ジャンル/サブジャンル/指標の選択欄を1つのボックスにまとめた
             (ユーザー要望:「今ジャンルのボックス×2とインジケーターなどを
@@ -728,8 +738,8 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
             </select>
           </div>
 
-          {/* 比較先(固定値、または別の指標) */}
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
+          {/* 比較先(固定値、または別の指標) - 下端揃えの理由は比較元と同じ */}
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
             <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較先</span>
             <select
               className="glass-input rounded-lg px-2 py-1"
