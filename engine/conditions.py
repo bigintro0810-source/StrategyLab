@@ -789,23 +789,8 @@ INDICATOR_REGISTRY.update({
 # every other function in this registry, these take (high, low, close, ...)
 # directly rather than the whole df, so each needs a thin unpacking lambda.
 INDICATOR_REGISTRY.update({
-    "double_top_breakdown": lambda df, **p: _chart.double_top_breakdown(df["high"], df["low"], df["close"], **p),
-    "double_top_failed": lambda df, **p: _chart.double_top_failed(df["high"], df["low"], df["close"], **p),
-    "double_top_exists": lambda df, **p: _chart.double_top_exists(df["high"], df["low"], df["close"], **p),
-    "double_bottom_breakout": lambda df, **p: _chart.double_bottom_breakout(df["high"], df["low"], df["close"], **p),
-    "double_bottom_failed": lambda df, **p: _chart.double_bottom_failed(df["high"], df["low"], df["close"], **p),
-    "double_bottom_exists": lambda df, **p: _chart.double_bottom_exists(df["high"], df["low"], df["close"], **p),
-    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
-    # Retest/Expired)をstateパラメータで選べる統合版 - 上のbreakdown/
-    # failed/exists(既存の保存済みストラテジー互換のため残置)とは別枠。
-    "double_top": lambda df, **p: _chart.double_top(df["high"], df["low"], df["close"], **p),
-    "double_bottom": lambda df, **p: _chart.double_bottom(df["high"], df["low"], df["close"], **p),
-    "double_top_pivot": lambda df, **p: _chart.double_top_pivot(df["high"], df["low"], df["close"], **p),
-    "double_bottom_pivot": lambda df, **p: _chart.double_bottom_pivot(df["high"], df["low"], df["close"], **p),
     "double_top_shape": lambda df, **p: _chart.double_top_shape(df["high"], df["low"], df["close"], **p),
     "double_bottom_shape": lambda df, **p: _chart.double_bottom_shape(df["high"], df["low"], df["close"], **p),
-    "double_top_shape_v1": lambda df, **p: _chart.double_top_shape_v1(df["high"], df["low"], df["close"], **p),
-    "double_bottom_shape_v1": lambda df, **p: _chart.double_bottom_shape_v1(df["high"], df["low"], df["close"], **p),
     "triple_top_breakdown": lambda df, **p: _chart.triple_top_breakdown(df["high"], df["low"], df["close"], **p),
     "triple_bottom_breakout": lambda df, **p: _chart.triple_bottom_breakout(df["high"], df["low"], df["close"], **p),
     "head_and_shoulders_breakdown": lambda df, **p: _chart.head_and_shoulders_breakdown(df["high"], df["low"], df["close"], **p),

@@ -1123,31 +1123,11 @@ INDICATOR_LABELS: dict[str, str] = {
     "three_outside_up": "Three Outside Up",
     "three_outside_down": "Three Outside Down",
     "dist_to_round_number": "キリ番(ラウンドナンバー)までの距離",
-    # チャートパターン (engine/chart_patterns.py)
-    "double_top_breakdown": "ダブルトップ ネックライン割れ(ショート)",
-    "double_top_failed": "ダブルトップ不成立(ロング)",
-    "double_top_exists": "ダブルトップ形成中(フィルター)",
-    "double_bottom_breakout": "ダブルボトム ネックライン突破(ロング)",
-    "double_bottom_failed": "ダブルボトム不成立(ショート)",
-    "double_bottom_exists": "ダブルボトム形成中(フィルター)",
-    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
-    # Retest/Expired)をパラメータで選べる統合版。上のbreakdown/failed/
-    # exists(既存の保存済みストラテジー互換のため残置)とは別の選び方。
-    "double_top": "ダブルトップ",
-    "double_bottom": "ダブルボトム",
-    # 谷2(山2)の探索方法だけがdouble_top/double_bottomと違う別版
-    # (ユーザー要望:「谷2の探索方法をピボット安値バージョンで別に実装
-    # して。今の構造はそのまま別に残して」)。
-    "double_top_pivot": "ダブルトップ(谷2ピボット版)",
-    "double_bottom_pivot": "ダブルボトム(谷2ピボット版)",
-    # 形状判定版(2026-07-25) - 山1/谷1の値幅込みピボット判定・事前トレンド
-    # 確認・値動きのなめらかさ(効率比・直線乖離)・山1前点との対称性等、
-    # 「本物のW字/M字か」をより厳密に判定する完全新規ロジック。既存の
-    # double_top/double_bottom/*_pivotとは無関係の別実装(そちらは無変更)。
-    "double_top_shape": "ダブルトップ(完成版)",
-    "double_bottom_shape": "ダブルボトム(完成版)",
-    "double_top_shape_v1": "ダブルトップ(形状判定版・旧ブレイク猶予方式)",
-    "double_bottom_shape_v1": "ダブルボトム(形状判定版・旧ブレイク猶予方式)",
+    # チャートパターン (engine/chart_patterns.py) - 山1/谷1の値幅込みピボット
+    # 判定・事前トレンド確認・値動きのなめらかさ(効率比・直線乖離)・山1前点
+    # との対称性等で「本物のW字/M字か」を厳密に判定する形状判定ロジック。
+    "double_top_shape": "ダブルトップ",
+    "double_bottom_shape": "ダブルボトム",
     "triple_top_breakdown": "トリプルトップ ネックライン割れ",
     "triple_bottom_breakout": "トリプルボトム ネックライン突破",
     "head_and_shoulders_breakdown": "ヘッド&ショルダーズ ネックライン割れ",
@@ -1302,93 +1282,6 @@ _BREAK_BASIS_CHOICES: list[dict] = [
     {"value": "wick", "label": "ヒゲ(高値/安値)ブレイク"},
 ]
 
-# ダブルトップ/ダブルボトムの厳密仕様(ユーザー提供仕様書) -
-# engine/chart_patterns.py::double_top_breakdown/double_bottom_breakoutの
-# top_tolerance_type/min_valley_depth_typeと1対1対応。
-_PATTERN_TOLERANCE_TYPE_CHOICES: list[dict] = [
-    {"value": "atr", "label": "ATR倍率"},
-    {"value": "pips", "label": "Pips"},
-    {"value": "percent", "label": "価格に対する%"},
-]
-_DOUBLE_TOP_BREAKOUT_TYPE_CHOICES: list[dict] = [
-    {"value": "close", "label": "終値ブレイク"},
-    {"value": "low", "label": "安値(ヒゲ)ブレイク"},
-]
-_DOUBLE_BOTTOM_BREAKOUT_TYPE_CHOICES: list[dict] = [
-    {"value": "close", "label": "終値ブレイク"},
-    {"value": "high", "label": "高値(ヒゲ)ブレイク"},
-]
-
-# ダブルトップ/ダブルボトム系3指標(_breakdown・_failed・_exists、または
-# _breakout・_failed・_exists)は「パターンの検出」と「売買方向を持つ
-# シグナル」を分離した設計(ユーザー要望:「ダブルトップは本来ショート
-# エントリー用の反転パターンであるが...チャートパターンの検出とエントリー
-# シグナルを分離して設計したい」)なので、判定に使う構造パラメータは3指標
-# 共通。
-_DOUBLE_TOP_PARAM_SPEC: list[dict] = [
-    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 15, "type": "int"},
-    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 15, "type": "int"},
-    {"name": "min_bars_between_tops", "label": "山1→谷の間隔(最小本数)", "default": 10, "type": "int"},
-    {"name": "max_bars_between_tops", "label": "山1→谷の間隔(最大本数)", "default": 500, "type": "int"},
-    {"name": "top_tolerance_type", "label": "山の水準許容誤差(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "top_tolerance", "label": "山の水準許容誤差", "default": 3.0, "type": "float"},
-    {"name": "min_valley_depth_type", "label": "谷の最低深さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "min_valley_depth", "label": "谷の最低深さ", "default": 5.0, "type": "float"},
-    {"name": "max_valley_depth_type", "label": "谷の最大深さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "max_valley_depth", "label": "谷の最大深さ(999=実質無制限)", "default": 999.0, "type": "float"},
-    {"name": "symmetry_ratio_min", "label": "山2探索窓: 谷からの本数(山1→谷の本数に対する下限倍率)", "default": 0.5, "type": "float"},
-    {"name": "symmetry_ratio_max", "label": "山2探索窓: 谷からの本数(山1→谷の本数に対する上限倍率)", "default": 2.2, "type": "float"},
-    {"name": "trendline_tolerance_pct", "label": "山1-谷・谷-山2・山2-エントリーの直線からの乖離許容(%)", "default": 80.0, "type": "float"},
-    {"name": "breakout_type", "label": "ネックライン割れ/Failed判定基準", "default": "close", "type": "string_choice", "string_choices": _DOUBLE_TOP_BREAKOUT_TYPE_CHOICES},
-    {"name": "breakout_buffer", "label": "ブレイク判定の余白(ATR倍率)", "default": 0.5, "type": "float"},
-    {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×谷→山2の本数)未満のブレイクは無効", "default": 0.5, "type": "float"},
-    {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×谷→山2の本数)を超えるとブレイク猶予切れ", "default": 2.2, "type": "float"},
-    {"name": "pip_size", "label": "1pipのサイズ(許容誤差/谷の深さがPips指定の時のみ使用)", "default": 0.0001, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
-    {"name": "neck_prior_check_enabled", "label": "ネックの事前妥当性チェック(1=有効/0=無効)", "default": 1, "type": "choice", "choices": [1, 0]},
-    {"name": "neck_prior_lookback_ratio", "label": "ネック事前チェックの参照期間(×山1→ネックの本数)", "default": 2.2, "type": "float"},
-]
-_DOUBLE_BOTTOM_PARAM_SPEC: list[dict] = [
-    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 15, "type": "int"},
-    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 15, "type": "int"},
-    {"name": "min_bars_between_tops", "label": "谷1→山の間隔(最小本数)", "default": 10, "type": "int"},
-    {"name": "max_bars_between_tops", "label": "谷1→山の間隔(最大本数)", "default": 500, "type": "int"},
-    {"name": "top_tolerance_type", "label": "谷の水準許容誤差(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "top_tolerance", "label": "谷の水準許容誤差", "default": 1.0, "type": "float"},
-    {"name": "min_valley_depth_type", "label": "山の最低高さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "min_valley_depth", "label": "山の最低高さ", "default": 5.0, "type": "float"},
-    {"name": "max_valley_depth_type", "label": "山の最大高さ(種別)", "default": "atr", "type": "string_choice", "string_choices": _PATTERN_TOLERANCE_TYPE_CHOICES},
-    {"name": "max_valley_depth", "label": "山の最大高さ(999=実質無制限)", "default": 999.0, "type": "float"},
-    {"name": "symmetry_ratio_min", "label": "谷2探索窓: 山からの本数(谷1→山の本数に対する下限倍率)", "default": 0.5, "type": "float"},
-    {"name": "symmetry_ratio_max", "label": "谷2探索窓: 山からの本数(谷1→山の本数に対する上限倍率)", "default": 2.2, "type": "float"},
-    {"name": "trendline_tolerance_pct", "label": "谷1-山・山-谷2・谷2-エントリーの直線からの乖離許容(%)", "default": 80.0, "type": "float"},
-    {"name": "breakout_type", "label": "ネックライン抜け/Failed判定基準", "default": "close", "type": "string_choice", "string_choices": _DOUBLE_BOTTOM_BREAKOUT_TYPE_CHOICES},
-    {"name": "breakout_buffer", "label": "ブレイク判定の余白(ATR倍率)", "default": 0.5, "type": "float"},
-    {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×山→谷2の本数)未満のブレイクは無効", "default": 0.5, "type": "float"},
-    {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×山→谷2の本数)を超えるとブレイク猶予切れ", "default": 2.2, "type": "float"},
-    {"name": "pip_size", "label": "1pipのサイズ(許容誤差/山の高さがPips指定の時のみ使用)", "default": 0.0001, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
-    {"name": "neck_prior_check_enabled", "label": "ネックの事前妥当性チェック(1=有効/0=無効)", "default": 1, "type": "choice", "choices": [1, 0]},
-    {"name": "neck_prior_lookback_ratio", "label": "ネック事前チェックの参照期間(×谷1→山の本数)", "default": 2.2, "type": "float"},
-]
-# EA Studio的な5状態モデル(ユーザー要望:「チャートパターンは基本的には
-# すべてこの運用にする」) - Detected(検出)/Confirmed(ネックライン突破)/
-# Failed After Retest(ネック付近到達後にネックライン割れ)/Failed Before
-# Retest(ネック付近未到達でネックライン割れ)/Expired(期限切れ)。
-_PATTERN_STATE_CHOICES = [
-    {"value": "detected", "label": "Detected(検出)"},
-    {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
-    {"value": "failed_after_retest", "label": "Failed After Retest(リテスト後に失敗)"},
-    {"value": "failed_before_retest", "label": "Failed Before Retest(リテスト前に失敗)"},
-    {"value": "expired", "label": "Expired(期限切れ)"},
-]
-_DOUBLE_TOP_STATE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _PATTERN_STATE_CHOICES},
-    *_DOUBLE_TOP_PARAM_SPEC,
-]
-_DOUBLE_BOTTOM_STATE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _PATTERN_STATE_CHOICES},
-    *_DOUBLE_BOTTOM_PARAM_SPEC,
-]
-
 # 形状判定版(double_top_shape/double_bottom_shape)向けの6状態モデル -
 # 早すぎるブレイクを無効化する"Rejected"を、既存の5状態に追加した独自の
 # 状態セット(既存のPATTERN_STATE_CHOICESとは別、既存indicatorは無変更)。
@@ -1440,11 +1333,10 @@ _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
-# ダブルトップ(形状判定版) - 概念は左右対称だが、既存のdouble_top/
-# double_bottomの命名慣習(「谷の最低深さ」はどちら向きでもネックラインの
-# 谷型を指すので不変、パターン自身の山1/山2はdouble_topでは「山」呼び)に
-# 合わせて、ラベル文言だけ手書きで対応させている(自動置換だと意味が壊れる
-# 箇所があるため - 例えば「谷の最低深さ」はdouble_topでも「谷」のまま)。
+# ダブルトップ(形状判定版) - 概念はダブルボトム側と左右対称だが、ラベル
+# 文言だけ手書きで対応させている(自動置換だと意味が壊れる箇所があるため -
+# 「谷の最低深さ」はネックラインの谷型を指す語なので、ダブルトップ側でも
+# 「谷」のまま不変)。
 _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
@@ -1472,35 +1364,6 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
-# 旧ブレイク猶予方式(2026-07-27にbreakout_deadline_basis="top1_top2"へ
-# 変更する前の方式) - double_top_shape/double_bottom_shapeと完全に同じ
-# ロジックだが、⑫のブレイク猶予だけ山1→ネックの本数×比率(早すぎる判定も
-# 比率)を使う。比較用にユーザー要望で別indicatorとして残している。
-_DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC: list[dict] = []
-for _spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC:
-    if _spec["name"] == "breakout_deadline_min_bars":
-        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(
-            {"name": "breakout_deadline_ratio_min", "label": "谷2からこの倍率(×谷1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"}
-        )
-    elif _spec["name"] == "breakout_deadline_ratio_max":
-        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(
-            {"name": "breakout_deadline_ratio_max", "label": "谷2からこの倍率(×谷1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.0, "type": "float"}
-        )
-    else:
-        _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC.append(_spec)
-_DOUBLE_TOP_SHAPE_V1_PARAM_SPEC: list[dict] = []
-for _spec in _DOUBLE_TOP_SHAPE_PARAM_SPEC:
-    if _spec["name"] == "breakout_deadline_min_bars":
-        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(
-            {"name": "breakout_deadline_ratio_min", "label": "山2からこの倍率(×山1→ネックの本数)未満のブレイクは無効", "default": 0.3, "type": "float"}
-        )
-    elif _spec["name"] == "breakout_deadline_ratio_max":
-        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(
-            {"name": "breakout_deadline_ratio_max", "label": "山2からこの倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.0, "type": "float"}
-        )
-    else:
-        _DOUBLE_TOP_SHAPE_V1_PARAM_SPEC.append(_spec)
-del _spec
 
 INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
     "ema": [{"name": "length", "label": "期間", "default": 200, "type": "int"}],
@@ -2082,20 +1945,8 @@ INDICATOR_PARAM_SPECS.update({
         {"name": "pip_size", "label": "1pipのサイズ(JPYペア/XAUUSD=0.01, XAGUSD=0.001, それ以外=0.0001)", "default": 0.01, "type": "choice", "choices": [0.01, 0.001, 0.0001]},
         {"name": "round_interval", "label": "キリ番間隔(価格の生単位、例:USDJPYで0.5なら50銭刻み)", "default": 1.0, "type": "choice", "choices": [0.1, 0.5, 1.0, 5.0, 10.0]},
     ],
-    "double_top_breakdown": list(_DOUBLE_TOP_PARAM_SPEC),
-    "double_top_failed": list(_DOUBLE_TOP_PARAM_SPEC),
-    "double_top_exists": list(_DOUBLE_TOP_PARAM_SPEC),
-    "double_bottom_breakout": list(_DOUBLE_BOTTOM_PARAM_SPEC),
-    "double_bottom_failed": list(_DOUBLE_BOTTOM_PARAM_SPEC),
-    "double_bottom_exists": list(_DOUBLE_BOTTOM_PARAM_SPEC),
-    "double_top": list(_DOUBLE_TOP_STATE_PARAM_SPEC),
-    "double_bottom": list(_DOUBLE_BOTTOM_STATE_PARAM_SPEC),
-    "double_top_pivot": list(_DOUBLE_TOP_STATE_PARAM_SPEC),
-    "double_bottom_pivot": list(_DOUBLE_BOTTOM_STATE_PARAM_SPEC),
     "double_top_shape": list(_DOUBLE_TOP_SHAPE_PARAM_SPEC),
     "double_bottom_shape": list(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC),
-    "double_top_shape_v1": list(_DOUBLE_TOP_SHAPE_V1_PARAM_SPEC),
-    "double_bottom_shape_v1": list(_DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC),
     "triple_top_breakdown": [
         {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
         {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
@@ -2540,18 +2391,6 @@ def _params_with_presets(name: str) -> list[dict]:
     return result
 
 
-# 統合版(state選択式の"double_top"/"double_bottom")に置き換えられた旧
-# 指標(ネックライン割れ/不成立/形成中の3分割版) - 新規に条件を組む時の
-# フロントエンドのピッカー一覧からは除外するが、既存の保存済み
-# ストラテジーがまだこのidを参照しているため、指標自体・パラメータ定義は
-# 削除しない(ユーザー要望:「古い3種を選択リストから外して、保存済み
-# ストラテジーの読み込み・表示自体は引き続き動く形で」)。
-_LEGACY_INDICATOR_NAMES = {
-    "double_top_breakdown", "double_top_failed", "double_top_exists",
-    "double_bottom_breakout", "double_bottom_failed", "double_bottom_exists",
-}
-
-
 @app.get("/api/indicators")
 async def get_indicators() -> list[dict]:
     return [
@@ -2573,7 +2412,6 @@ async def get_indicators() -> list[dict]:
             # 比較先候補の絞り込みはkindではなくこちらを使う(_PAIR_GROUP_BY_
             # NAMEのコメント参照)。
             "pair_group": _PAIR_GROUP_BY_NAME.get(name),
-            "legacy": name in _LEGACY_INDICATOR_NAMES,
         }
         for name in INDICATOR_REGISTRY
     ]
@@ -2813,52 +2651,19 @@ def _compute_chart_indicators(df: pd.DataFrame, trees: list[dict | None]) -> lis
 # だけ印付けるようにできない?」- 汎用のピボット全表示だと多すぎるため、
 # 実際にパターンが成立/決着したバーだけに絞る)。bullish=Trueはダブル
 # ボトム系(谷を根拠に判定)、kindは印を山の上に出すか谷の下に出すかの
-# フロント側ヒント。
-_DOUBLE_TOP_BOTTOM_MARKER_SOURCES: dict[str, tuple[bool, str, str]] = {
-    "double_top_breakdown": (False, "resolve", "top"),
-    "double_top_failed": (False, "failed", "top"),
-    "double_top_exists": (False, "exists", "top"),
-    "double_bottom_breakout": (True, "resolve", "bottom"),
-    "double_bottom_failed": (True, "failed", "bottom"),
-    "double_bottom_exists": (True, "exists", "bottom"),
-}
-# 5状態統合版(double_top/double_bottom)はどの状態を見るか(detected/
-# confirmed/failed_after_retest/failed_before_retest/expired)がnode自身の
-# params["state"]で決まるため、上のような固定のoutput_keyを持てない -
-# bullish/kindだけここで固定し、output_keyは_compute_pattern_markers側で
-# 都度paramsから読む。
+# フロント側ヒント。どの状態を見るか(detected/confirmed/failed_after_
+# retest/failed_before_retest/expired)はnode自身のparams["state"]で決まる
+# ため、output_keyは_compute_pattern_markers側で都度paramsから読む。
 _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
-    "double_top": (False, "top"),
-    "double_bottom": (True, "bottom"),
-    "double_top_pivot": (False, "top"),
-    "double_bottom_pivot": (True, "bottom"),
     "double_top_shape": (False, "top"),
     "double_bottom_shape": (True, "bottom"),
-    "double_top_shape_v1": (False, "top"),
-    "double_bottom_shape_v1": (True, "bottom"),
 }
-# _DOUBLE_TOP_PARAM_SPEC/_DOUBLE_BOTTOM_PARAM_SPECはUIのデフォルト値の
-# 単一の情報源(このセッションでpivot_left_bars/right_barsの推奨値を
-# 5→25に変えた際もここだけ直せば済んだ) - パターン判定を再実行する際の
-# デフォルト値もここから作り、値を二重管理しない。
-_DOUBLE_TOP_BOTTOM_DEFAULTS: dict[str, Any] = {
-    spec["name"]: spec["default"] for spec in _DOUBLE_TOP_PARAM_SPEC
-}
-# 形状判定版(double_top_shape/double_bottom_shape)は既存版とパラメータ
-# 名前が全く異なる別実装なので、デフォルト値も別に持つ(state以外)。
+# 形状判定版(double_top_shape/double_bottom_shape)のデフォルト値(state
+# 以外) - パターン判定を再実行する際のデフォルト値もここから作り、値を
+# 二重管理しない。
 _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = {
     spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC if spec["name"] != "state"
 }
-# 旧ブレイク猶予方式(_v1)用 - パラメータ名がbreakout_deadline_min_barsで
-# はなくbreakout_deadline_ratio_minなので別に持つ。_double_top_bottom_
-# shape_state自体は共通(breakout_deadline_basis="interval1"を明示的に
-# 指定することで切り替える)。
-_DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS: dict[str, Any] = {
-    spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_V1_PARAM_SPEC if spec["name"] != "state"
-}
-_DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS["breakout_deadline_basis"] = "interval1"
-_SHAPE_INDICATORS = ("double_top_shape", "double_bottom_shape")
-_SHAPE_V1_INDICATORS = ("double_top_shape_v1", "double_bottom_shape_v1")
 
 
 def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) -> None:
@@ -2872,17 +2677,14 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
     indicator = node.get("indicator")
     # MTF(他時間足)指定があると、このチャートが読み込んでいるdf(自足)には
     # 対応する山/谷のバー位置が存在しないため、自足の条件のみ対象にする。
-    is_pattern_indicator = indicator in _DOUBLE_TOP_BOTTOM_MARKER_SOURCES or indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    is_pattern_indicator = indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
     if is_pattern_indicator and not node.get("timeframe"):
         params = node.get("params") or {}
         key = (indicator, tuple(sorted(params.items())))
         out[key] = (indicator, params)
 
     value = node.get("value")
-    is_pattern_value = (
-        isinstance(value, str)
-        and (value in _DOUBLE_TOP_BOTTOM_MARKER_SOURCES or value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES)
-    )
+    is_pattern_value = isinstance(value, str) and value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
     if is_pattern_value and not node.get("value_timeframe"):
         value_params = node.get("value_params") or {}
         key = (value, tuple(sorted(value_params.items())))
@@ -2902,39 +2704,16 @@ def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list
     times = df["datetime"]
     events: list[dict] = []
     for indicator, params in collected.values():
-        if indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES:
-            # 5状態統合版(double_top/double_bottom) - 見る状態(output_key)
-            # はnode自身のparams["state"]で決まる(既定はconfirmed)。
-            bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
-            output_key = params.get("state", "confirmed")
-        else:
-            bullish, output_key, kind = _DOUBLE_TOP_BOTTOM_MARKER_SOURCES[indicator]
-        if indicator in _SHAPE_INDICATORS or indicator in _SHAPE_V1_INDICATORS:
-            # 形状判定版は既存版と無関係の別実装(engine/chart_patterns.py::
-            # _double_top_bottom_shape_state) - パラメータ名もデフォルトも
-            # 別に持つ。_v1(旧ブレイク猶予方式)は同じ実装をbreakout_
-            # deadline_basis="interval1"で呼ぶだけなので、デフォルト辞書だけ
-            # 切り替える。
-            shape_defaults = _DOUBLE_TOP_BOTTOM_SHAPE_V1_DEFAULTS if indicator in _SHAPE_V1_INDICATORS \
-                else _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS
-            shape_kwargs = {
-                name: params.get(name, default) for name, default in shape_defaults.items()
-            }
-            state = chart_patterns._double_top_bottom_shape_state(
-                df["high"], df["low"], df["close"], bullish, **shape_kwargs
-            )
-        else:
-            kwargs = {name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_DEFAULTS.items()}
-            # 谷2ピボット版(double_top_pivot/double_bottom_pivot)はtop2_pivot_
-            # basedがユーザー設定パラメータではなく関数呼び出し時の固定引数
-            # (chart_patterns.py::double_top_pivot/double_bottom_pivot参照)
-            # なので、node自身のparamsには現れない - indicator名から明示的に
-            # 判定して渡す。
-            if indicator in ("double_top_pivot", "double_bottom_pivot"):
-                kwargs["top2_pivot_based"] = True
-            state = chart_patterns._double_top_bottom_state(
-                df["high"], df["low"], df["close"], bullish, **kwargs
-            )
+        # 見る状態(output_key)はnode自身のparams["state"]で決まる(既定は
+        # confirmed)。
+        bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+        output_key = params.get("state", "confirmed")
+        shape_kwargs = {
+            name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+        }
+        state = chart_patterns._double_top_bottom_shape_state(
+            df["high"], df["low"], df["close"], bullish, **shape_kwargs
+        )
         flag = state[output_key]
         if output_key == "exists":
             # existsはパターン形成中ずっとTrueの区間なので、区間の最初の

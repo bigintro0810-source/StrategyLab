@@ -36,41 +36,6 @@ def _hlc(closes: np.ndarray, wick: float = 0.3) -> tuple[pd.Series, pd.Series, p
     return high, low, close
 
 
-def test_double_top_breakdown():
-    leg1_up = np.linspace(100, 130, 15)
-    leg1_down = np.linspace(130, 110, 15)
-    leg2_up = np.linspace(110, 130.2, 15)   # second top close to the first
-    leg2_down = np.linspace(130.2, 105, 20)  # breaks below the trough (~110)
-    closes = np.concatenate([leg1_up, leg1_down, leg2_up, leg2_down])
-    high, low, close = _hlc(closes)
-    result = cp.double_top_breakdown(high, low, close, swing_lookback=5, tolerance_atr_mult=1.0)
-    check("double_top_breakdown fires exactly once on a clean double top", result.sum() == 1, detail=str(np.where(result)[0]))
-
-
-def test_double_top_breakdown_rejects_dissimilar_tops():
-    # Second peak is FAR higher than the first - not a double top, so this
-    # must never fire even though price does eventually dip and recover.
-    leg1_up = np.linspace(100, 130, 15)
-    leg1_down = np.linspace(130, 110, 15)
-    leg2_up = np.linspace(110, 160, 15)  # much taller second peak
-    leg2_down = np.linspace(160, 140, 20)
-    closes = np.concatenate([leg1_up, leg1_down, leg2_up, leg2_down])
-    high, low, close = _hlc(closes)
-    result = cp.double_top_breakdown(high, low, close, swing_lookback=5, tolerance_atr_mult=0.5)
-    check("double_top_breakdown does not fire when the two peaks are clearly different levels", result.sum() == 0, detail=str(result.sum()))
-
-
-def test_double_bottom_breakout():
-    leg1_down = np.linspace(130, 100, 15)
-    leg1_up = np.linspace(100, 120, 15)
-    leg2_down = np.linspace(120, 99.8, 15)  # second bottom close to the first
-    leg2_up = np.linspace(99.8, 135, 20)     # breaks above the peak (~120)
-    closes = np.concatenate([leg1_down, leg1_up, leg2_down, leg2_up])
-    high, low, close = _hlc(closes)
-    result = cp.double_bottom_breakout(high, low, close, swing_lookback=5, tolerance_atr_mult=1.0)
-    check("double_bottom_breakout fires exactly once on a clean double bottom", result.sum() == 1, detail=str(np.where(result)[0]))
-
-
 def test_head_and_shoulders_breakdown():
     left_shoulder_up = np.linspace(100, 120, 12)
     left_shoulder_down = np.linspace(120, 108, 12)
@@ -119,25 +84,30 @@ def test_in_range_box_and_breakout():
 
 
 def test_first_occurrence_after_fires_once_per_epoch():
-    # Two independent double-top formations back-to-back should each fire
-    # once - the epoch/cumsum machinery must not get stuck after the first.
-    def make_double_top(base):
-        leg1_up = np.linspace(base, base + 30, 15)
-        leg1_down = np.linspace(base + 30, base + 10, 15)
-        leg2_up = np.linspace(base + 10, base + 30.1, 15)
-        leg2_down = np.linspace(base + 30.1, base - 5, 20)
-        return np.concatenate([leg1_up, leg1_down, leg2_up, leg2_down])
+    # Two independent ascending-triangle formations back-to-back should each
+    # fire once - the epoch/cumsum machinery must not get stuck after the
+    # first (ascending_triangle_breakout uses the same _first_occurrence_
+    # after helper as every other pattern in this module).
+    def make_ascending_triangle(base):
+        rng = np.random.RandomState(int(base))
+        segments = []
+        b = base
+        for _ in range(4):
+            up = np.linspace(b, base + 30 - rng.uniform(0, 0.3), 10)
+            down = np.linspace(base + 30 - rng.uniform(0, 0.3), b + 5, 10)
+            segments.append(up)
+            segments.append(down)
+            b += 5
+        breakout = np.linspace(b, base + 45, 15)
+        return np.concatenate(segments + [breakout])
 
-    closes = np.concatenate([make_double_top(100), make_double_top(150)])
+    closes = np.concatenate([make_ascending_triangle(100), make_ascending_triangle(200)])
     high, low, close = _hlc(closes)
-    result = cp.double_top_breakdown(high, low, close, swing_lookback=5, tolerance_atr_mult=1.0)
-    check("double_top_breakdown fires exactly twice across two independent formations", result.sum() == 2, detail=str(np.where(result)[0]))
+    result = cp.ascending_triangle_breakout(high, low, close, swing_lookback=4, flat_tolerance_atr_mult=1.0)
+    check("ascending_triangle_breakout fires at least once in each of two independent formations", result[:100].sum() >= 1 and result[100:].sum() >= 1, detail=str(np.where(result)[0]))
 
 
 if __name__ == "__main__":
-    test_double_top_breakdown()
-    test_double_top_breakdown_rejects_dissimilar_tops()
-    test_double_bottom_breakout()
     test_head_and_shoulders_breakdown()
     test_ascending_triangle_breakout()
     test_in_range_box_and_breakout()

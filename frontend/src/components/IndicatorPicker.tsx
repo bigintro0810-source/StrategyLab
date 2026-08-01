@@ -129,8 +129,9 @@ export default function IndicatorPicker({ indicators, value, onSelect, className
   const genreItems = genreItemsMap.get(committedGenre) ?? []
   const subGenreItemsMap = committedGenre === 'indicator' ? buildSubGenreItemsMap(genreItems) : null
   let items = subGenreItemsMap && committedSubGenre ? subGenreItemsMap.get(committedSubGenre) ?? [] : genreItems
-  // 現在の値がlegacy指標(旧double_top_breakdown等)の場合、一覧からは
-  // 除外済みなのでitemsに含まれない - そのままだと<select value={value}>
+  // 現在の値がlegacy指標(一覧からは除外するが、既存の保存済みストラテジー
+  // 互換のため指標自体は残しているもの)の場合、一覧からは除外済みなので
+  // itemsに含まれない - そのままだと<select value={value}>
   // に対応する<option>が無く、表示が勝手に別の指標にすり替わって見えて
   // しまう(保存済みストラテジーを開いただけで中身が変わったように見える
   // 事故になる) - 現在値だけ一覧の先頭に補って表示を保つ。選び直しの

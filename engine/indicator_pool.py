@@ -893,70 +893,6 @@ INDICATOR_POOL.extend([
     ),
     # チャートパターン(engine/chart_patterns.py) - 全てboolean_signal。
     # tolerance/margin類はATR倍率で正規化済み(symbol/timeframe非依存)。
-    # double_top_breakdown/failed/existsとdouble_bottom_breakout/failed/
-    # existsは、同じ「パターン構造」判定を土台に「検出(exists)」と
-    # 「方向を持つシグナル(breakdown・failed)」を分離した設計(ユーザー
-    # 要望:「ダブルトップは本来ショートエントリー用の反転パターンだが...
-    # チャートパターンの検出とエントリーシグナルを分離して設計したい」)。
-    IndicatorSpec(
-        "double_top_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_top_failed", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_top_exists", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_bottom_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_bottom_failed", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_bottom_exists", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    # 5状態モデル(Detected/Confirmed/Failed After Retest/Failed Before
-    # Retest/Expired)をstateパラメータで選ぶ統合版(ユーザー要望:「チャート
-    # パターンは基本的にはすべてこの運用にする」)。stateは文字列選択肢な
-    # ので、数値サンプリング用のparam_choicesには含めない(自動探索側での
-    # state選択はapi_server.py::INDICATOR_PARAM_SPECSのstring_choiceで
-    # 手動ビルダーからのみ選ぶ、現状の設計)。
-    IndicatorSpec(
-        "double_top", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_bottom", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    # 谷2(山2)の探索方法だけがdouble_top/double_bottomと違う別版
-    # (ユーザー要望:「谷2の探索方法をピボット安値バージョンで別に実装
-    # して。今の構造はそのまま別に残して」)。
-    IndicatorSpec(
-        "double_top_pivot", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
-    IndicatorSpec(
-        "double_bottom_pivot", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance": [0.3, 0.5, 0.75, 1.0]},
-    ),
     IndicatorSpec(
         "double_top_shape", "boolean_signal", literal_choices=[1.0],
         param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
@@ -964,16 +900,6 @@ INDICATOR_POOL.extend([
     ),
     IndicatorSpec(
         "double_bottom_shape", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
-    ),
-    IndicatorSpec(
-        "double_top_shape_v1", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
-        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
-    ),
-    IndicatorSpec(
-        "double_bottom_shape_v1", "boolean_signal", literal_choices=[1.0],
         param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
         param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
