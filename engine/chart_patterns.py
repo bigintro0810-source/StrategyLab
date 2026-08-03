@@ -1645,7 +1645,7 @@ def double_bottom_shape(
 #     「その時点までで一番良い(高い/低い)ネック候補」を採用するロジック
 #     なので一貫性がある。
 #   - ネック1とネック2自体の水準が近いか(水平に近いネックラインか)は
-#     任意パラメータ neckline_tolerance_pct で追加(0=無効、既定値は緩め)。
+#     任意パラメータ neckline_tolerance_mult で追加(0=無効、既定値は緩め)。
 #   - 谷3の探索窓・ブレイク猶予・ブレイクバッファは「谷1→ネック1」ではなく
 #     直近の間隔・深さ(谷2→ネック2)を基準にする - パターンが進むにつれて
 #     スケールが変わっても自然に追従できるため。
@@ -1653,6 +1653,12 @@ def double_bottom_shape(
 # ネック1→谷2・谷2→ネック2・ネック2→谷3)全てに拡張。6状態モデル
 # (Detected/Rejected/Confirmed/Failed After Retest/Failed Before Retest/
 # Expired)はダブルトップ/ボトムと共通。
+# 2026-08-02: ダブルトップ/ボトム側と同様、山1前のトレンド確認(pre_trend_
+# lookback_bars/pre_trend_atr_mult)を機能ごと削除し、水準許容誤差(旧
+# top_tolerance_pct)・ネックの水平許容誤差(旧neckline_tolerance_pct)・
+# ブレイク余白(旧breakout_buffer_pct)を「%」から「倍率」表記
+# (top_tolerance_mult/neckline_tolerance_mult/breakout_buffer_mult、
+# 15%→0.15のように)に変更した。
 # ---------------------------------------------------------------------------
 
 @njit(cache=True)
@@ -1663,13 +1669,12 @@ def _shape_state_core3(
     bullish,
     pivot_confirm_lag,
     pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-    pre_trend_lookback_bars, pre_trend_atr_mult,
     min_bars_between_tops, max_bars_between_tops,
     symmetry_ratio_min, symmetry_ratio_max,
-    top_tolerance_is_pct, top_tolerance_atr_mult, top_tolerance_pct,
-    neckline_tolerance_pct,
+    top_tolerance_is_pct, top_tolerance_atr_mult, top_tolerance_mult,
+    neckline_tolerance_mult,
     min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-    breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_pct,
+    breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_mult,
     efficiency_ratio_min, efficiency_ratio_floor,
     trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct,
     breakout_deadline_min_bars, breakout_deadline_ratio_max,
@@ -1705,19 +1710,6 @@ def _shape_state_core3(
         top1_true_bar = ext_events[ei]
         top1_price = ext_price_a[top1_true_bar]
         top1_confirm_bar = top1_true_bar + pivot_confirm_lag
-
-        if pre_trend_lookback_bars > 0 and pre_trend_atr_mult > 0.0:
-            ref_bar = top1_true_bar - pre_trend_lookback_bars
-            if ref_bar < 0:
-                continue
-            trend_thresh = atr_a[top1_true_bar] * pre_trend_atr_mult
-            ref_price = ext_price_a[ref_bar]
-            if bullish:
-                if not (ref_price - top1_price >= trend_thresh):
-                    continue
-            else:
-                if not (top1_price - ref_price >= trend_thresh):
-                    continue
 
         neck1_true_bar = -1
         neck1_price = 0.0
@@ -1762,14 +1754,14 @@ def _shape_state_core3(
             if win_start > win_end:
                 continue
 
-            top_tolerance_pct_value = abs(top1_price - neck1_price) * (top_tolerance_pct / 100.0)
+            top_tolerance_value = abs(top1_price - neck1_price) * top_tolerance_mult
 
             window_invalidated = False
             top2_true_bar = -1
             top2_price = 0.0
             for j in range(win_start, win_end + 1):
                 if top_tolerance_is_pct:
-                    tol_j = top_tolerance_pct_value
+                    tol_j = top_tolerance_value
                 else:
                     tol_j = atr_a[j] * top_tolerance_atr_mult
                 if bullish:
@@ -1815,9 +1807,9 @@ def _shape_state_core3(
             if not (depth_min1 <= depth1 <= depth_max1):
                 continue
 
-            breakout_buffer_pct_value1 = depth1 * (breakout_buffer_pct / 100.0)
+            breakout_buffer_value1 = depth1 * breakout_buffer_mult
             if breakout_buffer_is_pct:
-                pre_buf = breakout_buffer_pct_value1
+                pre_buf = breakout_buffer_value1
             else:
                 pre_buf = atr_a[top1_true_bar] * breakout_buffer_atr_mult
             if bullish:
@@ -1887,8 +1879,8 @@ def _shape_state_core3(
 
                 # ネック1・ネック2自体の水準が近いか(水平に近いネックライン
                 # か) - 0以下で無効。
-                if neckline_tolerance_pct > 0.0:
-                    neck_tol = abs(top1_price - neck1_price) * (neckline_tolerance_pct / 100.0)
+                if neckline_tolerance_mult > 0.0:
+                    neck_tol = abs(top1_price - neck1_price) * neckline_tolerance_mult
                     if abs(neck2_price - neck1_price) > neck_tol:
                         continue
 
@@ -1918,7 +1910,7 @@ def _shape_state_core3(
                 top3_price = 0.0
                 for j in range(win_start2, win_end2 + 1):
                     if top_tolerance_is_pct:
-                        tol_j = top_tolerance_pct_value
+                        tol_j = top_tolerance_value
                     else:
                         tol_j = atr_a[j] * top_tolerance_atr_mult
                     if bullish:
@@ -2023,7 +2015,7 @@ def _shape_state_core3(
                 if scan_end > n - 1:
                     scan_end = n - 1
 
-                breakout_buffer_pct_value2 = depth2 * (breakout_buffer_pct / 100.0)
+                breakout_buffer_value2 = depth2 * breakout_buffer_mult
 
                 retested = False
                 outcome = 4  # expired
@@ -2046,7 +2038,7 @@ def _shape_state_core3(
                     found = False
                     for j in range(scan_start, scan_end + 1):
                         if breakout_buffer_is_pct:
-                            buf_j = breakout_buffer_pct_value2
+                            buf_j = breakout_buffer_value2
                         else:
                             buf_j = atr_a[j] * breakout_buffer_atr_mult
 
@@ -2182,21 +2174,19 @@ def _triple_top_bottom_shape_state(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
-    neckline_tolerance_pct: float = 30.0,
+    top_tolerance_mult: float = 0.15,
+    neckline_tolerance_mult: float = 0.3,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -2279,13 +2269,12 @@ def _triple_top_bottom_shape_state(
         bool(bullish),
         int(pivot_confirm_lag),
         float(pivot_spike_excess_atr_max), float(pivot_spike_window_ratio),
-        int(pre_trend_lookback_bars), float(pre_trend_atr_mult),
         int(min_bars_between_tops), int(max_bars_between_tops),
         float(symmetry_ratio_min), float(symmetry_ratio_max),
-        top_tolerance_basis == "price_pct", float(top_tolerance_atr_mult), float(top_tolerance_pct),
-        float(neckline_tolerance_pct),
+        top_tolerance_basis == "price_pct", float(top_tolerance_atr_mult), float(top_tolerance_mult),
+        float(neckline_tolerance_mult),
         float(min_valley_depth_atr_mult), float(max_valley_depth_atr_mult),
-        breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_pct),
+        breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_mult),
         float(efficiency_ratio_min), float(efficiency_ratio_floor),
         trendline_dev_basis == "atr", float(trendline_dev_atr_mult), float(trendline_dev_pct),
         int(breakout_deadline_min_bars), float(breakout_deadline_ratio_max),
@@ -2324,21 +2313,19 @@ def triple_bottom_shape(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
-    neckline_tolerance_pct: float = 30.0,
+    top_tolerance_mult: float = 0.15,
+    neckline_tolerance_mult: float = 0.3,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -2360,13 +2347,12 @@ def triple_bottom_shape(
         high, low, close, True,
         pivot_left_bars, pivot_right_bars, prominence_atr_mult,
         pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-        pre_trend_lookback_bars, pre_trend_atr_mult,
         min_bars_between_tops, max_bars_between_tops,
         symmetry_ratio_min, symmetry_ratio_max,
-        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
-        neckline_tolerance_pct,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_mult,
+        neckline_tolerance_mult,
         min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
         breakout_deadline_min_bars, breakout_deadline_ratio_max,
@@ -2386,21 +2372,19 @@ def triple_top_shape(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
-    neckline_tolerance_pct: float = 30.0,
+    top_tolerance_mult: float = 0.15,
+    neckline_tolerance_mult: float = 0.3,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -2419,13 +2403,12 @@ def triple_top_shape(
         high, low, close, False,
         pivot_left_bars, pivot_right_bars, prominence_atr_mult,
         pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-        pre_trend_lookback_bars, pre_trend_atr_mult,
         min_bars_between_tops, max_bars_between_tops,
         symmetry_ratio_min, symmetry_ratio_max,
-        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
-        neckline_tolerance_pct,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_mult,
+        neckline_tolerance_mult,
         min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
         breakout_deadline_min_bars, breakout_deadline_ratio_max,
