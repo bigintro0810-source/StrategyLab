@@ -164,38 +164,151 @@ def test_triple_bottom_shape_rejects_too_early_breakout():
     check("triple_bottom_shape marks a too-fast breakout as rejected, not confirmed", confirmed.sum() == 0 and rejected.sum() >= 1, detail=f"confirmed={confirmed.sum()} rejected={rejected.sum()}")
 
 
-def test_double_bottom_shape_clamps_breakout_deadline_below_pivot_right_bars():
-    # breakout_deadline_min_bars(谷2からブレイクまでの最小本数)は、ピボット
-    # 確定に必ずピボット右本数ぶんの遅延がかかる以上、ピボット右本数を
-    # 下回る値を渡しても意味がない(確定した瞬間に既に早すぎ判定を素通り
-    # してしまう)。ピボット右本数を下回る値は自動でピボット右本数+3に
-    # 補正されるべき - 2026-08-03、ユーザー判断。
+def test_double_bottom_shape_breakout_deadline_min_bars_used_as_is_below_pivot_right_bars():
+    # breakout_deadline_min_bars(谷2からブレイクまでの最小本数)を
+    # pivot_right_bars未満に設定しても、2026-08-04以降は入力した値が
+    # そのまま使われる(以前はpivot_right_bars+3まで自動的に繰り上げる
+    # クランプがあったが、⑤⑥の変更([_shape_state_core]のscan_startが
+    # 谷2の直後から始まるようになった)でその根拠自体が無くなったため撤去
+    # した - ユーザー判断2026-08-04)。谷2から10本目でブレイクする形に対し、
+    # min_bars=2(実際のタイミングより十分小さい、早すぎではない)なら
+    # Confirmed、min_bars=13(実際のタイミングより大きい、genuinely早すぎ)
+    # ならRejectedになるはず。
     closes = np.concatenate([
         np.linspace(130, 110, 15, endpoint=False), np.linspace(110, 100, 15, endpoint=False),
         np.linspace(100, 110, 15, endpoint=False), np.linspace(110, 100.5, 15, endpoint=False),
-        np.linspace(100.5, 135, 40, endpoint=False),
+        np.linspace(100.5, 135, 30, endpoint=False), np.full(40, 135.0),
     ])
     high, low, close = _hlc(closes)
 
-    below_clamp = [
-        cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
-                                pivot_right_bars=10, breakout_deadline_min_bars=n)
-        for n in (1, 3, 9)
-    ]
-    at_floor = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
-                                       pivot_right_bars=10, breakout_deadline_min_bars=13)
-    above_floor = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
-                                          pivot_right_bars=10, breakout_deadline_min_bars=14)
+    low_min_bars_confirmed = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
+                                                      pivot_right_bars=10, breakout_deadline_min_bars=2)
+    low_min_bars_rejected = cp.double_bottom_shape(high, low, close, state="rejected", pivot_spike_excess_atr_max=0.0,
+                                                     pivot_right_bars=10, breakout_deadline_min_bars=2)
+    high_min_bars_confirmed = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
+                                                       pivot_right_bars=10, breakout_deadline_min_bars=13)
+    high_min_bars_rejected = cp.double_bottom_shape(high, low, close, state="rejected", pivot_spike_excess_atr_max=0.0,
+                                                      pivot_right_bars=10, breakout_deadline_min_bars=13)
 
     check(
-        "values below pivot_right_bars all clamp to the same result as the pivot_right_bars+3 floor",
-        all(np.array_equal(r, at_floor) for r in below_clamp),
-        detail=str([r.sum() for r in below_clamp] + [at_floor.sum()]),
+        "breakout_deadline_min_bars=2 (below pivot_right_bars=10, genuinely not too early) confirms rather than being clamped/rejected",
+        low_min_bars_confirmed.sum() >= 1 and low_min_bars_rejected.sum() == 0,
+        detail=f"confirmed={low_min_bars_confirmed.sum()} rejected={low_min_bars_rejected.sum()}",
     )
     check(
-        "a value already at or above the floor is used as-is (not further clamped)",
-        not np.array_equal(at_floor, above_floor),
-        detail=f"at_floor={at_floor.sum()} above_floor={above_floor.sum()}",
+        "breakout_deadline_min_bars=13 (above the actual breakout timing, genuinely too early) rejects rather than confirming",
+        high_min_bars_rejected.sum() >= 1 and high_min_bars_confirmed.sum() == 0,
+        detail=f"confirmed={high_min_bars_confirmed.sum()} rejected={high_min_bars_rejected.sum()}",
+    )
+
+
+def test_double_bottom_shape_rejects_breakout_hidden_inside_pivot_confirm_window():
+    # 谷2からブレイクまでの間隔が短すぎる形は、実際にネックラインを突破した
+    # タイミング(bars_since_top2)がbreakout_deadline_min_bars未満なら、
+    # スキャンが谷2の直後から始まる(2026-08-04の再設計、モジュール冒頭の
+    # ⑫参照)ため、Rejectedとして正しく検出できるはず。2026-08-03、
+    # ユーザー指摘: 「山2のピボット右本数設定値よりも早く終値がネックライン+
+    # ブレイク余白を突破したときは早すぎるブレイクとして棄却できない？」。
+    #
+    # 谷2直後(5本以内)に一気にブレイクする形と、谷2からゆっくり
+    # (40本かけて)ブレイクする形の2パターンを比較する。
+    base = [
+        np.linspace(130, 110, 15, endpoint=False), np.linspace(110, 100, 15, endpoint=False),
+        np.linspace(100, 110, 15, endpoint=False), np.linspace(110, 100.5, 15, endpoint=False),
+    ]
+    fast_closes = np.concatenate(base + [np.linspace(100.5, 135, 5, endpoint=False), np.full(60, 135.0)])
+    slow_closes = np.concatenate(base + [np.linspace(100.5, 135, 40, endpoint=False), np.full(20, 135.0)])
+
+    fast_high, fast_low, fast_close = _hlc(fast_closes)
+    slow_high, slow_low, slow_close = _hlc(slow_closes)
+
+    kwargs = dict(state="confirmed", pivot_spike_excess_atr_max=0.0, pivot_right_bars=10, breakout_deadline_min_bars=10)
+    fast_confirmed = cp.double_bottom_shape(fast_high, fast_low, fast_close, **kwargs)
+    fast_rejected = cp.double_bottom_shape(fast_high, fast_low, fast_close, **dict(kwargs, state="rejected"))
+    slow_confirmed = cp.double_bottom_shape(slow_high, slow_low, slow_close, **kwargs)
+
+    check(
+        "a breakout hidden inside the pivot-confirm window (breakout_deadline_min_bars == pivot_right_bars) is rejected, not confirmed",
+        fast_confirmed.sum() == 0 and fast_rejected.sum() >= 1,
+        detail=f"confirmed={fast_confirmed.sum()} rejected={fast_rejected.sum()}",
+    )
+    check(
+        "a genuinely-on-time breakout (same shape, slower ramp) still confirms normally - the fix isn't over-rejecting",
+        slow_confirmed.sum() >= 1,
+        detail=f"slow_confirmed={slow_confirmed.sum()}",
+    )
+
+
+def test_double_bottom_shape_top2_confirms_without_right_side_pivot_wait():
+    # 谷2(ブレイクへ直接つながる最後の反転点)は左側のピボット判定だけで
+    # 確定し、右側(pivot_right_bars分の待ち)は不要 - 2026-08-04、ユーザー
+    # 判断: 「山2はピボット左右判定じゃなく左だけで右は無でもよくないか」。
+    # 本当にそこが頂点だったか(その後さらに上がらなかったか)はブレイク
+    # 判定側のfail_j/早すぎ判定がそのまま代わりに担保する設計。
+    #
+    # pivot_right_bars=10というかなり長い待ちを設定しても、formed_bar
+    # (パターン全体が確定するバー)は谷2自身のバーと一致するはず(以前は
+    # 必ず谷2+10だった)。
+    closes = np.concatenate([
+        np.linspace(130, 110, 15, endpoint=False), np.linspace(110, 100, 15, endpoint=False),
+        np.linspace(100, 110, 15, endpoint=False), np.linspace(110, 100.5, 15, endpoint=False),
+        np.linspace(100.5, 135, 30, endpoint=False), np.full(40, 135.0),
+    ])
+    high, low, close = _hlc(closes)
+
+    state = cp._double_top_bottom_shape_state(high, low, close, True, pivot_spike_excess_atr_max=0.0,
+                                               pivot_right_bars=10, breakout_deadline_min_bars=10)
+    top2_bar = int(state["top2_bar"].to_numpy()[60]) if not np.isnan(state["top2_bar"].to_numpy()[60]) else None
+
+    check(
+        "谷2自身のバー(60)にformed_bar情報が書き込まれている(右側待ちゼロ)",
+        top2_bar == 60,
+        detail=f"top2_bar_at_60={top2_bar}",
+    )
+
+    confirmed = np.where(state["confirmed"].to_numpy())[0]
+    check(
+        "境界値ちょうど(breakout_deadline_min_bars==pivot_right_bars)でも、間に合ったブレイクは正しくConfirmed",
+        len(confirmed) >= 1 and (confirmed[0] - 60) == 10,
+        detail=f"confirmed={confirmed}",
+    )
+
+
+def test_double_bottom_shape_neck_to_top2_also_bound_by_min_max_bars_between_tops():
+    # ネック→山2の本数(interval2)は、以前は比率ベースの窓
+    # (symmetry_ratio_min/max × interval1)でしか絞り込まれていなかった。
+    # 山1→ネックと同じmin_bars_between_tops/max_bars_between_topsでも
+    # 追加拘束されるようになったはず - 2026-08-04、ユーザー判断:
+    # 「山1→ネックと同じところでネック→山2の本数の範囲も決めたい」。
+    # 谷2までの区間の本数だけを変えた2パターンを比較する。
+    def build(seg4_len):
+        return np.concatenate([
+            np.linspace(130, 110, 15, endpoint=False), np.linspace(110, 100, 15, endpoint=False),
+            np.linspace(100, 110, 15, endpoint=False), np.linspace(110, 100.5, seg4_len, endpoint=False),
+            np.linspace(100.5, 135, 30, endpoint=False), np.full(40, 135.0),
+        ])
+
+    too_close_high, too_close_low, too_close_close = _hlc(build(4))  # interval2=4 < min_bars_between_tops=5
+    ok_high, ok_low, ok_close = _hlc(build(6))  # interval2=6 >= min_bars_between_tops=5
+
+    too_close_state = cp._double_top_bottom_shape_state(
+        too_close_high, too_close_low, too_close_close, True,
+        pivot_spike_excess_atr_max=0.0, min_bars_between_tops=5, max_bars_between_tops=500,
+    )
+    ok_state = cp._double_top_bottom_shape_state(
+        ok_high, ok_low, ok_close, True,
+        pivot_spike_excess_atr_max=0.0, min_bars_between_tops=5, max_bars_between_tops=500,
+    )
+
+    check(
+        "ネック→山2が4本(min_bars_between_tops=5未満)だと検出されない",
+        too_close_state["detected"].sum() == 0,
+        detail=f"detected={np.where(too_close_state['detected'].to_numpy())[0]}",
+    )
+    check(
+        "ネック→山2が6本(min_bars_between_tops=5以上)なら正常に検出される",
+        ok_state["detected"].sum() >= 1,
+        detail=f"detected={np.where(ok_state['detected'].to_numpy())[0]}",
     )
 
 
@@ -231,7 +344,10 @@ if __name__ == "__main__":
     test_triple_top_shape_confirms_on_clean_pattern_mirror()
     test_triple_bottom_shape_rejects_when_third_valley_is_deeper_downtrend()
     test_triple_bottom_shape_rejects_too_early_breakout()
-    test_double_bottom_shape_clamps_breakout_deadline_below_pivot_right_bars()
+    test_double_bottom_shape_breakout_deadline_min_bars_used_as_is_below_pivot_right_bars()
+    test_double_bottom_shape_rejects_breakout_hidden_inside_pivot_confirm_window()
+    test_double_bottom_shape_top2_confirms_without_right_side_pivot_wait()
+    test_double_bottom_shape_neck_to_top2_also_bound_by_min_max_bars_between_tops()
     test_first_occurrence_after_fires_once_per_epoch()
 
     if FAILURES:

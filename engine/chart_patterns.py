@@ -153,6 +153,38 @@ def _detect_pivot_lows(low: pd.Series, left: int, right: int) -> pd.Series:
     return _collapse_consecutive_runs(is_pivot)
 
 
+def _detect_pivot_highs_left_only(high: pd.Series, left: int) -> pd.Series:
+    """_detect_pivot_highsの右側確認を外した版 - 直近left本より高ければ
+    その場で(未来のバーを一切使わず)確定する。ダブル/トリプルトップ・
+    ボトム(形状判定版)の「最後の山/谷(山2、トリプルなら山3)」専用
+    (2026-08-04追加、ユーザー判断: 「山2はピボット左右判定じゃなく左だけで
+    右は無でもよくないか」)。右側確認による遅延が無いぶん先読みバイアスが
+    ないのは自明(過去のバーしか見ていない)だが、代わりに「本当にそこが
+    頂点だったか(その後さらに上がらなかったか)」の保証が弱くなる - これは
+    ブレイク判定側のfail_j(山1・この点の高い方+余白を超えたらFailed)が
+    実質的に代わりを果たす設計(そちらで拾えなければ、そもそも右側確認を
+    待っても同じ結論になる)。
+
+    _detect_pivot_highs/lowsと違って_collapse_consecutive_runsは使わない -
+    あちらは「値が完全に同じ(横ばいの天井/底)」バーの連続を先頭1本に絞る
+    ためのものだが、左側のみの判定は上昇/下降が続く区間全体で連続してTrue
+    になる(値は毎回更新される、単なる横ばいではない)。ここで先頭1本に
+    潰すと「上昇/下降し始めて左本数だけ経過した最初のバー」を拾ってしまい、
+    実際の頂点/底とはズレる。呼び出し側([_shape_state_core]の山2探索/
+    [_shape_state_core3]の谷3探索)は「窓内で最後に一致したバーで更新
+    し続ける」方式なので、素の(潰さない)フラグのまま渡せば、価格が動き
+    続けている間は追従し、動きが止まった/許容誤差を外れた時点の最後の値が
+    自然に残る。"""
+    left_max = high.rolling(window=left + 1).max()
+    return (high == left_max).fillna(False)
+
+
+def _detect_pivot_lows_left_only(low: pd.Series, left: int) -> pd.Series:
+    """_detect_pivot_highs_left_onlyの安値版。"""
+    left_min = low.rolling(window=left + 1).min()
+    return (low == left_min).fillna(False)
+
+
 def _collapse_consecutive_runs(flags: pd.Series) -> pd.Series:
     """engine/smc_indicators.py::_collapse_consecutive_runsと同じ(平坦な
     天井/底が窓の等号判定に複数バーで一致してしまうのを、最初の1本だけに
@@ -901,14 +933,32 @@ def equal_low(
 #   ③山1→ネックの間隔(interval1)がmin_bars_between_tops〜
 #     max_bars_between_topsの範囲内。
 #   ④山2の探索窓 = ネックからinterval1×symmetry_ratio_min〜
-#     symmetry_ratio_max本の範囲。
-#   ⑤⑥山2候補: 窓の中で①と同じ基準(値幅込みの本物のピボット)を満たし、
-#     かつ山1との価格差がATR×top_tolerance_atr_mult以内のバーのうち、
-#     時系列で最後に見つかったもの(「条件を満たす最新の候補で更新」 -
-#     複雑な極値追跡はせず、単純に上書きしていく)。窓の中で山1の水準を
+#     symmetry_ratio_max本の範囲、かつ③と同じmin_bars_between_tops〜
+#     max_bars_between_tops本の範囲(両方を満たす区間まで絞り込む -
+#     2026-08-04追加、ユーザー判断: 「山1→ネックと同じところでネック→山2の
+#     本数の範囲も決めたい」)。
+#   ⑤⑥山2候補: 窓の中で①とは別の、右側確認を外した左側のみのピボット判定
+#     (2026-08-04、ユーザー判断: 「山2はピボット左右判定じゃなく左だけで
+#     右は無でもよくないか」)を満たし、かつ山1との価格差がATR×
+#     top_tolerance_atr_mult以内のバーのうち、時系列で最後に見つかったもの
+#     (「条件を満たす最新の候補で更新」 - 複雑な極値追跡はせず、単純に
+#     上書きしていく)。左側のみの判定は値が更新され続ける間ずっとTrueに
+#     なるので、この「最後の候補で上書き」方式と組み合わせることで、価格が
+#     動き続けている間は自然に追従し、動きが止まった/許容誤差を外れた時点の
+#     最後の値が残る(_detect_pivot_highs_left_only/lowsのdocstring参照)。
+#     右側確認が無いぶん、山2の確定にformed_bar上の遅延が生じない
+#     (pivot_right_bars分の待ちが不要) - 「本当にそこが頂点だったか」の
+#     保証は、後段⑪のブレイク判定のfail_j(山1・山2の高い方+余白を超えたら
+#     Failed)が代わりに担保する。窓の中で山1の水準を
 #     許容誤差を超えて突き抜ける値が一度でも出たら、その時点でこの山1
 #     候補ごと不成立にする(ユーザー判断:「許容範囲外の安値が出たらそれは
 #     もうダブルボトムじゃない」)。
+#   ⑥.5 ネック→山2の間はネックラインを割らない(2026-08-03追加): ⑤⑥は山1
+#     との近さ(上側)しか見ていないため、ネックが確定した後に一度ネック
+#     ラインを下抜け(bullishなら上抜け)してから山2を付けるような、見た目
+#     ダブルトップ/ボトムとして不自然な形も、区間が小さければ⑨⑩(効率比・
+#     直線乖離)を通り抜けてしまっていた(ユーザー指摘: 実データの1件で
+#     ネック→山2の間にネック割れが発生していたのに確定していた)。
 #   ⑦谷(山)の深さ: ネックライン−(山1・山2の平均、絶対値)がATR×
 #     min_valley_depth_atr_mult以上・ATR×max_valley_depth_atr_mult以下。
 #   ⑧山1前点: ネックが確定した時点で山1より過去に遡り、安値≦
@@ -949,6 +999,23 @@ def equal_low(
 #     同一バーでConfirmed・Failed両方の条件が成立した場合はFailedを優先
 #     する(ユーザー判断: バックテストエンジン本体のSL/TP同時ヒット時と
 #     同じ「悪い方を優先」という既存の全体方針に合わせた)。
+#   ⑫早すぎるブレイクの判定は山2/谷2の直後から(2026-08-04、⑤⑥の変更に
+#     合わせて再設計): ⑪のスキャンはformed_barではなく山2/谷2の次のバー
+#     (true_bar+1)から始める - 山2/谷2・ネックの価格自体はそのバーが
+#     閉じた時点で既知なので、confirm_j/fail_j/bars_since_top2/breakout_leg_
+#     okの計算はそこから行っても未来のバーを一切使わない。ただし「パターン
+#     全体(山1・ネックの右側確認含む)が存在すると確定できる」のは
+#     formed_bar以降なので、結果の報告(Rejected/Confirmed/Failedをどのバー
+#     に書き込むか)だけはformed_bar未満にならないようクランプする -
+#     判定の計算と結果の報告バーを分離することで、breakout_deadline_
+#     min_barsがどんな値でも(ピボット右本数を下回っても)「早すぎ」判定が
+#     正しく機能する(以前はformed_barより前を専用の別スキャンで事前に
+#     チェックしていたが、通常のスキャンをそのまま前倒しするだけで同じ
+#     ことができると気づき、そちらに一本化した)。あわせて
+#     breakout_deadline_min_barsをピボット右本数未満にできない繰り上げ
+#     クランプ(2026-08-03に追加)も撤去した(そのクランプの根拠自体が
+#     「スキャンがformed_barより前を見られない」ことだったため - ユーザー
+#     判断2026-08-04)。
 #
 # 2026-08-02: 山1前のトレンド確認(pre_trend_lookback_bars/pre_trend_atr_mult)
 # はユーザー判断で機能ごと削除した(デフォルトが既に無効=0で実質使われて
@@ -1055,10 +1122,32 @@ def _shape_dev_ok(high_a, low_a, atr_a, start_bar, start_price, end_bar, end_pri
 
 
 @njit(cache=True)
+def _shape_neckline_intact(high_a, low_a, neck_bar, next_top_bar, neckline_price, bullish):
+    """True if price never crosses the neckline strictly between neck_bar
+    and next_top_bar - guards against a right shoulder that already breaks
+    the neckline before the next extreme even forms, which none of the
+    other checks catch on their own (the top1-proximity breach check only
+    looks at closeness to the FIRST extreme, and the deviation/efficiency
+    checks use a tolerance proportional to that leg's own price range, so a
+    small-range leg can dip below/above the neckline and still pass both).
+    Found 2026-08-03 via a real occurrence (a diagnostic gallery's card
+    #176) whose neck->top2 leg dipped below the neckline before recovering
+    to form top2 - visually a clean double top shouldn't do that."""
+    for j in range(neck_bar + 1, next_top_bar):
+        if bullish:
+            if high_a[j] > neckline_price:
+                return False
+        else:
+            if low_a[j] < neckline_price:
+                return False
+    return True
+
+
+@njit(cache=True)
 def _shape_state_core(
     high_a, low_a, close_a, atr_a,
     ext_price_a, neck_price_a,
-    ext_flags, neck_flags,
+    ext_flags, neck_flags, ext_flags_top2,
     bullish,
     pivot_confirm_lag,
     pivot_spike_excess_atr_max, pivot_spike_window_ratio,
@@ -1076,21 +1165,17 @@ def _shape_state_core(
     breakout_type_is_close,
 ):
     n = high_a.shape[0]
-    # breakout_deadline_min_barsは「山2/谷2からブレイクまでの最小本数」を
-    # 表す値だが、ピボット確定にはpivot_confirm_lag(=ピボット右本数)本の
-    # 先読み防止の遅延が必ずかかる(パターン自体が確定するのが早くても
-    # 山2/谷2+pivot_confirm_lag本後)。ここでbreakout_deadline_min_barsが
-    # pivot_confirm_lagを下回っていると、パターンが確定した時点で既に
-    # この「早すぎ判定」が意味を失っている(確定した瞬間には既に規定本数を
-    # 超えてしまっているため、どんなブレイクも無条件にRejected扱いを免れて
-    # しまう)。ピボット右本数を後から変えても壊れないよう、規定本数が
-    # ピボット右本数を下回る場合はピボット右本数+3(元のデフォルト値の
-    # 「確定後+3本」という余裕)まで自動的に繰り上げる(2026-08-03、
-    # ユーザー判断)。
-    if breakout_deadline_min_bars >= pivot_confirm_lag:
-        effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
-    else:
-        effective_breakout_deadline_min_bars = float(pivot_confirm_lag + 3)
+    # 2026-08-03に導入したbreakout_deadline_min_bars<pivot_confirm_lagの
+    # 自動繰り上げクランプは2026-08-04に撤去した - 当時はスキャンが
+    # formed_bar(=山2/谷2+pivot_confirm_lag本後)より前を絶対に見られな
+    # かったため、規定本数がpivot_confirm_lagを下回ると「早すぎ判定」が
+    # 構造的に発動できなくなる問題があった。今はスキャン自体を山2/谷2の
+    # 直後(true_bar+1)から開始できる(下のscan_start参照 - 結果の報告
+    # だけformed_bar以降まで遅らせ、判定の計算自体はそこより前のバーの
+    # 既知の価格を使って行う、先読みにならない設計)ので、規定本数がどんな
+    # 値でも「早すぎ判定」がそのまま機能する。よってクランプ自体が不要に
+    # なった(ユーザー判断2026-08-04)。
+    effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1153,6 +1238,17 @@ def _shape_state_core(
 
             win_start = neck_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
             win_end = neck_true_bar + int(np.floor(interval1 * symmetry_ratio_max))
+            # ネック→山2の本数も、山1→ネックと同じmin/max_bars_between_tops
+            # で追加拘束する(2026-08-04、ユーザー判断: 「山1→ネックと同じ
+            # ところでパラメーターを変更できるように」) - 比率ベースの窓と
+            # 絶対本数ベースの窓、両方を満たす範囲まで絞り込む。
+            abs_win_start = neck_true_bar + min_bars_between_tops
+            if abs_win_start > win_start:
+                win_start = abs_win_start
+            if max_bars_between_tops > 0:
+                abs_win_end = neck_true_bar + max_bars_between_tops
+                if abs_win_end < win_end:
+                    win_end = abs_win_end
             if win_end > n - 1:
                 win_end = n - 1
             if win_start > win_end:
@@ -1175,13 +1271,19 @@ def _shape_state_core(
                 if breach:
                     window_invalidated = True
                     break
-                if ext_flags[j] and abs(ext_price_a[j] - top1_price) <= tol_j:
+                if ext_flags_top2[j] and abs(ext_price_a[j] - top1_price) <= tol_j:
                     top2_true_bar = j
                     top2_price = ext_price_a[j]
 
             if window_invalidated or top2_true_bar == -1:
                 continue
-            top2_confirm_bar = top2_true_bar + pivot_confirm_lag
+            if not _shape_neckline_intact(high_a, low_a, neck_true_bar, top2_true_bar, neck_price, bullish):
+                continue
+            # 山2/谷2は右側確認不要(2026-08-04、モジュール冒頭コメント参照) -
+            # 確定は自分自身のバーで完結する。それでも本当に頂点だったかは
+            # ブレイク判定側のfail_j(山1・山2の高い方+余白を超えたら
+            # Failed)が代わりに担保する。
+            top2_confirm_bar = top2_true_bar
 
             interval2 = top2_true_bar - neck_true_bar
             top2_left_window = int(round(interval2 * pivot_spike_window_ratio))
@@ -1276,10 +1378,22 @@ def _shape_state_core(
             formed_bar = confirm_floor
             detected_a[formed_bar] = True
 
+            worse_extreme = min(top1_price, top2_price) if bullish else max(top1_price, top2_price)
+
+            # スキャンは山2/谷2の直後(true_bar+1)から始める - formed_barより
+            # 前でも、山2/谷2・ネックの価格自体はそのバーが閉じた時点で既知
+            # なので、判定の計算(confirm_j/fail_j/bars_since_top2/breakout_leg_
+            # ok)はここから行って問題ない(未来のバーは一切使わない)。ただし
+            # 「パターン全体(山1・ネックの右側確認含む)が存在すると確定
+            # できる」のはformed_bar以降なので、結果の報告(outcome_bar)だけ
+            # はformed_bar未満にならないよう後段でクランプする - 2026-08-04、
+            # 「山2は左側のみで確定」への変更に合わせてこの一本化した設計に
+            # した(以前はformed_barより前を別関数で事前スキャンしていたが、
+            # 通常のスキャンをそのまま前倒しするだけで同じことができ、
+            # breakout_deadline_min_barsがどんな値でも「早すぎ判定」が正しく
+            # 機能するようになった)。
             expire_bars = interval1 * breakout_deadline_ratio_max
             scan_start = top2_true_bar + 1
-            if formed_bar > scan_start:
-                scan_start = formed_bar
             scan_end = top2_true_bar + int(np.ceil(expire_bars))
             if scan_end > n - 1:
                 scan_end = n - 1
@@ -1289,7 +1403,6 @@ def _shape_state_core(
             outcome_bar = scan_end
 
             if scan_start <= scan_end:
-                worse_extreme = min(top1_price, top2_price) if bullish else max(top1_price, top2_price)
                 seen_near = False
                 found = False
                 for j in range(scan_start, scan_end + 1):
@@ -1390,9 +1503,27 @@ def _shape_state_core(
                 if not found:
                     retested = seen_near
 
+            # 判定自体はformed_barより前のバーで完結していることがある
+            # (山2/谷2の直後から見ているため) - その場合でも報告はパターン
+            # 全体の存在が確定するformed_bar以降にする(先読み防止、
+            # モジュール冒頭のコメント参照)。
+            if outcome_bar < formed_bar:
+                outcome_bar = formed_bar
+
+            # exists_a/formed_bar_aへの範囲書き込みは、別候補(別のei/ki)自身の
+            # formed_barバー(detected_a[idx]==True)を上書きしない - 上書き
+            # すると、その候補自身のdetected_a==Trueは残ったまま
+            # formed_bar_a[そのバー]だけ別候補の値に化けてしまい、そこから
+            # top1_bar_a等を逆引きすると全く別の候補の中身を拾ってしまう
+            # (2026-08-04発見、既存の仕様上の特性 - 複数候補の存在区間が
+            # 重なった際、後から処理された広い範囲の書き込みが先に処理された
+            # 候補自身のアンカーバーを踏みつけていた)。自分自身のformed_bar
+            # バーは常に書き込む。
             exists_end = outcome_bar
-            exists_a[formed_bar: exists_end + 1] = True
-            formed_bar_a[formed_bar: exists_end + 1] = formed_bar
+            for _idx in range(formed_bar, exists_end + 1):
+                if _idx == formed_bar or not detected_a[_idx]:
+                    exists_a[_idx] = True
+                    formed_bar_a[_idx] = formed_bar
             top1_bar_a[formed_bar] = top1_true_bar
             top2_bar_a[formed_bar] = top2_true_bar
             top1_price_a[formed_bar] = top1_price
@@ -1540,6 +1671,22 @@ def _double_top_bottom_shape_state(
     ext_flags = plain_pivot_ext & prominence_ok_ext
     neck_flags = plain_pivot_neck & prominence_ok_neck
 
+    # 山2/谷2(ブレイクへ直接つながる最後の反転点)専用: 右側確認を外した
+    # ピボット判定(2026-08-04、ユーザー判断: 「山2は左だけで右は無でも
+    # よくないか」)。山1・ネックはext_flags/neck_flags(左右両方)のまま。
+    plain_pivot_ext_left_only = (
+        _detect_pivot_lows_left_only(low, pivot_left_bars)
+        if bullish
+        else _detect_pivot_highs_left_only(high, pivot_left_bars)
+    ).to_numpy()
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_ext_left_only = left_boundary - ext_price_a >= prom_thresh
+        else:
+            prominence_ok_ext_left_only = ext_price_a - left_boundary >= prom_thresh
+    prominence_ok_ext_left_only = np.nan_to_num(prominence_ok_ext_left_only, nan=0.0).astype(bool)
+    ext_flags_top2 = plain_pivot_ext_left_only & prominence_ok_ext_left_only
+
     pivot_confirm_lag = pivot_right_bars
 
     # 二重ループの本体はNumba(nopython, cache=True)でJITコンパイルされる
@@ -1553,7 +1700,7 @@ def _double_top_bottom_shape_state(
     ) = _shape_state_core(
         high_a, low_a, close_a, atr_a,
         ext_price_a, neck_price_a,
-        ext_flags, neck_flags,
+        ext_flags, neck_flags, ext_flags_top2,
         bool(bullish),
         int(pivot_confirm_lag),
         float(pivot_spike_excess_atr_max), float(pivot_spike_window_ratio),
@@ -1689,7 +1836,7 @@ def double_bottom_shape(
 def _shape_state_core3(
     high_a, low_a, close_a, atr_a,
     ext_price_a, neck_price_a,
-    ext_flags, neck_flags,
+    ext_flags, neck_flags, ext_flags_top3,
     bullish,
     pivot_confirm_lag,
     pivot_spike_excess_atr_max, pivot_spike_window_ratio,
@@ -1707,14 +1854,10 @@ def _shape_state_core3(
     breakout_type_is_close,
 ):
     n = high_a.shape[0]
-    # ダブル版の_shape_state_coreと同じ理由(そちらのコメント参照) -
-    # breakout_deadline_min_barsがピボット確定の遅延(pivot_confirm_lag)を
-    # 下回ると、パターン確定時点で既に「早すぎ判定」が意味を失うため、
-    # 下回る場合はpivot_confirm_lag+3まで自動的に繰り上げる。
-    if breakout_deadline_min_bars >= pivot_confirm_lag:
-        effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
-    else:
-        effective_breakout_deadline_min_bars = float(pivot_confirm_lag + 3)
+    # ダブル版の_shape_state_coreと同じ理由(そちらのコメント参照) - クランプ
+    # は2026-08-04に撤去(谷3のスキャンをtrue_bar+1から始められるように
+    # なったため、規定本数がどんな値でも「早すぎ判定」がそのまま機能する)。
+    effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1781,6 +1924,15 @@ def _shape_state_core3(
 
             win_start = neck1_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
             win_end = neck1_true_bar + int(np.floor(interval1 * symmetry_ratio_max))
+            # ダブル版と同じ理由(そちらのコメント参照) - ネック1→山2も
+            # min/max_bars_between_topsで追加拘束する。
+            abs_win_start = neck1_true_bar + min_bars_between_tops
+            if abs_win_start > win_start:
+                win_start = abs_win_start
+            if max_bars_between_tops > 0:
+                abs_win_end = neck1_true_bar + max_bars_between_tops
+                if abs_win_end < win_end:
+                    win_end = abs_win_end
             if win_end > n - 1:
                 win_end = n - 1
             if win_start > win_end:
@@ -1814,6 +1966,8 @@ def _shape_state_core3(
                     top2_price = ext_price_a[j]
 
             if window_invalidated or top2_true_bar == -1:
+                continue
+            if not _shape_neckline_intact(high_a, low_a, neck1_true_bar, top2_true_bar, neck1_price, bullish):
                 continue
             top2_confirm_bar = top2_true_bar + pivot_confirm_lag
 
@@ -1928,6 +2082,15 @@ def _shape_state_core3(
 
                 win_start2 = neck2_true_bar + int(np.ceil(interval2n * symmetry_ratio_min))
                 win_end2 = neck2_true_bar + int(np.floor(interval2n * symmetry_ratio_max))
+                # ダブル版と同じ理由(そちらのコメント参照) - ネック2→山3も
+                # min/max_bars_between_topsで追加拘束する。
+                abs_win_start2 = neck2_true_bar + min_bars_between_tops
+                if abs_win_start2 > win_start2:
+                    win_start2 = abs_win_start2
+                if max_bars_between_tops > 0:
+                    abs_win_end2 = neck2_true_bar + max_bars_between_tops
+                    if abs_win_end2 < win_end2:
+                        win_end2 = abs_win_end2
                 if win_end2 > n - 1:
                     win_end2 = n - 1
                 if win_start2 > win_end2:
@@ -1952,9 +2115,14 @@ def _shape_state_core3(
                     if breach:
                         window_invalidated2 = True
                         break
-                    # 谷2側と同じ理由(素通り防止)で谷3も窓内で最初に一致した
-                    # 安値に固定する。
-                    if top3_true_bar == -1 and ext_flags[j]:
+                    # 谷3は右側確認を外した(左側のみの)フラグを使うため、
+                    # 谷2の「最初に一致したバーで固定」(素通り防止)とは違い、
+                    # 窓内で最後に一致したバーまで追従し続ける - ダブル版の
+                    # 谷2(_shape_state_core)と同じ更新方式(モジュール冒頭の
+                    # _detect_pivot_highs_left_only/lowsのdocstring参照:
+                    # 左側のみのフラグは動きが続く間ずっとTrueになるので、
+                    # 最初の1本で固定すると動き始めた直後の値を拾ってしまう)。
+                    if ext_flags_top3[j]:
                         cand = ext_price_a[j]
                         lo_all = cand if cand < lo12 else lo12
                         hi_all = cand if cand > hi12 else hi12
@@ -1964,7 +2132,11 @@ def _shape_state_core3(
 
                 if window_invalidated2 or top3_true_bar == -1:
                     continue
-                top3_confirm_bar = top3_true_bar + pivot_confirm_lag
+                if not _shape_neckline_intact(high_a, low_a, neck2_true_bar, top3_true_bar, neck2_price, bullish):
+                    continue
+                # 谷3(ブレイクへ直接つながる最後の反転点)は右側確認不要 -
+                # ダブル版の谷2と同じ理由(モジュール冒頭コメント参照)。
+                top3_confirm_bar = top3_true_bar
 
                 interval3 = top3_true_bar - neck2_true_bar
                 top3_left_window = int(round(interval3 * pivot_spike_window_ratio))
@@ -2039,33 +2211,33 @@ def _shape_state_core3(
 
                 # 猶予・バッファは直近の間隔/深さ(谷2→ネック2)基準 - パターン
                 # が進むにつれてスケールが変わっても自然に追従できるため。
+                breakout_buffer_value2 = depth2 * breakout_buffer_mult
+
+                worst_extreme = top1_price
+                if bullish:
+                    if top2_price < worst_extreme:
+                        worst_extreme = top2_price
+                    if top3_price < worst_extreme:
+                        worst_extreme = top3_price
+                else:
+                    if top2_price > worst_extreme:
+                        worst_extreme = top2_price
+                    if top3_price > worst_extreme:
+                        worst_extreme = top3_price
+
+                # スキャンは谷3の直後から始める - ダブル版と同じ理由
+                # (そちらのコメント参照、報告のみformed_bar以降にクランプ)。
                 expire_bars = interval2n * breakout_deadline_ratio_max
                 scan_start = top3_true_bar + 1
-                if formed_bar > scan_start:
-                    scan_start = formed_bar
                 scan_end = top3_true_bar + int(np.ceil(expire_bars))
                 if scan_end > n - 1:
                     scan_end = n - 1
-
-                breakout_buffer_value2 = depth2 * breakout_buffer_mult
 
                 retested = False
                 outcome = 4  # expired
                 outcome_bar = scan_end
 
                 if scan_start <= scan_end:
-                    worst_extreme = top1_price
-                    if bullish:
-                        if top2_price < worst_extreme:
-                            worst_extreme = top2_price
-                        if top3_price < worst_extreme:
-                            worst_extreme = top3_price
-                    else:
-                        if top2_price > worst_extreme:
-                            worst_extreme = top2_price
-                        if top3_price > worst_extreme:
-                            worst_extreme = top3_price
-
                     seen_near = False
                     found = False
                     for j in range(scan_start, scan_end + 1):
@@ -2163,9 +2335,19 @@ def _shape_state_core3(
                     if not found:
                         retested = seen_near
 
+                # ダブル版と同じ理由(そちらのコメント参照) - 判定自体は
+                # formed_barより前で完結していることがあるが、報告は
+                # パターン全体の存在が確定するformed_bar以降にする。
+                if outcome_bar < formed_bar:
+                    outcome_bar = formed_bar
+
+                # ダブル版と同じ理由(そちらのコメント参照) - 別候補自身の
+                # formed_barバーを上書きしない。
                 exists_end = outcome_bar
-                exists_a[formed_bar: exists_end + 1] = True
-                formed_bar_a[formed_bar: exists_end + 1] = formed_bar
+                for _idx in range(formed_bar, exists_end + 1):
+                    if _idx == formed_bar or not detected_a[_idx]:
+                        exists_a[_idx] = True
+                        formed_bar_a[_idx] = formed_bar
                 top1_bar_a[formed_bar] = top1_true_bar
                 top2_bar_a[formed_bar] = top2_true_bar
                 top3_bar_a[formed_bar] = top3_true_bar
@@ -2286,6 +2468,23 @@ def _triple_top_bottom_shape_state(
     ext_flags = plain_pivot_ext & prominence_ok_ext
     neck_flags = plain_pivot_neck & prominence_ok_neck
 
+    # 谷3(ブレイクへ直接つながる最後の反転点)専用: 右側確認を外したピボット
+    # 判定(2026-08-04、ダブル版と同じユーザー判断 - モジュール冒頭コメント
+    # 参照)。谷1・ネック1・谷2・ネック2はext_flags/neck_flags(左右両方)の
+    # まま - トリプルの「最後の点」は谷3のみ。
+    plain_pivot_ext_left_only = (
+        _detect_pivot_lows_left_only(low, pivot_left_bars)
+        if bullish
+        else _detect_pivot_highs_left_only(high, pivot_left_bars)
+    ).to_numpy()
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_ext_left_only = left_boundary - ext_price_a >= prom_thresh
+        else:
+            prominence_ok_ext_left_only = ext_price_a - left_boundary >= prom_thresh
+    prominence_ok_ext_left_only = np.nan_to_num(prominence_ok_ext_left_only, nan=0.0).astype(bool)
+    ext_flags_top3 = plain_pivot_ext_left_only & prominence_ok_ext_left_only
+
     pivot_confirm_lag = pivot_right_bars
 
     (
@@ -2297,7 +2496,7 @@ def _triple_top_bottom_shape_state(
     ) = _shape_state_core3(
         high_a, low_a, close_a, atr_a,
         ext_price_a, neck_price_a,
-        ext_flags, neck_flags,
+        ext_flags, neck_flags, ext_flags_top3,
         bool(bullish),
         int(pivot_confirm_lag),
         float(pivot_spike_excess_atr_max), float(pivot_spike_window_ratio),

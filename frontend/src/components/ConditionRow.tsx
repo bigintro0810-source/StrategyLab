@@ -423,26 +423,6 @@ export function ParamInputs({
     return controllerValue >= spec.show_if.min
   })
 
-  // engine/chart_patterns.pyの安全策(ユーザー判断2026-08-03)と対になる
-  // 表示側の補正 - breakout_deadline_min_bars(山2/谷2→ブレイクの最小本数、
-  // ダブル/トリプルトップ・ボトムのみが持つパラメータ)はピボット右本数を
-  // 下回ると裏側で自動的にピボット右本数+3に補正される(そうしないと
-  // パターン確定と同時に早すぎ判定が意味を失うため)。補正が起きているのに
-  // 画面の数字がそのままだと気づけない(ユーザー報告:「3とか入力しても
-  // 自動で8にならない」)ので、ピボット右本数かこの欄自身から離れた時点で
-  // 画面の数字自体も補正後の値に書き換える。
-  const correctBreakoutDeadlineIfNeeded = (nextParams: ConditionParams): ConditionParams => {
-    const pivotRightSpec = info.params.find((s) => s.name === 'pivot_right_bars')
-    const deadlineSpec = info.params.find((s) => s.name === 'breakout_deadline_min_bars')
-    if (!pivotRightSpec || !deadlineSpec) return nextParams
-    const pivotRightBars = Number(nextParams.pivot_right_bars ?? pivotRightSpec.default)
-    const deadline = Number(nextParams.breakout_deadline_min_bars ?? deadlineSpec.default)
-    if (deadline < pivotRightBars) {
-      return { ...nextParams, breakout_deadline_min_bars: pivotRightBars + 3 }
-    }
-    return nextParams
-  }
-
   return (
     <>
       {visibleParams.map((spec: IndicatorParamSpec) => (
@@ -521,13 +501,7 @@ export function ParamInputs({
               className="w-24 glass-input rounded-lg py-1 pl-2 pr-5"
               value={params[spec.name!] ?? spec.default}
               onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
-              onBlur={() => {
-                onBlur?.()
-                if (spec.name === 'pivot_right_bars' || spec.name === 'breakout_deadline_min_bars') {
-                  const corrected = correctBreakoutDeadlineIfNeeded(params)
-                  if (corrected !== params) onChange(corrected)
-                }
-              }}
+              onBlur={onBlur}
             />
           )}
         </LabeledField>
