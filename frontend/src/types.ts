@@ -223,6 +223,7 @@ export interface BacktestRequest {
   consecutive_loss_stop_bars?: number
   entry_method?: 'market' | 'limit' | 'stop'
   entry_offset_pips?: number
+  allow_concurrent_positions?: boolean
   use_position_sizing?: boolean
   position_sizing_method?: 'risk_percent' | 'fixed_lot' | 'compounding'
   initial_capital?: number

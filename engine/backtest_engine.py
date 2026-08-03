@@ -65,6 +65,13 @@ class BacktestConfig:
     # cancelled if it doesn't.
     entry_method: str = "market"
     entry_offset_pips: float = 10.0
+    # Whether a new signal can open an ADDITIONAL position while one is
+    # already open. Default off (today's exact prior behavior: a position
+    # already open silently blocks any new signal until it closes). When
+    # on, positions stack - each tracks its own entry/SL/TP/MAE/MFE
+    # independently, closes independently, and both appear in the trade
+    # log with overlapping entry/exit times.
+    allow_concurrent_positions: bool = False
     # Position sizing - default off. When off, "profit"/"net_profit"/etc
     # everywhere stay in raw price-difference units exactly as today
     # (1 lot implied). When on, ADDITIONAL fields are computed alongside
@@ -539,6 +546,7 @@ def run_backtest(
     breakeven_trigger_rr = float(p.get("breakeven_trigger_rr", 0.5))
     use_partial_tp = bool(p.get("use_partial_tp", False))
     partial_tp_levels = _resolve_partial_tp_levels(p)
+    allow_concurrent_positions = bool(p.get("allow_concurrent_positions", False))
 
     previous_high_arr = build_previous_high_array(high_arr, breakout_bars) if condition_tree is None else None
 
@@ -606,6 +614,7 @@ def run_backtest(
         and not use_max_dd_stop
         and not use_consecutive_loss_stop
         and not use_position_sizing
+        and not allow_concurrent_positions
         and sl_basis == "signal_candle"
         and tp_basis == "rr"
     )
@@ -638,20 +647,16 @@ def run_backtest(
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
 
-    in_position = False
-
-    entry_price = 0.0
-    entry_time = None
-    entry_bar_index = None
-
-    sl = 0.0
-    tp = 0.0
-
-    # MAE/MFE(最大逆行幅/最大追い風幅)の追跡用 - ポジション保有中に見た
-    # 最悪値/最良値の価格そのもの(entry_priceとの差はexit時にdirection別に
-    # 計算する。engine/numba_fast_backtest.pyの高速パスと全く同じ規則)。
-    mae_extreme_price = 0.0
-    mfe_extreme_price = 0.0
+    # Open positions - a list of dicts rather than the single-position
+    # scalars this loop used before allow_concurrent_positions existed.
+    # Default (allow_concurrent_positions=False) never lets this hold more
+    # than one entry, and every field/branch below reproduces the prior
+    # scalar behavior exactly for that case - see the "can_open_new"/
+    # "had_open_positions_at_start" gates. When True, a new signal can open
+    # an additional position alongside whatever's already running; each
+    # tracks its own entry/SL/TP/MAE/MFE/breakeven/partial-TP state and
+    # closes independently.
+    open_positions: list[dict[str, Any]] = []
 
     signal_low = np.nan
     signal_high = np.nan
@@ -664,27 +669,16 @@ def run_backtest(
     pending_signal_bar = None
     pending_signal_time = None
 
-    position_signal_low = np.nan
-    position_signal_high = np.nan
-    position_signal_bar = None
-    position_signal_time = None
-
     # Circuit breaker state - only tracked/consulted when the corresponding
-    # use_* flag is on, so this is a no-op when both are off.
+    # use_* flag is on, so this is a no-op when both are off. Global across
+    # every position (not per-position): it gates opening NEW positions,
+    # same as with a single position slot.
     cumulative_equity = 0.0
     running_peak_equity = 0.0
     current_dd = 0.0
     paused_for_dd = False
     consecutive_losses = 0
     paused_until_bar: int | None = None
-
-    position_lot_size = 0.0
-
-    breakeven_trigger_price = 0.0
-    breakeven_ready = False
-    partial_tp_prices: list[float] = []
-    partial_legs: list[tuple[float, float]] = []
-    remaining_fraction = 1.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -698,7 +692,12 @@ def run_backtest(
         low_price = float(low_arr[i])
         close_price = float(close_arr[i])
 
-        if pending_entry and not in_position and not entries_blocked:
+        # Whether a new position is allowed to open this bar - either
+        # concurrent positions are on (always allowed), or nothing is open
+        # yet (today's exact prior single-position rule).
+        can_open_new = allow_concurrent_positions or not open_positions
+
+        if pending_entry and can_open_new and not entries_blocked:
             entry_price = open_price
             entry_time = dt
             entry_bar_index = i
@@ -716,23 +715,18 @@ def run_backtest(
             if risk_distance > 0:
                 sl = stop_price
                 tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
-                in_position = True
-                mae_extreme_price = entry_price
-                mfe_extreme_price = entry_price
 
                 breakeven_trigger_price = (
                     entry_price - risk_distance * breakeven_trigger_rr
                     if direction == "short"
                     else entry_price + risk_distance * breakeven_trigger_rr
                 )
-                breakeven_ready = False
                 partial_tp_prices = [
                     entry_price - risk_distance * rr_lvl if direction == "short" else entry_price + risk_distance * rr_lvl
                     for rr_lvl, _fraction in partial_tp_levels
                 ]
-                partial_legs = []
-                remaining_fraction = 1.0
 
+                position_lot_size = 0.0
                 if use_position_sizing:
                     position_lot_size = _compute_lot_size(
                         position_sizing_method,
@@ -744,12 +738,32 @@ def run_backtest(
                         pip_value_account,
                     )
 
+                open_positions.append({
+                    "entry_price": entry_price,
+                    "entry_time": entry_time,
+                    "entry_bar_index": entry_bar_index,
+                    "sl": sl,
+                    "tp": tp,
+                    "mae_extreme_price": entry_price,
+                    "mfe_extreme_price": entry_price,
+                    "position_signal_low": position_signal_low,
+                    "position_signal_high": position_signal_high,
+                    "position_signal_bar": position_signal_bar,
+                    "position_signal_time": position_signal_time,
+                    "breakeven_trigger_price": breakeven_trigger_price,
+                    "breakeven_ready": False,
+                    "partial_tp_prices": partial_tp_prices,
+                    "partial_legs": [],
+                    "remaining_fraction": 1.0,
+                    "position_lot_size": position_lot_size,
+                })
+
             pending_entry = False
             pending_signal_low = np.nan
             pending_signal_high = np.nan
             pending_signal_bar = None
             pending_signal_time = None
-        elif pending_entry and not in_position and entries_blocked:
+        elif pending_entry and can_open_new and entries_blocked:
             # A circuit breaker engaged while this signal was waiting to
             # fire - discard it rather than entering on a stale signal
             # once the pause lifts bars (or DD levels) later.
@@ -759,229 +773,221 @@ def run_backtest(
             pending_signal_bar = None
             pending_signal_time = None
 
-        if in_position:
-            # このバーのhigh/lowを使って保有中の最悪値/最良値を更新する
-            # (エントリーしたバー自身も含む - 同じバーでエントリーと決済が
-            # 両方起きるケースがあるため)。short/longで不利な方向/有利な
-            # 方向が逆になる(engine/numba_fast_backtest.pyの高速パスと
-            # 全く同じ規則)。
-            if direction == "short":
-                if high_price > mae_extreme_price:
-                    mae_extreme_price = high_price
-                if low_price < mfe_extreme_price:
-                    mfe_extreme_price = low_price
-            else:
-                if low_price < mae_extreme_price:
-                    mae_extreme_price = low_price
-                if high_price > mfe_extreme_price:
-                    mfe_extreme_price = high_price
+        had_open_positions_at_start = bool(open_positions)
 
-            # Tighten (never loosen) the stop based on the ATR as of the
-            # last CLOSED bar, before checking whether this bar's range
-            # hits it - mirrors the entry mechanism's own "confirm on
-            # close, act on the next bar" causality, avoiding a look-ahead
-            # bias that would come from trailing off this same bar's own
-            # close and then immediately checking that bar's high/low
-            # against it.
-            if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
-                trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+        if open_positions:
+            still_open: list[dict[str, Any]] = []
+            for pos in open_positions:
+                # このバーのhigh/lowを使って保有中の最悪値/最良値を更新する
+                # (エントリーしたバー自身も含む - 同じバーでエントリーと決済が
+                # 両方起きるケースがあるため)。short/longで不利な方向/有利な
+                # 方向が逆になる(engine/numba_fast_backtest.pyの高速パスと
+                # 全く同じ規則)。
                 if direction == "short":
-                    candidate_sl = close_arr[i - 1] + trail_distance
-                    if candidate_sl < sl:
-                        sl = candidate_sl
+                    if high_price > pos["mae_extreme_price"]:
+                        pos["mae_extreme_price"] = high_price
+                    if low_price < pos["mfe_extreme_price"]:
+                        pos["mfe_extreme_price"] = low_price
                 else:
-                    candidate_sl = close_arr[i - 1] - trail_distance
-                    if candidate_sl > sl:
-                        sl = candidate_sl
+                    if low_price < pos["mae_extreme_price"]:
+                        pos["mae_extreme_price"] = low_price
+                    if high_price > pos["mfe_extreme_price"]:
+                        pos["mfe_extreme_price"] = high_price
 
-            # Breakeven stop move - same "confirm on the last closed bar,
-            # apply to this bar's range check" causality as ATR trailing
-            # above, but as a one-time trigger (once the price has ever
-            # reached breakeven_trigger_price, keep tightening SL toward
-            # entry every bar - naturally idempotent since candidate_sl is
-            # constant and the tightening comparison only ever improves it).
-            if use_breakeven_stop and not breakeven_ready and i > 0:
-                reached_breakeven = (
-                    low_arr[i - 1] <= breakeven_trigger_price
-                    if direction == "short"
-                    else high_arr[i - 1] >= breakeven_trigger_price
-                )
-                if reached_breakeven:
-                    breakeven_ready = True
-
-            if breakeven_ready:
-                candidate_sl = entry_price
-                if direction == "short":
-                    if candidate_sl < sl:
-                        sl = candidate_sl
-                else:
-                    if candidate_sl > sl:
-                        sl = candidate_sl
-
-            exit_reason = None
-            exit_price = None
-
-            if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
-                exit_reason = "Weekend"
-                exit_price = close_price
-
-            elif is_intraday and use_daily_exit and hour == daily_exit_hour:
-                exit_reason = "DailyExit"
-                exit_price = close_price
-
-            else:
-                if direction == "short":
-                    hit_sl = high_price >= sl
-                    hit_tp = tp is not None and low_price <= tp
-                else:
-                    hit_sl = low_price <= sl
-                    hit_tp = tp is not None and high_price >= tp
-                # tp_basis="custom" only - SL above still applies as a
-                # safety net regardless, checked with the same priority as
-                # a price-level TP (SL wins if both fire on the same bar).
-                hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
-
-                if hit_sl and (hit_tp or hit_custom_exit):
-                    exit_reason = "SL_and_TP_SL_first"
-                    exit_price = sl
-                elif hit_sl:
-                    exit_reason = "SL"
-                    exit_price = sl
-                elif hit_tp:
-                    exit_reason = "TP"
-                    exit_price = tp
-                elif hit_custom_exit:
-                    exit_reason = "CustomExit"
-                    exit_price = close_price
-                elif use_partial_tp:
-                    # Only checked when the bar didn't already fully close
-                    # the trade above - a partial fill and the full SL/TP
-                    # exit never share a bar, avoiding any same-bar
-                    # ordering ambiguity between them. A while-loop (not
-                    # if/elif) so a single large-range bar can trigger
-                    # several levels in one pass, in ascending order.
-                    while len(partial_legs) < len(partial_tp_levels):
-                        next_level_price = partial_tp_prices[len(partial_legs)]
-                        reached_next_level = (
-                            low_price <= next_level_price
-                            if direction == "short"
-                            else high_price >= next_level_price
-                        )
-                        if not reached_next_level:
-                            break
-                        _, level_fraction = partial_tp_levels[len(partial_legs)]
-                        closed_amount = remaining_fraction * level_fraction
-                        partial_legs.append((next_level_price, closed_amount))
-                        remaining_fraction -= closed_amount
-
-            if exit_reason is not None:
-                full_leg_profit = (
-                    entry_price - float(exit_price)
-                    if direction == "short"
-                    else float(exit_price) - entry_price
-                )
-                if partial_legs:
-                    weighted_partial_profit = sum(
-                        weight * (
-                            entry_price - leg_exit_price
-                            if direction == "short"
-                            else leg_exit_price - entry_price
-                        )
-                        for leg_exit_price, weight in partial_legs
-                    )
-                    profit = weighted_partial_profit + remaining_fraction * full_leg_profit
-                else:
-                    profit = full_leg_profit
-                profit -= cost_per_trade
-                profits.append(profit)
-                cumulative_equity += profit
-
-                if direction == "short":
-                    mae = mae_extreme_price - entry_price
-                    mfe = entry_price - mfe_extreme_price
-                else:
-                    mae = entry_price - mae_extreme_price
-                    mfe = mfe_extreme_price - entry_price
-
-                if use_max_dd_stop:
-                    running_peak_equity = max(running_peak_equity, cumulative_equity)
-                    current_dd = running_peak_equity - cumulative_equity
-                    if current_dd >= max_dd_stop_pips:
-                        paused_for_dd = True
-                    elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
-                        paused_for_dd = False
-
-                if use_consecutive_loss_stop:
-                    if profit < 0:
-                        consecutive_losses += 1
-                        if consecutive_losses >= consecutive_loss_stop_count:
-                            paused_until_bar = i + consecutive_loss_stop_bars
-                            consecutive_losses = 0
+                # Tighten (never loosen) the stop based on the ATR as of the
+                # last CLOSED bar, before checking whether this bar's range
+                # hits it - mirrors the entry mechanism's own "confirm on
+                # close, act on the next bar" causality, avoiding a look-ahead
+                # bias that would come from trailing off this same bar's own
+                # close and then immediately checking that bar's high/low
+                # against it.
+                if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
+                    trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+                    if direction == "short":
+                        candidate_sl = close_arr[i - 1] + trail_distance
+                        if candidate_sl < pos["sl"]:
+                            pos["sl"] = candidate_sl
                     else:
-                        consecutive_losses = 0
+                        candidate_sl = close_arr[i - 1] - trail_distance
+                        if candidate_sl > pos["sl"]:
+                            pos["sl"] = candidate_sl
 
-                profit_currency = None
-                if use_position_sizing:
-                    profit_currency = (profit / pip) * pip_value_account * position_lot_size
-                    account_balance += profit_currency
-
-                if return_trades:
-                    trade_logs.append(
-                        {
-                            "entry_time": entry_time,
-                            "entry_bar_index": entry_bar_index,
-                            "entry_price": round(entry_price, 5),
-                            "exit_time": dt,
-                            "exit_bar_index": i,
-                            "exit_price": round(float(exit_price), 5),
-                            "sl": round(sl, 5),
-                            "tp": round(tp, 5),
-                            "profit": round(profit, 5),
-                            "exit_reason": exit_reason,
-                            "mae": round(mae, 5),
-                            "mfe": round(mfe, 5),
-                            "signal_time": position_signal_time,
-                            "signal_bar_index": position_signal_bar,
-                            "signal_low": round(float(position_signal_low), 5),
-                            "signal_high": round(float(position_signal_high), 5),
-                            **(
-                                {
-                                    "lot_size": round(position_lot_size, 4),
-                                    "profit_currency": round(profit_currency, 2),
-                                    "account_balance": round(account_balance, 2),
-                                }
-                                if use_position_sizing
-                                else {}
-                            ),
-                            **(
-                                {
-                                    "partial_exit_prices": [round(p, 5) for p, _w in partial_legs],
-                                    "partial_exit_count": len(partial_legs),
-                                }
-                                if partial_legs
-                                else {}
-                            ),
-                        }
+                # Breakeven stop move - same "confirm on the last closed bar,
+                # apply to this bar's range check" causality as ATR trailing
+                # above, but as a one-time trigger (once the price has ever
+                # reached breakeven_trigger_price, keep tightening SL toward
+                # entry every bar - naturally idempotent since candidate_sl is
+                # constant and the tightening comparison only ever improves it).
+                if use_breakeven_stop and not pos["breakeven_ready"] and i > 0:
+                    reached_breakeven = (
+                        low_arr[i - 1] <= pos["breakeven_trigger_price"]
+                        if direction == "short"
+                        else high_arr[i - 1] >= pos["breakeven_trigger_price"]
                     )
+                    if reached_breakeven:
+                        pos["breakeven_ready"] = True
 
-                in_position = False
+                if pos["breakeven_ready"]:
+                    candidate_sl = pos["entry_price"]
+                    if direction == "short":
+                        if candidate_sl < pos["sl"]:
+                            pos["sl"] = candidate_sl
+                    else:
+                        if candidate_sl > pos["sl"]:
+                            pos["sl"] = candidate_sl
 
-                entry_price = 0.0
-                entry_time = None
-                entry_bar_index = None
+                exit_reason = None
+                exit_price = None
 
-                sl = 0.0
-                tp = 0.0
+                if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
+                    exit_reason = "Weekend"
+                    exit_price = close_price
 
-                position_signal_low = np.nan
-                position_signal_high = np.nan
-                position_signal_bar = None
-                position_signal_time = None
+                elif is_intraday and use_daily_exit and hour == daily_exit_hour:
+                    exit_reason = "DailyExit"
+                    exit_price = close_price
 
-                breakeven_ready = False
-                partial_legs = []
-                remaining_fraction = 1.0
+                else:
+                    if direction == "short":
+                        hit_sl = high_price >= pos["sl"]
+                        hit_tp = pos["tp"] is not None and low_price <= pos["tp"]
+                    else:
+                        hit_sl = low_price <= pos["sl"]
+                        hit_tp = pos["tp"] is not None and high_price >= pos["tp"]
+                    # tp_basis="custom" only - SL above still applies as a
+                    # safety net regardless, checked with the same priority as
+                    # a price-level TP (SL wins if both fire on the same bar).
+                    hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
 
+                    if hit_sl and (hit_tp or hit_custom_exit):
+                        exit_reason = "SL_and_TP_SL_first"
+                        exit_price = pos["sl"]
+                    elif hit_sl:
+                        exit_reason = "SL"
+                        exit_price = pos["sl"]
+                    elif hit_tp:
+                        exit_reason = "TP"
+                        exit_price = pos["tp"]
+                    elif hit_custom_exit:
+                        exit_reason = "CustomExit"
+                        exit_price = close_price
+                    elif use_partial_tp:
+                        # Only checked when the bar didn't already fully close
+                        # the trade above - a partial fill and the full SL/TP
+                        # exit never share a bar, avoiding any same-bar
+                        # ordering ambiguity between them. A while-loop (not
+                        # if/elif) so a single large-range bar can trigger
+                        # several levels in one pass, in ascending order.
+                        while len(pos["partial_legs"]) < len(partial_tp_levels):
+                            next_level_price = pos["partial_tp_prices"][len(pos["partial_legs"])]
+                            reached_next_level = (
+                                low_price <= next_level_price
+                                if direction == "short"
+                                else high_price >= next_level_price
+                            )
+                            if not reached_next_level:
+                                break
+                            _, level_fraction = partial_tp_levels[len(pos["partial_legs"])]
+                            closed_amount = pos["remaining_fraction"] * level_fraction
+                            pos["partial_legs"].append((next_level_price, closed_amount))
+                            pos["remaining_fraction"] -= closed_amount
+
+                if exit_reason is not None:
+                    entry_price = pos["entry_price"]
+                    full_leg_profit = (
+                        entry_price - float(exit_price)
+                        if direction == "short"
+                        else float(exit_price) - entry_price
+                    )
+                    if pos["partial_legs"]:
+                        weighted_partial_profit = sum(
+                            weight * (
+                                entry_price - leg_exit_price
+                                if direction == "short"
+                                else leg_exit_price - entry_price
+                            )
+                            for leg_exit_price, weight in pos["partial_legs"]
+                        )
+                        profit = weighted_partial_profit + pos["remaining_fraction"] * full_leg_profit
+                    else:
+                        profit = full_leg_profit
+                    profit -= cost_per_trade
+                    profits.append(profit)
+                    cumulative_equity += profit
+
+                    if direction == "short":
+                        mae = pos["mae_extreme_price"] - entry_price
+                        mfe = entry_price - pos["mfe_extreme_price"]
+                    else:
+                        mae = entry_price - pos["mae_extreme_price"]
+                        mfe = pos["mfe_extreme_price"] - entry_price
+
+                    if use_max_dd_stop:
+                        running_peak_equity = max(running_peak_equity, cumulative_equity)
+                        current_dd = running_peak_equity - cumulative_equity
+                        if current_dd >= max_dd_stop_pips:
+                            paused_for_dd = True
+                        elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
+                            paused_for_dd = False
+
+                    if use_consecutive_loss_stop:
+                        if profit < 0:
+                            consecutive_losses += 1
+                            if consecutive_losses >= consecutive_loss_stop_count:
+                                paused_until_bar = i + consecutive_loss_stop_bars
+                                consecutive_losses = 0
+                        else:
+                            consecutive_losses = 0
+
+                    profit_currency = None
+                    if use_position_sizing:
+                        profit_currency = (profit / pip) * pip_value_account * pos["position_lot_size"]
+                        account_balance += profit_currency
+
+                    if return_trades:
+                        trade_logs.append(
+                            {
+                                "entry_time": pos["entry_time"],
+                                "entry_bar_index": pos["entry_bar_index"],
+                                "entry_price": round(entry_price, 5),
+                                "exit_time": dt,
+                                "exit_bar_index": i,
+                                "exit_price": round(float(exit_price), 5),
+                                "sl": round(pos["sl"], 5),
+                                "tp": round(pos["tp"], 5),
+                                "profit": round(profit, 5),
+                                "exit_reason": exit_reason,
+                                "mae": round(mae, 5),
+                                "mfe": round(mfe, 5),
+                                "signal_time": pos["position_signal_time"],
+                                "signal_bar_index": pos["position_signal_bar"],
+                                "signal_low": round(float(pos["position_signal_low"]), 5),
+                                "signal_high": round(float(pos["position_signal_high"]), 5),
+                                **(
+                                    {
+                                        "lot_size": round(pos["position_lot_size"], 4),
+                                        "profit_currency": round(profit_currency, 2),
+                                        "account_balance": round(account_balance, 2),
+                                    }
+                                    if use_position_sizing
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        "partial_exit_prices": [round(p, 5) for p, _w in pos["partial_legs"]],
+                                        "partial_exit_count": len(pos["partial_legs"]),
+                                    }
+                                    if pos["partial_legs"]
+                                    else {}
+                                ),
+                            }
+                        )
+                else:
+                    still_open.append(pos)
+
+            open_positions = still_open
+
+        if had_open_positions_at_start and not allow_concurrent_positions:
             continue
 
         if entries_blocked:
@@ -1239,6 +1245,7 @@ def _run_limit_stop_backtest(
     breakeven_trigger_rr = float(p.get("breakeven_trigger_rr", 0.5))
     use_partial_tp = bool(p.get("use_partial_tp", False))
     partial_tp_levels = _resolve_partial_tp_levels(p)
+    allow_concurrent_positions = bool(p.get("allow_concurrent_positions", False))
 
     condition_tree = p.get("condition_tree")
     if condition_tree is not None:
@@ -1296,19 +1303,11 @@ def _run_limit_stop_backtest(
     profits: list[float] = []
     trade_logs: list[dict[str, Any]] = []
 
-    in_position = False
-
-    entry_price = 0.0
-    entry_time = None
-    entry_bar_index = None
-
-    sl = 0.0
-    tp = 0.0
-
-    # MAE/MFE(最大逆行幅/最大追い風幅)の追跡用 - run_backtest()の
-    # マーケット注文パスと全く同じ規則。
-    mae_extreme_price = 0.0
-    mfe_extreme_price = 0.0
+    # Open positions - see run_backtest()'s own docstring comment on this
+    # same pattern for why a list of dicts rather than single-position
+    # scalars. allow_concurrent_positions=False never lets this hold more
+    # than one entry, reproducing the prior scalar behavior exactly.
+    open_positions: list[dict[str, Any]] = []
 
     order_active = False
     order_price = 0.0
@@ -1317,24 +1316,12 @@ def _run_limit_stop_backtest(
     order_signal_high = np.nan
     order_signal_time = None
 
-    position_signal_low = np.nan
-    position_signal_high = np.nan
-    position_signal_bar = None
-    position_signal_time = None
-
     cumulative_equity = 0.0
     running_peak_equity = 0.0
     current_dd = 0.0
     paused_for_dd = False
     consecutive_losses = 0
     paused_until_bar: int | None = None
-    position_lot_size = 0.0
-
-    breakeven_trigger_price = 0.0
-    breakeven_ready = False
-    partial_tp_prices: list[float] = []
-    partial_legs: list[tuple[float, float]] = []
-    remaining_fraction = 1.0
 
     for i in range(250, len(df)):
         dt = datetime_arr[i]
@@ -1348,7 +1335,9 @@ def _run_limit_stop_backtest(
         low_price = float(low_arr[i])
         close_price = float(close_arr[i])
 
-        if order_active and not in_position:
+        can_open_new = allow_concurrent_positions or not open_positions
+
+        if order_active and can_open_new:
             if entries_blocked:
                 order_active = False
             else:
@@ -1375,23 +1364,18 @@ def _run_limit_stop_backtest(
                         if risk_distance > 0:
                             sl = stop_price
                             tp = _resolve_tp(tp_basis, direction, entry_price, risk_distance, rr, tp_fixed_pips, pip)
-                            in_position = True
-                            mae_extreme_price = entry_price
-                            mfe_extreme_price = entry_price
 
                             breakeven_trigger_price = (
                                 entry_price - risk_distance * breakeven_trigger_rr
                                 if direction == "short"
                                 else entry_price + risk_distance * breakeven_trigger_rr
                             )
-                            breakeven_ready = False
                             partial_tp_prices = [
                                 entry_price - risk_distance * rr_lvl if direction == "short" else entry_price + risk_distance * rr_lvl
                                 for rr_lvl, _fraction in partial_tp_levels
                             ]
-                            partial_legs = []
-                            remaining_fraction = 1.0
 
+                            position_lot_size = 0.0
                             if use_position_sizing:
                                 position_lot_size = _compute_lot_size(
                                     position_sizing_method,
@@ -1403,207 +1387,219 @@ def _run_limit_stop_backtest(
                                     pip_value_account,
                                 )
 
+                            open_positions.append({
+                                "entry_price": entry_price,
+                                "entry_time": entry_time,
+                                "entry_bar_index": entry_bar_index,
+                                "sl": sl,
+                                "tp": tp,
+                                "mae_extreme_price": entry_price,
+                                "mfe_extreme_price": entry_price,
+                                "position_signal_low": position_signal_low,
+                                "position_signal_high": position_signal_high,
+                                "position_signal_bar": position_signal_bar,
+                                "position_signal_time": position_signal_time,
+                                "breakeven_trigger_price": breakeven_trigger_price,
+                                "breakeven_ready": False,
+                                "partial_tp_prices": partial_tp_prices,
+                                "partial_legs": [],
+                                "remaining_fraction": 1.0,
+                                "position_lot_size": position_lot_size,
+                            })
+
                         order_active = False
 
-        if in_position:
-            if direction == "short":
-                if high_price > mae_extreme_price:
-                    mae_extreme_price = high_price
-                if low_price < mfe_extreme_price:
-                    mfe_extreme_price = low_price
-            else:
-                if low_price < mae_extreme_price:
-                    mae_extreme_price = low_price
-                if high_price > mfe_extreme_price:
-                    mfe_extreme_price = high_price
+        had_open_positions_at_start = bool(open_positions)
 
-            if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
-                trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+        if open_positions:
+            still_open: list[dict[str, Any]] = []
+            for pos in open_positions:
                 if direction == "short":
-                    candidate_sl = close_arr[i - 1] + trail_distance
-                    if candidate_sl < sl:
-                        sl = candidate_sl
+                    if high_price > pos["mae_extreme_price"]:
+                        pos["mae_extreme_price"] = high_price
+                    if low_price < pos["mfe_extreme_price"]:
+                        pos["mfe_extreme_price"] = low_price
                 else:
-                    candidate_sl = close_arr[i - 1] - trail_distance
-                    if candidate_sl > sl:
-                        sl = candidate_sl
+                    if low_price < pos["mae_extreme_price"]:
+                        pos["mae_extreme_price"] = low_price
+                    if high_price > pos["mfe_extreme_price"]:
+                        pos["mfe_extreme_price"] = high_price
 
-            if use_breakeven_stop and not breakeven_ready and i > 0:
-                reached_breakeven = (
-                    low_arr[i - 1] <= breakeven_trigger_price
-                    if direction == "short"
-                    else high_arr[i - 1] >= breakeven_trigger_price
-                )
-                if reached_breakeven:
-                    breakeven_ready = True
-
-            if breakeven_ready:
-                candidate_sl = entry_price
-                if direction == "short":
-                    if candidate_sl < sl:
-                        sl = candidate_sl
-                else:
-                    if candidate_sl > sl:
-                        sl = candidate_sl
-
-            exit_reason = None
-            exit_price = None
-
-            if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
-                exit_reason = "Weekend"
-                exit_price = close_price
-
-            elif is_intraday and use_daily_exit and hour == daily_exit_hour:
-                exit_reason = "DailyExit"
-                exit_price = close_price
-
-            else:
-                if direction == "short":
-                    hit_sl = high_price >= sl
-                    hit_tp = tp is not None and low_price <= tp
-                else:
-                    hit_sl = low_price <= sl
-                    hit_tp = tp is not None and high_price >= tp
-                # tp_basis="custom" only - SL above still applies as a
-                # safety net regardless, checked with the same priority as
-                # a price-level TP (SL wins if both fire on the same bar).
-                hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
-
-                if hit_sl and (hit_tp or hit_custom_exit):
-                    exit_reason = "SL_and_TP_SL_first"
-                    exit_price = sl
-                elif hit_sl:
-                    exit_reason = "SL"
-                    exit_price = sl
-                elif hit_tp:
-                    exit_reason = "TP"
-                    exit_price = tp
-                elif hit_custom_exit:
-                    exit_reason = "CustomExit"
-                    exit_price = close_price
-                elif use_partial_tp:
-                    while len(partial_legs) < len(partial_tp_levels):
-                        next_level_price = partial_tp_prices[len(partial_legs)]
-                        reached_next_level = (
-                            low_price <= next_level_price
-                            if direction == "short"
-                            else high_price >= next_level_price
-                        )
-                        if not reached_next_level:
-                            break
-                        _, level_fraction = partial_tp_levels[len(partial_legs)]
-                        closed_amount = remaining_fraction * level_fraction
-                        partial_legs.append((next_level_price, closed_amount))
-                        remaining_fraction -= closed_amount
-
-            if exit_reason is not None:
-                full_leg_profit = (
-                    entry_price - float(exit_price)
-                    if direction == "short"
-                    else float(exit_price) - entry_price
-                )
-                if partial_legs:
-                    weighted_partial_profit = sum(
-                        weight * (
-                            entry_price - leg_exit_price
-                            if direction == "short"
-                            else leg_exit_price - entry_price
-                        )
-                        for leg_exit_price, weight in partial_legs
-                    )
-                    profit = weighted_partial_profit + remaining_fraction * full_leg_profit
-                else:
-                    profit = full_leg_profit
-                profit -= cost_per_trade
-                profits.append(profit)
-                cumulative_equity += profit
-
-                if direction == "short":
-                    mae = mae_extreme_price - entry_price
-                    mfe = entry_price - mfe_extreme_price
-                else:
-                    mae = entry_price - mae_extreme_price
-                    mfe = mfe_extreme_price - entry_price
-
-                if use_max_dd_stop:
-                    running_peak_equity = max(running_peak_equity, cumulative_equity)
-                    current_dd = running_peak_equity - cumulative_equity
-                    if current_dd >= max_dd_stop_pips:
-                        paused_for_dd = True
-                    elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
-                        paused_for_dd = False
-
-                if use_consecutive_loss_stop:
-                    if profit < 0:
-                        consecutive_losses += 1
-                        if consecutive_losses >= consecutive_loss_stop_count:
-                            paused_until_bar = i + consecutive_loss_stop_bars
-                            consecutive_losses = 0
+                if use_atr_trailing_stop and i > 0 and not np.isnan(atr_trail_arr[i - 1]):
+                    trail_distance = atr_trail_arr[i - 1] * atr_trailing_multiplier
+                    if direction == "short":
+                        candidate_sl = close_arr[i - 1] + trail_distance
+                        if candidate_sl < pos["sl"]:
+                            pos["sl"] = candidate_sl
                     else:
-                        consecutive_losses = 0
+                        candidate_sl = close_arr[i - 1] - trail_distance
+                        if candidate_sl > pos["sl"]:
+                            pos["sl"] = candidate_sl
 
-                profit_currency = None
-                if use_position_sizing:
-                    profit_currency = (profit / pip) * pip_value_account * position_lot_size
-                    account_balance += profit_currency
-
-                if return_trades:
-                    trade_logs.append(
-                        {
-                            "entry_time": entry_time,
-                            "entry_bar_index": entry_bar_index,
-                            "entry_price": round(entry_price, 5),
-                            "exit_time": dt,
-                            "exit_bar_index": i,
-                            "exit_price": round(float(exit_price), 5),
-                            "sl": round(sl, 5),
-                            "tp": round(tp, 5),
-                            "profit": round(profit, 5),
-                            "exit_reason": exit_reason,
-                            "mae": round(mae, 5),
-                            "mfe": round(mfe, 5),
-                            "signal_time": position_signal_time,
-                            "signal_bar_index": position_signal_bar,
-                            "signal_low": round(float(position_signal_low), 5),
-                            "signal_high": round(float(position_signal_high), 5),
-                            **(
-                                {
-                                    "lot_size": round(position_lot_size, 4),
-                                    "profit_currency": round(profit_currency, 2),
-                                    "account_balance": round(account_balance, 2),
-                                }
-                                if use_position_sizing
-                                else {}
-                            ),
-                            **(
-                                {
-                                    "partial_exit_prices": [round(p, 5) for p, _w in partial_legs],
-                                    "partial_exit_count": len(partial_legs),
-                                }
-                                if partial_legs
-                                else {}
-                            ),
-                        }
+                if use_breakeven_stop and not pos["breakeven_ready"] and i > 0:
+                    reached_breakeven = (
+                        low_arr[i - 1] <= pos["breakeven_trigger_price"]
+                        if direction == "short"
+                        else high_arr[i - 1] >= pos["breakeven_trigger_price"]
                     )
+                    if reached_breakeven:
+                        pos["breakeven_ready"] = True
 
-                in_position = False
+                if pos["breakeven_ready"]:
+                    candidate_sl = pos["entry_price"]
+                    if direction == "short":
+                        if candidate_sl < pos["sl"]:
+                            pos["sl"] = candidate_sl
+                    else:
+                        if candidate_sl > pos["sl"]:
+                            pos["sl"] = candidate_sl
 
-                entry_price = 0.0
-                entry_time = None
-                entry_bar_index = None
+                exit_reason = None
+                exit_price = None
 
-                sl = 0.0
-                tp = 0.0
+                if is_intraday and use_weekend_exit and weekday == 5 and hour >= weekend_exit_hour:
+                    exit_reason = "Weekend"
+                    exit_price = close_price
 
-                position_signal_low = np.nan
-                position_signal_high = np.nan
-                position_signal_bar = None
-                position_signal_time = None
+                elif is_intraday and use_daily_exit and hour == daily_exit_hour:
+                    exit_reason = "DailyExit"
+                    exit_price = close_price
 
-                breakeven_ready = False
-                partial_legs = []
-                remaining_fraction = 1.0
+                else:
+                    if direction == "short":
+                        hit_sl = high_price >= pos["sl"]
+                        hit_tp = pos["tp"] is not None and low_price <= pos["tp"]
+                    else:
+                        hit_sl = low_price <= pos["sl"]
+                        hit_tp = pos["tp"] is not None and high_price >= pos["tp"]
+                    # tp_basis="custom" only - SL above still applies as a
+                    # safety net regardless, checked with the same priority as
+                    # a price-level TP (SL wins if both fire on the same bar).
+                    hit_custom_exit = exit_signal_arr is not None and bool(exit_signal_arr[i])
 
+                    if hit_sl and (hit_tp or hit_custom_exit):
+                        exit_reason = "SL_and_TP_SL_first"
+                        exit_price = pos["sl"]
+                    elif hit_sl:
+                        exit_reason = "SL"
+                        exit_price = pos["sl"]
+                    elif hit_tp:
+                        exit_reason = "TP"
+                        exit_price = pos["tp"]
+                    elif hit_custom_exit:
+                        exit_reason = "CustomExit"
+                        exit_price = close_price
+                    elif use_partial_tp:
+                        while len(pos["partial_legs"]) < len(partial_tp_levels):
+                            next_level_price = pos["partial_tp_prices"][len(pos["partial_legs"])]
+                            reached_next_level = (
+                                low_price <= next_level_price
+                                if direction == "short"
+                                else high_price >= next_level_price
+                            )
+                            if not reached_next_level:
+                                break
+                            _, level_fraction = partial_tp_levels[len(pos["partial_legs"])]
+                            closed_amount = pos["remaining_fraction"] * level_fraction
+                            pos["partial_legs"].append((next_level_price, closed_amount))
+                            pos["remaining_fraction"] -= closed_amount
+
+                if exit_reason is not None:
+                    entry_price = pos["entry_price"]
+                    full_leg_profit = (
+                        entry_price - float(exit_price)
+                        if direction == "short"
+                        else float(exit_price) - entry_price
+                    )
+                    if pos["partial_legs"]:
+                        weighted_partial_profit = sum(
+                            weight * (
+                                entry_price - leg_exit_price
+                                if direction == "short"
+                                else leg_exit_price - entry_price
+                            )
+                            for leg_exit_price, weight in pos["partial_legs"]
+                        )
+                        profit = weighted_partial_profit + pos["remaining_fraction"] * full_leg_profit
+                    else:
+                        profit = full_leg_profit
+                    profit -= cost_per_trade
+                    profits.append(profit)
+                    cumulative_equity += profit
+
+                    if direction == "short":
+                        mae = pos["mae_extreme_price"] - entry_price
+                        mfe = entry_price - pos["mfe_extreme_price"]
+                    else:
+                        mae = entry_price - pos["mae_extreme_price"]
+                        mfe = pos["mfe_extreme_price"] - entry_price
+
+                    if use_max_dd_stop:
+                        running_peak_equity = max(running_peak_equity, cumulative_equity)
+                        current_dd = running_peak_equity - cumulative_equity
+                        if current_dd >= max_dd_stop_pips:
+                            paused_for_dd = True
+                        elif paused_for_dd and current_dd <= max_dd_stop_pips * 0.5:
+                            paused_for_dd = False
+
+                    if use_consecutive_loss_stop:
+                        if profit < 0:
+                            consecutive_losses += 1
+                            if consecutive_losses >= consecutive_loss_stop_count:
+                                paused_until_bar = i + consecutive_loss_stop_bars
+                                consecutive_losses = 0
+                        else:
+                            consecutive_losses = 0
+
+                    profit_currency = None
+                    if use_position_sizing:
+                        profit_currency = (profit / pip) * pip_value_account * pos["position_lot_size"]
+                        account_balance += profit_currency
+
+                    if return_trades:
+                        trade_logs.append(
+                            {
+                                "entry_time": pos["entry_time"],
+                                "entry_bar_index": pos["entry_bar_index"],
+                                "entry_price": round(entry_price, 5),
+                                "exit_time": dt,
+                                "exit_bar_index": i,
+                                "exit_price": round(float(exit_price), 5),
+                                "sl": round(pos["sl"], 5),
+                                "tp": round(pos["tp"], 5),
+                                "profit": round(profit, 5),
+                                "exit_reason": exit_reason,
+                                "mae": round(mae, 5),
+                                "mfe": round(mfe, 5),
+                                "signal_time": pos["position_signal_time"],
+                                "signal_bar_index": pos["position_signal_bar"],
+                                "signal_low": round(float(pos["position_signal_low"]), 5),
+                                "signal_high": round(float(pos["position_signal_high"]), 5),
+                                **(
+                                    {
+                                        "lot_size": round(pos["position_lot_size"], 4),
+                                        "profit_currency": round(profit_currency, 2),
+                                        "account_balance": round(account_balance, 2),
+                                    }
+                                    if use_position_sizing
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        "partial_exit_prices": [round(p, 5) for p, _w in pos["partial_legs"]],
+                                        "partial_exit_count": len(pos["partial_legs"]),
+                                    }
+                                    if pos["partial_legs"]
+                                    else {}
+                                ),
+                            }
+                        )
+                else:
+                    still_open.append(pos)
+
+            open_positions = still_open
+
+        if had_open_positions_at_start and not allow_concurrent_positions:
             continue
 
         if entries_blocked or order_active:

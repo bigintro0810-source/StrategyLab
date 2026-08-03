@@ -124,6 +124,10 @@ class BacktestRequest(BaseModel):
     # are set rather than silently ignoring one.
     entry_method: str = "market"
     entry_offset_pips: float = 10.0
+    # Whether a new signal can open an ADDITIONAL position while one is
+    # already open (stacking) instead of being silently blocked until the
+    # existing one closes - default off (today's exact prior behavior).
+    allow_concurrent_positions: bool = False
     # Position sizing - default off, in which case profit/net_profit/etc stay
     # in raw pip units exactly as before (implied 1 lot). See
     # engine/backtest_engine.py's _pip_value_in_account_currency/_compute_lot_size.
@@ -241,6 +245,7 @@ def _build_strategy_config(req: "BacktestRequest") -> Path:
         "consecutive_loss_stop_bars": [req.consecutive_loss_stop_bars],
         "entry_method": [req.entry_method],
         "entry_offset_pips": [req.entry_offset_pips],
+        "allow_concurrent_positions": [req.allow_concurrent_positions],
         "use_position_sizing": [req.use_position_sizing],
         "position_sizing_method": [req.position_sizing_method],
         "initial_capital": [req.initial_capital],

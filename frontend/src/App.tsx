@@ -824,6 +824,10 @@ export default function App() {
   // dualDirectionMode is on rather than letting the user reach that error.
   const [entryMethod, setEntryMethod] = useState<'market' | 'limit' | 'stop'>('market')
   const [entryOffsetPips, setEntryOffsetPips] = useState(10)
+  // ポジション保有中でも新規シグナルで追加ポジションを建てるか - デフォルトOFF
+  // (今までどおり、保有中は新規シグナルを無視)。entryMethodと同じくdual
+  // directionモード非対応(バックエンド未対応、UIでも隠す)。
+  const [allowConcurrentPositions, setAllowConcurrentPositions] = useState(false)
 
   // Position sizing - off by default (results stay in raw pips, implied 1
   // lot, today's existing behavior unchanged unless opted in). Confirmed
@@ -981,6 +985,8 @@ export default function App() {
         // UI already hides the control in that mode.
         entry_method: dualDirectionMode ? 'market' : entryMethod,
         entry_offset_pips: entryOffsetPips,
+        // 同上の理由でdual directionモードでは強制OFF。
+        allow_concurrent_positions: dualDirectionMode ? false : allowConcurrentPositions,
         use_position_sizing: usePositionSizing,
         position_sizing_method: positionSizingMethod,
         initial_capital: initialCapital,
@@ -2553,6 +2559,17 @@ export default function App() {
                           pips
                         </label>
                       )}
+                      <label
+                        className="flex items-center gap-1.5"
+                        title="OFFの場合、ポジション保有中は新規シグナルを無視します(今までどおり)。ONにすると保有中でも新規シグナルで追加ポジションを建てます。"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allowConcurrentPositions}
+                          onChange={(e) => setAllowConcurrentPositions(e.target.checked)}
+                        />
+                        保有中でも新規ポジションを建てる
+                      </label>
                     </div>
                   )}
                 </div>
