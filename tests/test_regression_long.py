@@ -44,6 +44,15 @@ from engine.conditions import Condition, ConditionGroup
 
 TOLERANCE = 1e-3
 
+# Module-level (not per-test fixtures) so `python tests/test_regression_long.py`
+# keeps working standalone (this project's test_*.py convention - see the
+# module docstring) while also letting `pytest` collect the test_* functions
+# below without misreading their old (df, is_intraday) parameters as
+# undeclared fixtures named "df"/"is_intraday" (there's no conftest.py
+# defining those - pytest raised "fixture 'df' not found" before this).
+_DF = load_price_data(find_data_file("15m", "USDJPY"))
+_IS_INTRADAY = compute_is_intraday(_DF["datetime"])
+
 BASE_PARAMS = {
     "ema_length": 200,
     "min_body_pips": 20.0,
@@ -92,26 +101,26 @@ def _check(label: str, result: dict, expected: dict) -> list[str]:
     return failures
 
 
-def test_long_breakdown_strategy(df, is_intraday) -> list[str]:
+def test_long_breakdown_strategy() -> list[str]:
     params = dict(BASE_PARAMS, direction="long", condition_tree=LONG_BREAKDOWN_TREE)
-    result = run_backtest(df, params, is_intraday=is_intraday)
+    result = run_backtest(_DF, params, is_intraday=_IS_INTRADAY)
     failures = _check("long breakdown-fade", result, EXPECTED_LONG_BREAKDOWN)
     if not failures:
         print("PASS: long breakdown-fade condition_tree strategy matches baseline")
     return failures
 
 
-def test_invalid_direction_rejected(df, is_intraday) -> list[str]:
+def test_invalid_direction_rejected() -> list[str]:
     params = dict(BASE_PARAMS, direction="sideways")
     try:
-        run_backtest(df, params, is_intraday=is_intraday)
+        run_backtest(_DF, params, is_intraday=_IS_INTRADAY)
         return ["FAIL: invalid direction 'sideways' did not raise ValueError"]
     except ValueError:
         print("PASS: invalid direction raises ValueError")
         return []
 
 
-def test_explicit_short_matches_default(df, is_intraday) -> list[str]:
+def test_explicit_short_matches_default() -> list[str]:
     """direction="short" passed explicitly must produce byte-identical output to
     omitting it entirely - proves the .get("direction", "short") default and an
     explicit "short" are the same code path, not two things that could drift apart."""
@@ -120,8 +129,8 @@ def test_explicit_short_matches_default(df, is_intraday) -> list[str]:
     default_params = build_parameter_grid("dev")[0]
     explicit_params = dict(default_params, direction="short")
 
-    result_default = run_backtest(df, default_params, is_intraday=is_intraday)
-    result_explicit = run_backtest(df, explicit_params, is_intraday=is_intraday)
+    result_default = run_backtest(_DF, default_params, is_intraday=_IS_INTRADAY)
+    result_explicit = run_backtest(_DF, explicit_params, is_intraday=_IS_INTRADAY)
 
     failures = []
     for key in ["trades", "net_profit", "profit_factor", "max_dd", "win_rate", "recovery_factor"]:
@@ -138,13 +147,10 @@ def test_explicit_short_matches_default(df, is_intraday) -> list[str]:
 
 
 def main() -> None:
-    df = load_price_data(find_data_file("15m", "USDJPY"))
-    is_intraday = compute_is_intraday(df["datetime"])
-
     all_failures = []
-    all_failures += test_long_breakdown_strategy(df, is_intraday)
-    all_failures += test_invalid_direction_rejected(df, is_intraday)
-    all_failures += test_explicit_short_matches_default(df, is_intraday)
+    all_failures += test_long_breakdown_strategy()
+    all_failures += test_invalid_direction_rejected()
+    all_failures += test_explicit_short_matches_default()
 
     if all_failures:
         print("FAIL")
