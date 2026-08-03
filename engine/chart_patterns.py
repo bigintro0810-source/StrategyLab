@@ -930,8 +930,12 @@ def equal_low(
 #   ①〜⑧、および⑨⑩のうち山1前→山1・山1→ネック・ネック→山2の3区間が
 #     揃った瞬間(confirm_floor、先読み防止のため各ピボットの右側確認が
 #     終わるまで遅延させる)が"Detected"。
-#   ⑪決着判定(6状態): Rejected(早すぎるブレイク - formed_barからbreakout_
-#     deadline_min_bars本未満での突破は無効。以前はinterval1基準の比率
+#   ⑪決着判定(6状態): Rejected(早すぎるブレイク - 山2/谷2からbreakout_
+#     deadline_min_bars本未満での突破は無効(2026-08-03、以前はformed_bar
+#     基準だったが、ピボット右本数を大きくするとformed_bar自体が山2/谷2
+#     から遠ざかり、この判定が意味を失う不具合があったため山2/谷2基準に
+#     変更。あわせてbreakout_deadline_min_barsがピボット右本数を下回る値は
+#     ピボット右本数+3まで自動的に繰り上げる)。以前はinterval1基準の比率
 #     だったが、比率だと判定を開始できる時点(pivot_right_bars分の遅延後)
 #     で既に猶予を使い切ってしまうケースがあったため、固定本数(デフォルト
 #     4本)に変更した/Confirmed(ネックライン突破、かつ時間0(山1前点→ネックの
@@ -1072,6 +1076,21 @@ def _shape_state_core(
     breakout_type_is_close,
 ):
     n = high_a.shape[0]
+    # breakout_deadline_min_barsは「山2/谷2からブレイクまでの最小本数」を
+    # 表す値だが、ピボット確定にはpivot_confirm_lag(=ピボット右本数)本の
+    # 先読み防止の遅延が必ずかかる(パターン自体が確定するのが早くても
+    # 山2/谷2+pivot_confirm_lag本後)。ここでbreakout_deadline_min_barsが
+    # pivot_confirm_lagを下回っていると、パターンが確定した時点で既に
+    # この「早すぎ判定」が意味を失っている(確定した瞬間には既に規定本数を
+    # 超えてしまっているため、どんなブレイクも無条件にRejected扱いを免れて
+    # しまう)。ピボット右本数を後から変えても壊れないよう、規定本数が
+    # ピボット右本数を下回る場合はピボット右本数+3(元のデフォルト値の
+    # 「確定後+3本」という余裕)まで自動的に繰り上げる(2026-08-03、
+    # ユーザー判断)。
+    if breakout_deadline_min_bars >= pivot_confirm_lag:
+        effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
+    else:
+        effective_breakout_deadline_min_bars = float(pivot_confirm_lag + 3)
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1310,12 +1329,12 @@ def _shape_state_core(
                             outcome = 3  # failed
                             outcome_bar = j
                         else:
-                            bars_since_formed = j - formed_bar
+                            bars_since_top2 = j - top2_true_bar
                             if breakout_deadline_is_top1top2:
-                                reject_bars = float(breakout_deadline_min_bars)
+                                reject_bars = effective_breakout_deadline_min_bars
                             else:
                                 reject_bars = interval1 * breakout_deadline_ratio_min
-                            if bars_since_formed < reject_bars:
+                            if bars_since_top2 < reject_bars:
                                 outcome = 1  # rejected
                                 outcome_bar = j
                             else:
@@ -1425,7 +1444,7 @@ def _double_top_bottom_shape_state(
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
     breakout_deadline_basis: str = "top1_top2",
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_min: float = 0.3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
@@ -1453,8 +1472,13 @@ def _double_top_bottom_shape_state(
 
     breakout_deadline_basis: ブレイク猶予(早すぎる/遅すぎるの判定)の方式。
     "top1_top2"(既定、double_top_shape/double_bottom_shapeが使う唯一の方式)
-    は、早すぎる判定をbreakout_deadline_min_bars(formed_barからの固定
-    本数)、遅すぎる判定を山1→山2の本数×breakout_deadline_ratio_maxで行う。
+    は、早すぎる判定をbreakout_deadline_min_bars(山2/谷2からの固定本数)、
+    遅すぎる判定を山1→山2の本数×breakout_deadline_ratio_maxで行う。
+    breakout_deadline_min_barsはピボット右本数(pivot_right_bars)を下回る
+    設定にはできない(パターンの確定自体が山2/谷2+ピボット右本数本かかる
+    ため、下回ると確定した瞬間に早すぎ判定が意味を失ってしまう) -
+    下回る値を指定した場合はピボット右本数+3まで自動的に繰り上げる
+    (2026-08-03、ユーザー判断)。
     "interval1"は2026-07-27に前者へ変更する前の旧方式(早すぎる判定も
     breakout_deadline_ratio_min×山1→ネックの本数(比率)で行う)で、比較用に
     別indicatorとして提供していたdouble_top_shape_v1/double_bottom_shape_v1
@@ -1600,7 +1624,7 @@ def double_bottom_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -1683,6 +1707,14 @@ def _shape_state_core3(
     breakout_type_is_close,
 ):
     n = high_a.shape[0]
+    # ダブル版の_shape_state_coreと同じ理由(そちらのコメント参照) -
+    # breakout_deadline_min_barsがピボット確定の遅延(pivot_confirm_lag)を
+    # 下回ると、パターン確定時点で既に「早すぎ判定」が意味を失うため、
+    # 下回る場合はpivot_confirm_lag+3まで自動的に繰り上げる。
+    if breakout_deadline_min_bars >= pivot_confirm_lag:
+        effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
+    else:
+        effective_breakout_deadline_min_bars = float(pivot_confirm_lag + 3)
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -2073,8 +2105,8 @@ def _shape_state_core3(
                                 outcome = 3  # failed
                                 outcome_bar = j
                             else:
-                                bars_since_formed = j - formed_bar
-                                if bars_since_formed < breakout_deadline_min_bars:
+                                bars_since_top3 = j - top3_true_bar
+                                if bars_since_top3 < effective_breakout_deadline_min_bars:
                                     outcome = 1  # rejected
                                     outcome_bar = j
                                 else:
@@ -2192,7 +2224,7 @@ def _triple_top_bottom_shape_state(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2331,7 +2363,7 @@ def triple_bottom_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2390,7 +2422,7 @@ def triple_top_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2445,7 +2477,7 @@ def double_top_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_min_bars: int = 8,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,

@@ -164,6 +164,41 @@ def test_triple_bottom_shape_rejects_too_early_breakout():
     check("triple_bottom_shape marks a too-fast breakout as rejected, not confirmed", confirmed.sum() == 0 and rejected.sum() >= 1, detail=f"confirmed={confirmed.sum()} rejected={rejected.sum()}")
 
 
+def test_double_bottom_shape_clamps_breakout_deadline_below_pivot_right_bars():
+    # breakout_deadline_min_bars(谷2からブレイクまでの最小本数)は、ピボット
+    # 確定に必ずピボット右本数ぶんの遅延がかかる以上、ピボット右本数を
+    # 下回る値を渡しても意味がない(確定した瞬間に既に早すぎ判定を素通り
+    # してしまう)。ピボット右本数を下回る値は自動でピボット右本数+3に
+    # 補正されるべき - 2026-08-03、ユーザー判断。
+    closes = np.concatenate([
+        np.linspace(130, 110, 15, endpoint=False), np.linspace(110, 100, 15, endpoint=False),
+        np.linspace(100, 110, 15, endpoint=False), np.linspace(110, 100.5, 15, endpoint=False),
+        np.linspace(100.5, 135, 40, endpoint=False),
+    ])
+    high, low, close = _hlc(closes)
+
+    below_clamp = [
+        cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
+                                pivot_right_bars=10, breakout_deadline_min_bars=n)
+        for n in (1, 3, 9)
+    ]
+    at_floor = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
+                                       pivot_right_bars=10, breakout_deadline_min_bars=13)
+    above_floor = cp.double_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0,
+                                          pivot_right_bars=10, breakout_deadline_min_bars=14)
+
+    check(
+        "values below pivot_right_bars all clamp to the same result as the pivot_right_bars+3 floor",
+        all(np.array_equal(r, at_floor) for r in below_clamp),
+        detail=str([r.sum() for r in below_clamp] + [at_floor.sum()]),
+    )
+    check(
+        "a value already at or above the floor is used as-is (not further clamped)",
+        not np.array_equal(at_floor, above_floor),
+        detail=f"at_floor={at_floor.sum()} above_floor={above_floor.sum()}",
+    )
+
+
 def test_first_occurrence_after_fires_once_per_epoch():
     # Two independent ascending-triangle formations back-to-back should each
     # fire once - the epoch/cumsum machinery must not get stuck after the
@@ -196,6 +231,7 @@ if __name__ == "__main__":
     test_triple_top_shape_confirms_on_clean_pattern_mirror()
     test_triple_bottom_shape_rejects_when_third_valley_is_deeper_downtrend()
     test_triple_bottom_shape_rejects_too_early_breakout()
+    test_double_bottom_shape_clamps_breakout_deadline_below_pivot_right_bars()
     test_first_occurrence_after_fires_once_per_epoch()
 
     if FAILURES:
