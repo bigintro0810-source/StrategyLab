@@ -83,12 +83,22 @@ export function isGroup(node: TreeNode): node is GroupNode {
 // type rather than overloading "choice" because the <select> onChange must
 // NOT coerce the selected value with Number() for these.
 export interface IndicatorParamSpec {
-  name: string
+  // type="range"(下限〜上限を1つのラベルの下に並べて表示するペア - 例:
+  // 「◯◯探索窓の倍率」の下限/上限)の時はnameの代わりにname_min/name_max
+  // を、defaultの代わりにdefault_min/default_maxを使う(2つのパラメータ名
+  // をまとめて1行に描画するため)。api_server.py::_spec_defaultsが実際の
+  // パラメータ辞書に展開する側。
+  name?: string
   label: string
-  default: number | string
-  type: 'int' | 'float' | 'choice' | 'string_choice'
+  default?: number | string
+  type: 'int' | 'float' | 'choice' | 'string_choice' | 'range'
   choices?: number[]
   string_choices?: { value: string; label: string }[]
+  name_min?: string
+  name_max?: string
+  default_min?: number
+  default_max?: number
+  value_type?: 'int' | 'float'
   // このパラメータの「目安の数値」(engine/indicator_pool.py::IndicatorSpec.
   // value_presets - 元は自動探索のチェックボックス用リストだが、手動ビル
   // ダーの数値入力欄にカーソルを合わせた時のヒントとしても流用する。

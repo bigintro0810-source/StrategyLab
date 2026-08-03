@@ -893,49 +893,44 @@ def equal_low(
 #     ATR×prominence_atr_mult以上高い(低い) - 単なる順位だけでなく、値幅
 #     そのものを問う「本物の反発」基準(ユーザー指摘:「0.1Pipsとかでも安け
 #     ればそれがピボット安値になっちゃう、それは反発とは言えない」)。
-#   ②山1前のトレンド確認(pre_trend_lookback_barsまたはpre_trend_atr_multが
-#     0なら無効、両方とも0より大きければ有効): 山1の価格が、その手前
-#     pre_trend_lookback_bars本の価格よりATR×pre_trend_atr_mult以上高い
-#     (低い)こと。100件サンプルチェックで見つかった「谷1がゆるい上昇トレ
-#     ンドの起点に過ぎない」崩れ方への対策。
-#   ③ネックライン: 山1より後、山2が確定するまでの間に出た、①と同じ基準
+#   ②ネックライン: 山1より後、山2が確定するまでの間に出た、①と同じ基準
 #     (逆方向)を満たす本物のピボットのうち一番低い(高い)もの - 新しい
 #     ピボットが出るたびに更新されるが、既に選んだネックの探索窓を過ぎて
 #     からの後出しピボットは採用しない(そのネックではもう山2を探せない
 #     ため無意味)。
-#   ④山1→ネックの間隔(interval1)がmin_bars_between_tops〜
+#   ③山1→ネックの間隔(interval1)がmin_bars_between_tops〜
 #     max_bars_between_topsの範囲内。
-#   ⑤山2の探索窓 = ネックからinterval1×symmetry_ratio_min〜
+#   ④山2の探索窓 = ネックからinterval1×symmetry_ratio_min〜
 #     symmetry_ratio_max本の範囲。
-#   ⑥⑦山2候補: 窓の中で①と同じ基準(値幅込みの本物のピボット)を満たし、
+#   ⑤⑥山2候補: 窓の中で①と同じ基準(値幅込みの本物のピボット)を満たし、
 #     かつ山1との価格差がATR×top_tolerance_atr_mult以内のバーのうち、
 #     時系列で最後に見つかったもの(「条件を満たす最新の候補で更新」 -
 #     複雑な極値追跡はせず、単純に上書きしていく)。窓の中で山1の水準を
 #     許容誤差を超えて突き抜ける値が一度でも出たら、その時点でこの山1
 #     候補ごと不成立にする(ユーザー判断:「許容範囲外の安値が出たらそれは
 #     もうダブルボトムじゃない」)。
-#   ⑧谷(山)の深さ: ネックライン−(山1・山2の平均、絶対値)がATR×
+#   ⑦谷(山)の深さ: ネックライン−(山1・山2の平均、絶対値)がATR×
 #     min_valley_depth_atr_mult以上・ATR×max_valley_depth_atr_mult以下。
-#   ⑨山1前点: ネックが確定した時点で山1より過去に遡り、安値≦
+#   ⑧山1前点: ネックが確定した時点で山1より過去に遡り、安値≦
 #     (ネック∓余白)≦高値を満たす、山1に一番近い(直近の)バーを探す。
 #     この点の価格はそのバー自身のOHLCではなく水準(ネック∓余白)そのもの。
-#     この水準は⑫のブレイク判定水準と同じ側にする(ユーザー判断
+#     この水準は⑪のブレイク判定水準と同じ側にする(ユーザー判断
 #     2026-07-27: 以前は符号が逆で、ブレイク水準とは反対側の水準を使って
 #     しまっていた)。見つからなければ候補ごと不成立(ユーザー判断)。
 #     山1前点→ネックの本数を時間0(interval0)とする(以前は山1前点→山1
-#     だったが、⑫の対称性チェックの比較対象を時間1に変更したのに合わせて
+#     だったが、⑪の対称性チェックの比較対象を時間1に変更したのに合わせて
 #     変更、ユーザー判断2026-07-27)。
-#   ⑩値動きのなめらかさ(効率比・終値ベース): 各区間(山1前→山1・山1→ネッ
+#   ⑨値動きのなめらかさ(効率比・終値ベース): 各区間(山1前→山1・山1→ネッ
 #     ク・ネック→山2・山2→ブレイク[Confirmed評価時のみ])について、正味の
-#     値動き÷総移動距離がefficiency_ratio_min以上(②のON/OFFとは無関係に
-#     常に判定 - ユーザー判断:「滑らかさも切り離して」)。
-#   ⑪直線からの乖離(高値/安値ベース): ⑩と同じ各区間で、区間の両端を結ぶ
+#     値動き÷総移動距離がefficiency_ratio_min以上(常に判定 - ユーザー判断:
+#     「滑らかさも切り離して」)。
+#   ⑩直線からの乖離(高値/安値ベース): ⑨と同じ各区間で、区間の両端を結ぶ
 #     直線からの最大乖離が、trendline_dev_basis(「atr」または
 #     「price_pct」)で選んだ基準以内。
-#   ①〜⑨、および⑩⑪のうち山1前→山1・山1→ネック・ネック→山2の3区間が
+#   ①〜⑧、および⑨⑩のうち山1前→山1・山1→ネック・ネック→山2の3区間が
 #     揃った瞬間(confirm_floor、先読み防止のため各ピボットの右側確認が
 #     終わるまで遅延させる)が"Detected"。
-#   ⑫決着判定(6状態): Rejected(早すぎるブレイク - formed_barからbreakout_
+#   ⑪決着判定(6状態): Rejected(早すぎるブレイク - formed_barからbreakout_
 #     deadline_min_bars本未満での突破は無効。以前はinterval1基準の比率
 #     だったが、比率だと判定を開始できる時点(pivot_right_bars分の遅延後)
 #     で既に猶予を使い切ってしまうケースがあったため、固定本数(デフォルト
@@ -950,6 +945,13 @@ def equal_low(
 #     同一バーでConfirmed・Failed両方の条件が成立した場合はFailedを優先
 #     する(ユーザー判断: バックテストエンジン本体のSL/TP同時ヒット時と
 #     同じ「悪い方を優先」という既存の全体方針に合わせた)。
+#
+# 2026-08-02: 山1前のトレンド確認(pre_trend_lookback_bars/pre_trend_atr_mult)
+# はユーザー判断で機能ごと削除した(デフォルトが既に無効=0で実質使われて
+# いなかったため)。山1・山2の水準許容誤差(旧top_tolerance_pct)とブレイク
+# 判定の余白(旧breakout_buffer_pct)は「値幅に対する%」から「値幅に対する
+# 倍率」表記に変更(15%→0.15のように、他の*_atr_mult系パラメータと表記を
+# 揃えるため)、それぞれtop_tolerance_mult/breakout_buffer_multに改名した。
 #
 # 上記どの判定にも、実際にそのピボットが「本物」だと確定するpivot_right_bars
 # 本の確認遅延を先読み防止として組み込んでいる(_double_top_bottom_stateの
@@ -1056,12 +1058,11 @@ def _shape_state_core(
     bullish,
     pivot_confirm_lag,
     pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-    pre_trend_lookback_bars, pre_trend_atr_mult,
     min_bars_between_tops, max_bars_between_tops,
     symmetry_ratio_min, symmetry_ratio_max,
-    top_tolerance_is_pct, top_tolerance_atr_mult, top_tolerance_pct,
+    top_tolerance_is_pct, top_tolerance_atr_mult, top_tolerance_mult,
     min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-    breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_pct,
+    breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_mult,
     efficiency_ratio_min, efficiency_ratio_floor,
     trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct,
     breakout_deadline_is_top1top2, breakout_deadline_min_bars,
@@ -1094,19 +1095,6 @@ def _shape_state_core(
         top1_true_bar = ext_events[ei]
         top1_price = ext_price_a[top1_true_bar]
         top1_confirm_bar = top1_true_bar + pivot_confirm_lag
-
-        if pre_trend_lookback_bars > 0 and pre_trend_atr_mult > 0.0:
-            ref_bar = top1_true_bar - pre_trend_lookback_bars
-            if ref_bar < 0:
-                continue
-            trend_thresh = atr_a[top1_true_bar] * pre_trend_atr_mult
-            ref_price = ext_price_a[ref_bar]
-            if bullish:
-                if not (ref_price - top1_price >= trend_thresh):
-                    continue
-            else:
-                if not (top1_price - ref_price >= trend_thresh):
-                    continue
 
         neck_true_bar = -1
         neck_price = 0.0
@@ -1151,14 +1139,14 @@ def _shape_state_core(
             if win_start > win_end:
                 continue
 
-            top_tolerance_pct_value = abs(top1_price - neck_price) * (top_tolerance_pct / 100.0)
+            top_tolerance_value = abs(top1_price - neck_price) * top_tolerance_mult
 
             window_invalidated = False
             top2_true_bar = -1
             top2_price = 0.0
             for j in range(win_start, win_end + 1):
                 if top_tolerance_is_pct:
-                    tol_j = top_tolerance_pct_value
+                    tol_j = top_tolerance_value
                 else:
                     tol_j = atr_a[j] * top_tolerance_atr_mult
                 if bullish:
@@ -1198,10 +1186,10 @@ def _shape_state_core(
             if not (depth_min <= depth <= depth_max):
                 continue
 
-            breakout_buffer_pct_value = depth * (breakout_buffer_pct / 100.0)
+            breakout_buffer_value = depth * breakout_buffer_mult
 
             if breakout_buffer_is_pct:
-                pre_buf = breakout_buffer_pct_value
+                pre_buf = breakout_buffer_value
             else:
                 pre_buf = atr_a[top1_true_bar] * breakout_buffer_atr_mult
             if bullish:
@@ -1287,7 +1275,7 @@ def _shape_state_core(
                 found = False
                 for j in range(scan_start, scan_end + 1):
                     if breakout_buffer_is_pct:
-                        buf_j = breakout_buffer_pct_value
+                        buf_j = breakout_buffer_value
                     else:
                         buf_j = atr_a[j] * breakout_buffer_atr_mult
 
@@ -1419,20 +1407,18 @@ def _double_top_bottom_shape_state(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
+    top_tolerance_mult: float = 0.15,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -1454,13 +1440,13 @@ def _double_top_bottom_shape_state(
     (パターンの規模に関わらず一定なので、期間が短い/値動きが小さいパターン
     では相対的に緩すぎ、期間が長い/値動きが大きいパターンでは相対的に厳し
     すぎる傾向がある)。"price_pct"は山1→ネックの値幅(山2探索時点で既知の
-    量)に対する%で、trendline_dev_basisと同じ考え方でパターンの規模に応じ
-    て許容誤差がスケールする。
+    量)に対する倍率で、trendline_dev_basisと同じ考え方でパターンの規模に
+    応じて許容誤差がスケールする。
 
     breakout_buffer_basis: ネックライン付近での「本物のブレイク/失敗」判定
     に使う余白の基準。top_tolerance_basisと同じ理由で"atr"は固定ATR倍率、
     "price_pct"は谷の深さ(⑧で計算済み、山1前点探索・ブレイク確定・失敗
-    判定・リテスト判定の全てで谷の深さは既知)に対する%。谷の深さ自体は
+    判定・リテスト判定の全てで谷の深さは既知)に対する倍率。谷の深さ自体は
     (min/max_valley_depth_atr_multで判定する)パターンの規模の主指標なので
     ATR倍率のままにしてある(top_toleranceやbreakout_bufferのような「別の
     値幅と比較する許容誤差」ではないため)。
@@ -1547,12 +1533,11 @@ def _double_top_bottom_shape_state(
         bool(bullish),
         int(pivot_confirm_lag),
         float(pivot_spike_excess_atr_max), float(pivot_spike_window_ratio),
-        int(pre_trend_lookback_bars), float(pre_trend_atr_mult),
         int(min_bars_between_tops), int(max_bars_between_tops),
         float(symmetry_ratio_min), float(symmetry_ratio_max),
-        top_tolerance_basis == "price_pct", float(top_tolerance_atr_mult), float(top_tolerance_pct),
+        top_tolerance_basis == "price_pct", float(top_tolerance_atr_mult), float(top_tolerance_mult),
         float(min_valley_depth_atr_mult), float(max_valley_depth_atr_mult),
-        breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_pct),
+        breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_mult),
         float(efficiency_ratio_min), float(efficiency_ratio_floor),
         trendline_dev_basis == "atr", float(trendline_dev_atr_mult), float(trendline_dev_pct),
         breakout_deadline_basis == "top1_top2", int(breakout_deadline_min_bars),
@@ -1598,20 +1583,18 @@ def double_bottom_shape(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
+    top_tolerance_mult: float = 0.15,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -1633,12 +1616,11 @@ def double_bottom_shape(
         high, low, close, True,
         pivot_left_bars, pivot_right_bars, prominence_atr_mult,
         pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-        pre_trend_lookback_bars, pre_trend_atr_mult,
         min_bars_between_tops, max_bars_between_tops,
         symmetry_ratio_min, symmetry_ratio_max,
-        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_mult,
         min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
         "top1_top2", breakout_deadline_min_bars, 0.3, breakout_deadline_ratio_max,
@@ -2463,20 +2445,18 @@ def double_top_shape(
     prominence_atr_mult: float = 0.0,
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
-    pre_trend_lookback_bars: int = 0,
-    pre_trend_atr_mult: float = 0.0,
     min_bars_between_tops: int = 5,
     max_bars_between_tops: int = 500,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
     top_tolerance_atr_mult: float = 2.0,
-    top_tolerance_pct: float = 15.0,
+    top_tolerance_mult: float = 0.15,
     min_valley_depth_atr_mult: float = 1.0,
     max_valley_depth_atr_mult: float = 0.0,
     breakout_buffer_basis: str = "price_pct",
     breakout_buffer_atr_mult: float = 0.5,
-    breakout_buffer_pct: float = 7.5,
+    breakout_buffer_mult: float = 0.075,
     efficiency_ratio_min: float = 0.25,
     efficiency_ratio_floor: float = 0.07,
     trendline_dev_basis: str = "price_pct",
@@ -2495,12 +2475,11 @@ def double_top_shape(
         high, low, close, False,
         pivot_left_bars, pivot_right_bars, prominence_atr_mult,
         pivot_spike_excess_atr_max, pivot_spike_window_ratio,
-        pre_trend_lookback_bars, pre_trend_atr_mult,
         min_bars_between_tops, max_bars_between_tops,
         symmetry_ratio_min, symmetry_ratio_max,
-        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_mult,
         min_valley_depth_atr_mult, max_valley_depth_atr_mult,
-        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
         "top1_top2", breakout_deadline_min_bars, 0.3, breakout_deadline_ratio_max,

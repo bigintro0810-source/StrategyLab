@@ -292,7 +292,12 @@ export function defaultParamsFor(info: IndicatorInfo | undefined): ConditionPara
   if (!info) return {}
   const params: ConditionParams = {}
   for (const spec of info.params) {
-    params[spec.name] = spec.default
+    if (spec.type === 'range') {
+      if (spec.name_min) params[spec.name_min] = spec.default_min
+      if (spec.name_max) params[spec.name_max] = spec.default_max
+    } else if (spec.name) {
+      params[spec.name] = spec.default
+    }
   }
   return params
 }
@@ -315,6 +320,11 @@ function differentiatedValueParams(
   if (!nextInfo || selectedIndicator !== mainIndicator) return base
   const result: ConditionParams = { ...base }
   for (const spec of nextInfo.params) {
+    // type="range"は下限〜上限の倍率ペアで、同一指標同士の比較でも「値が
+    // かぶって無意味な条件になる」という問題がそもそも起きない(比較先
+    // として指標同士を比べる対象ではなく、単独の数値パラメータのため)ので
+    // 対象外。
+    if (spec.type === 'range' || !spec.name) continue
     if (result[spec.name] !== mainParams[spec.name]) continue
     if (spec.type === 'choice' && spec.choices && spec.choices.length > 1) {
       const idx = spec.choices.indexOf(result[spec.name] as number)
@@ -348,7 +358,7 @@ function paramsEqual(a: ConditionParams, b: ConditionParams): boolean {
 // 28に戻るようにしたい」)。
 function nudgeFirstParam(info: IndicatorInfo, params: ConditionParams): ConditionParams {
   const spec = info.params[0]
-  if (!spec) return params
+  if (!spec || spec.type === 'range' || !spec.name) return params
   const current = params[spec.name] ?? spec.default
   if (spec.type === 'choice' && spec.choices && spec.choices.length > 1) {
     const idx = spec.choices.indexOf(current as number)
@@ -416,13 +426,40 @@ export function ParamInputs({
   return (
     <>
       {visibleParams.map((spec: IndicatorParamSpec) => (
-        <LabeledField key={spec.name} label={spec.label}>
-          {spec.type === 'choice' ? (
+        <LabeledField key={spec.name ?? `${spec.name_min}_${spec.name_max}`} label={spec.label}>
+          {spec.type === 'range' ? (
+            // 下限〜上限のペア(例: 探索窓の倍率)を1つのラベルの下に
+            // "[下限] 〜 [上限]" の2欄で表示する(ユーザー要望:「下限倍率と
+            // 上限倍率合わせて記載する」)。name_min/name_maxは別々の
+            // パラメータ名としてparamsに保存する(裏の値としては従来通り
+            // 2つのまま、見た目だけまとめる)。
+            <span className="flex items-center gap-1">
+              <input
+                type="number"
+                step={spec.value_type === 'float' ? '0.1' : '1'}
+                title={`${spec.label}(下限)`}
+                className="w-16 glass-input rounded-lg px-2 py-1"
+                value={params[spec.name_min!] ?? spec.default_min}
+                onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
+                onBlur={onBlur}
+              />
+              <span className="text-gray-400">〜</span>
+              <input
+                type="number"
+                step={spec.value_type === 'float' ? '0.1' : '1'}
+                title={`${spec.label}(上限)`}
+                className="w-16 glass-input rounded-lg px-2 py-1"
+                value={params[spec.name_max!] ?? spec.default_max}
+                onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
+                onBlur={onBlur}
+              />
+            </span>
+          ) : spec.type === 'choice' ? (
             <select
               title={spec.label}
               className="glass-input w-20 rounded-lg px-2 py-1 text-xs"
-              value={params[spec.name] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name]: Number(e.target.value) })}
+              value={params[spec.name!] ?? spec.default}
+              onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
               onBlur={onBlur}
             >
               {/* ラベルは上のLabeledFieldに既に出ているので、選択肢には値だけ
@@ -445,8 +482,8 @@ export function ParamInputs({
               // 分の余白をpr-5で確保し、収まらない文字はtruncateで省略する
               // (ユーザー了承:「文字は今と同じで途中で切れてていい」)。
               className="glass-input w-24 truncate rounded-lg py-1 pl-2 pr-5 text-xs"
-              value={params[spec.name] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name]: e.target.value })}
+              value={params[spec.name!] ?? spec.default}
+              onChange={(e) => onChange({ ...params, [spec.name!]: e.target.value })}
               onBlur={onBlur}
             >
               {(spec.string_choices ?? []).map((choice) => (
@@ -462,8 +499,8 @@ export function ParamInputs({
               title={paramTooltip(spec)}
               placeholder={spec.label}
               className="w-16 glass-input rounded-lg px-2 py-1"
-              value={params[spec.name] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name]: Number(e.target.value) })}
+              value={params[spec.name!] ?? spec.default}
+              onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
               onBlur={onBlur}
             />
           )}
