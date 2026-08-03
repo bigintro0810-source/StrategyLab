@@ -1340,6 +1340,14 @@ def evaluate_condition_tree(
     if cache is None:
         cache = {}
     cache["__symbol__"] = symbol
-    cache["__base_timeframe__"] = _infer_timeframe_label(df["datetime"])
+    # _infer_timeframe_labelはdf全体(数百万行になり得る)の時刻間隔から
+    # 中央値を取るO(n)の処理で、1回あたり数十msかかる。cacheが呼び出し元間で
+    # 使い回される契約(このcacheの生存期間中はdfが変わらないこと-上の
+    # _resolve_seriesのコメント参照)を満たす限り毎回同じ結果になるので、
+    # cache自体に憶えておいて2回目以降は計算し直さない(2026-08-02、自動探索
+    # やウォークフォワードのように1つのdfで何百〜何千回もバックテストする
+    # ケースで、この関数だけで合計数十秒〜分オーダーの無駄になっていた)。
+    if "__base_timeframe__" not in cache:
+        cache["__base_timeframe__"] = _infer_timeframe_label(df["datetime"])
     cache["__pip_size__"] = pip_size
     return node.evaluate(df, cache)

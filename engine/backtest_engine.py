@@ -127,6 +127,35 @@ def compute_is_intraday(datetime_series: pd.Series) -> bool:
     return bool(bar_seconds < 86400)
 
 
+def _cached_time_arrays(
+    df: pd.DataFrame, cache: dict | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.Series]:
+    """datetime_arr(numpy)/hour_arr/weekday_arr/datetime_series - pure
+    functions of `df` alone (never of strategy params), so when `cache` is
+    the SAME dict kept alive across many run_backtest calls sharing one df
+    (main.py's ProcessPoolExecutor workers pass one `indicator_cache` per
+    worker for that worker's whole lifetime - see run_backtest's own
+    indicator_cache docstring for the exact same-df-for-the-cache's-whole-
+    lifetime contract this relies on), compute them once and reuse.
+    Recomputing an hour/weekday breakdown of the WHOLE price history on
+    every single backtest call was pure waste in bulk-search loops
+    (profiled: tens of ms per call on 5m/USDJPY's 1.7M rows, adding up to
+    real time across the thousands of candidates auto-exploration/genetic
+    search evaluate). cache=None (the default for callers that don't opt
+    in, e.g. walk_forward.py's per-window dataframes) always recomputes -
+    identical to the pre-caching behavior."""
+    if cache is not None and "__time_arrays__" in cache:
+        return cache["__time_arrays__"]
+    datetime_arr = df["datetime"].to_numpy()
+    datetime_series = pd.to_datetime(df["datetime"])
+    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
+    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+    result = (datetime_arr, hour_arr, weekday_arr, datetime_series)
+    if cache is not None:
+        cache["__time_arrays__"] = result
+    return result
+
+
 def calc_max_dd(profits: np.ndarray) -> float:
     if len(profits) == 0:
         return 0.0
@@ -437,11 +466,7 @@ def run_backtest(
     use_daily_exit = bool(p["use_daily_exit"])
     daily_exit_hour = int(p["daily_exit_hour"])
 
-    datetime_arr = df["datetime"].to_numpy()
-
-    datetime_series = pd.to_datetime(df["datetime"])
-    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
-    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+    datetime_arr, hour_arr, weekday_arr, datetime_series = _cached_time_arrays(df, indicator_cache)
 
     if is_intraday is None:
         is_intraday = compute_is_intraday(datetime_series)
@@ -1160,11 +1185,7 @@ def _run_limit_stop_backtest(
     use_daily_exit = bool(p["use_daily_exit"])
     daily_exit_hour = int(p["daily_exit_hour"])
 
-    datetime_arr = df["datetime"].to_numpy()
-
-    datetime_series = pd.to_datetime(df["datetime"])
-    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
-    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+    datetime_arr, hour_arr, weekday_arr, datetime_series = _cached_time_arrays(df, indicator_cache)
 
     if is_intraday is None:
         is_intraday = compute_is_intraday(datetime_series)
@@ -1707,11 +1728,7 @@ def _run_dual_direction_backtest(
     use_daily_exit = bool(p["use_daily_exit"])
     daily_exit_hour = int(p["daily_exit_hour"])
 
-    datetime_arr = df["datetime"].to_numpy()
-
-    datetime_series = pd.to_datetime(df["datetime"])
-    hour_arr = datetime_series.dt.hour.to_numpy(dtype=np.int16)
-    weekday_arr = datetime_series.dt.weekday.to_numpy(dtype=np.int16)
+    datetime_arr, hour_arr, weekday_arr, datetime_series = _cached_time_arrays(df, indicator_cache)
 
     if is_intraday is None:
         is_intraday = compute_is_intraday(datetime_series)
