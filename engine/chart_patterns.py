@@ -1650,6 +1650,809 @@ def double_bottom_shape(
     return result[key].to_numpy(dtype=float)
 
 
+# ---------------------------------------------------------------------------
+# Triple Top & Bottom (形状判定版) - _shape_state_core(ダブルトップ/ボトム)を
+# そのまま踏襲し、「谷2→ネック2→谷3」をもう一段追加しただけの拡張版。
+# ユーザーとの設計レビューで決めた分岐点(2026-08-01):
+#   - 谷1・谷2・谷3が「並んでいるか」は3点全体(最大値-最小値)で判定する
+#     (谷1だけを基準にすると、緩やかな下降/上昇トレンドが混ざった形も
+#     通ってしまうため)。谷3探索窓の破綻判定(window invalidated)も同様に
+#     「谷1・谷2のうち悪い方」を基準にする。
+#   - ブレイク判定に使うネックラインはネック1・ネック2の高い方(ダブルボトム
+#     側)/低い方(ダブルトップ側)。既存の double_bottom_shape 内部でも
+#     「その時点までで一番良い(高い/低い)ネック候補」を採用するロジック
+#     なので一貫性がある。
+#   - ネック1とネック2自体の水準が近いか(水平に近いネックラインか)は
+#     任意パラメータ neckline_tolerance_pct で追加(0=無効、既定値は緩め)。
+#   - 谷3の探索窓・ブレイク猶予・ブレイクバッファは「谷1→ネック1」ではなく
+#     直近の間隔・深さ(谷2→ネック2)を基準にする - パターンが進むにつれて
+#     スケールが変わっても自然に追従できるため。
+# 品質チェック(孤立度・効率比・直線乖離)は5区間(pre→谷1・谷1→ネック1・
+# ネック1→谷2・谷2→ネック2・ネック2→谷3)全てに拡張。6状態モデル
+# (Detected/Rejected/Confirmed/Failed After Retest/Failed Before Retest/
+# Expired)はダブルトップ/ボトムと共通。
+# ---------------------------------------------------------------------------
+
+@njit(cache=True)
+def _shape_state_core3(
+    high_a, low_a, close_a, atr_a,
+    ext_price_a, neck_price_a,
+    ext_flags, neck_flags,
+    bullish,
+    pivot_confirm_lag,
+    pivot_spike_excess_atr_max, pivot_spike_window_ratio,
+    pre_trend_lookback_bars, pre_trend_atr_mult,
+    min_bars_between_tops, max_bars_between_tops,
+    symmetry_ratio_min, symmetry_ratio_max,
+    top_tolerance_is_pct, top_tolerance_atr_mult, top_tolerance_pct,
+    neckline_tolerance_pct,
+    min_valley_depth_atr_mult, max_valley_depth_atr_mult,
+    breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_pct,
+    efficiency_ratio_min, efficiency_ratio_floor,
+    trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct,
+    breakout_deadline_min_bars, breakout_deadline_ratio_max,
+    interval_symmetry_ratio_min, interval_symmetry_ratio_max,
+    retest_buffer_mult,
+    breakout_type_is_close,
+):
+    n = high_a.shape[0]
+    exists_a = np.zeros(n, dtype=np.bool_)
+    detected_a = np.zeros(n, dtype=np.bool_)
+    rejected_a = np.zeros(n, dtype=np.bool_)
+    resolve_a = np.zeros(n, dtype=np.bool_)
+    failed_after_retest_a = np.zeros(n, dtype=np.bool_)
+    failed_before_retest_a = np.zeros(n, dtype=np.bool_)
+    expired_a = np.zeros(n, dtype=np.bool_)
+    formed_bar_a = np.full(n, np.nan)
+    top1_bar_a = np.full(n, np.nan)
+    top2_bar_a = np.full(n, np.nan)
+    top3_bar_a = np.full(n, np.nan)
+    top1_price_a = np.full(n, np.nan)
+    top2_price_a = np.full(n, np.nan)
+    top3_price_a = np.full(n, np.nan)
+    neck1_bar_a = np.full(n, np.nan)
+    neck1_price_a = np.full(n, np.nan)
+    neck2_bar_a = np.full(n, np.nan)
+    neck2_price_a = np.full(n, np.nan)
+
+    ext_events = np.flatnonzero(ext_flags)
+    neck_events = np.flatnonzero(neck_flags)
+    n_neck = neck_events.shape[0]
+
+    for ei in range(ext_events.shape[0]):
+        top1_true_bar = ext_events[ei]
+        top1_price = ext_price_a[top1_true_bar]
+        top1_confirm_bar = top1_true_bar + pivot_confirm_lag
+
+        if pre_trend_lookback_bars > 0 and pre_trend_atr_mult > 0.0:
+            ref_bar = top1_true_bar - pre_trend_lookback_bars
+            if ref_bar < 0:
+                continue
+            trend_thresh = atr_a[top1_true_bar] * pre_trend_atr_mult
+            ref_price = ext_price_a[ref_bar]
+            if bullish:
+                if not (ref_price - top1_price >= trend_thresh):
+                    continue
+            else:
+                if not (top1_price - ref_price >= trend_thresh):
+                    continue
+
+        neck1_true_bar = -1
+        neck1_price = 0.0
+        neck1_confirm_bar = -1
+
+        start_idx = np.searchsorted(neck_events, top1_true_bar + 1, side="left")
+
+        for ki in range(start_idx, n_neck):
+            k = neck_events[ki]
+            interval1_candidate = k - top1_true_bar
+            if max_bars_between_tops > 0 and interval1_candidate > max_bars_between_tops:
+                break
+            if interval1_candidate < min_bars_between_tops:
+                continue
+            if neck1_true_bar != -1:
+                interval1_prev = neck1_true_bar - top1_true_bar
+                prev_win_end = neck1_true_bar + int(np.floor(interval1_prev * symmetry_ratio_max))
+                if k > prev_win_end:
+                    break
+            if bullish:
+                is_better = (neck1_true_bar == -1) or (neck_price_a[k] > neck1_price)
+            else:
+                is_better = (neck1_true_bar == -1) or (neck_price_a[k] < neck1_price)
+            if not is_better:
+                continue
+            neck1_price = neck_price_a[k]
+            neck1_true_bar = k
+            neck1_confirm_bar = neck1_true_bar + pivot_confirm_lag
+
+            interval1 = neck1_true_bar - top1_true_bar
+
+            top1_right_window = int(round(interval1 * pivot_spike_window_ratio))
+            top1_right_ok = _shape_spike_ok(ext_price_a, atr_a, n, top1_true_bar, top1_right_window,
+                                             True, not bullish, pivot_spike_excess_atr_max)
+            neck1_left_ok = _shape_spike_ok(neck_price_a, atr_a, n, neck1_true_bar, top1_right_window,
+                                             False, bullish, pivot_spike_excess_atr_max)
+
+            win_start = neck1_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
+            win_end = neck1_true_bar + int(np.floor(interval1 * symmetry_ratio_max))
+            if win_end > n - 1:
+                win_end = n - 1
+            if win_start > win_end:
+                continue
+
+            top_tolerance_pct_value = abs(top1_price - neck1_price) * (top_tolerance_pct / 100.0)
+
+            window_invalidated = False
+            top2_true_bar = -1
+            top2_price = 0.0
+            for j in range(win_start, win_end + 1):
+                if top_tolerance_is_pct:
+                    tol_j = top_tolerance_pct_value
+                else:
+                    tol_j = atr_a[j] * top_tolerance_atr_mult
+                if bullish:
+                    breach = low_a[j] < (top1_price - tol_j)
+                else:
+                    breach = high_a[j] > (top1_price + tol_j)
+                if breach:
+                    window_invalidated = True
+                    break
+                # トリプル版は谷2を「窓内で最初に水準一致した安値」に固定する
+                # (ダブル版の_shape_state_coreは最後に一致した安値まで更新
+                # し続けるが、それだと窓が谷3にまで届いた時に谷2を素通り
+                # して谷3を「谷2」として誤検出してしまう - 谷1・谷2・谷3が
+                # 均等に近い間隔で並ぶ本物のトリプルボトムほど起こりやすい)。
+                # 窓の残り(谷2発見後)は引き続き破綻(breach)判定のみ続行する。
+                if top2_true_bar == -1 and ext_flags[j] and abs(ext_price_a[j] - top1_price) <= tol_j:
+                    top2_true_bar = j
+                    top2_price = ext_price_a[j]
+
+            if window_invalidated or top2_true_bar == -1:
+                continue
+            top2_confirm_bar = top2_true_bar + pivot_confirm_lag
+
+            interval2 = top2_true_bar - neck1_true_bar
+            top2_left_window = int(round(interval2 * pivot_spike_window_ratio))
+            top2_left_ok = _shape_spike_ok(ext_price_a, atr_a, n, top2_true_bar, top2_left_window,
+                                            False, not bullish, pivot_spike_excess_atr_max)
+            neck1_right_ok = _shape_spike_ok(neck_price_a, atr_a, n, neck1_true_bar, top2_left_window,
+                                              True, bullish, pivot_spike_excess_atr_max)
+            if not (neck1_left_ok or neck1_right_ok):
+                continue
+
+            avg_extreme12 = (top1_price + top2_price) / 2.0
+            if bullish:
+                depth1 = neck1_price - avg_extreme12
+            else:
+                depth1 = avg_extreme12 - neck1_price
+            depth_min1 = atr_a[top2_true_bar] * min_valley_depth_atr_mult
+            if max_valley_depth_atr_mult <= 0.0:
+                depth_max1 = np.inf
+            else:
+                depth_max1 = atr_a[top2_true_bar] * max_valley_depth_atr_mult
+            if not (depth_min1 <= depth1 <= depth_max1):
+                continue
+
+            breakout_buffer_pct_value1 = depth1 * (breakout_buffer_pct / 100.0)
+            if breakout_buffer_is_pct:
+                pre_buf = breakout_buffer_pct_value1
+            else:
+                pre_buf = atr_a[top1_true_bar] * breakout_buffer_atr_mult
+            if bullish:
+                pre_level = neck1_price + pre_buf
+            else:
+                pre_level = neck1_price - pre_buf
+
+            pre_bar = -1
+            for j in range(top1_true_bar - 1, -1, -1):
+                if low_a[j] <= pre_level <= high_a[j]:
+                    pre_bar = j
+                    break
+            if pre_bar == -1:
+                continue
+
+            top1_left_window = int(round((top1_true_bar - pre_bar) * pivot_spike_window_ratio))
+            top1_left_ok = _shape_spike_ok(ext_price_a, atr_a, n, top1_true_bar, top1_left_window,
+                                            False, not bullish, pivot_spike_excess_atr_max)
+            if not (top1_left_ok or top1_right_ok):
+                continue
+
+            interval0 = neck1_true_bar - pre_bar
+
+            if bullish:
+                seg_min = low_a[pre_bar]
+                for j in range(pre_bar + 1, neck1_true_bar + 1):
+                    if low_a[j] < seg_min:
+                        seg_min = low_a[j]
+                if top1_price > seg_min:
+                    continue
+            else:
+                seg_max = high_a[pre_bar]
+                for j in range(pre_bar + 1, neck1_true_bar + 1):
+                    if high_a[j] > seg_max:
+                        seg_max = high_a[j]
+                if top1_price < seg_max:
+                    continue
+
+            # ===== ここから谷2→ネック2→谷3(ダブルトップ/ボトムには無い拡張) =====
+            neck2_true_bar = -1
+            neck2_price = 0.0
+            neck2_confirm_bar = -1
+
+            start_idx2 = np.searchsorted(neck_events, top2_true_bar + 1, side="left")
+
+            for ki2 in range(start_idx2, n_neck):
+                k2 = neck_events[ki2]
+                interval2n_candidate = k2 - top2_true_bar
+                if max_bars_between_tops > 0 and interval2n_candidate > max_bars_between_tops:
+                    break
+                if interval2n_candidate < min_bars_between_tops:
+                    continue
+                if neck2_true_bar != -1:
+                    interval2n_prev = neck2_true_bar - top2_true_bar
+                    prev_win_end2 = neck2_true_bar + int(np.floor(interval2n_prev * symmetry_ratio_max))
+                    if k2 > prev_win_end2:
+                        break
+                if bullish:
+                    is_better2 = (neck2_true_bar == -1) or (neck_price_a[k2] > neck2_price)
+                else:
+                    is_better2 = (neck2_true_bar == -1) or (neck_price_a[k2] < neck2_price)
+                if not is_better2:
+                    continue
+                neck2_price = neck_price_a[k2]
+                neck2_true_bar = k2
+                neck2_confirm_bar = neck2_true_bar + pivot_confirm_lag
+
+                # ネック1・ネック2自体の水準が近いか(水平に近いネックライン
+                # か) - 0以下で無効。
+                if neckline_tolerance_pct > 0.0:
+                    neck_tol = abs(top1_price - neck1_price) * (neckline_tolerance_pct / 100.0)
+                    if abs(neck2_price - neck1_price) > neck_tol:
+                        continue
+
+                interval2n = neck2_true_bar - top2_true_bar
+
+                top2_right_window = int(round(interval2n * pivot_spike_window_ratio))
+                top2_right_ok = _shape_spike_ok(ext_price_a, atr_a, n, top2_true_bar, top2_right_window,
+                                                 True, not bullish, pivot_spike_excess_atr_max)
+                neck2_left_ok = _shape_spike_ok(neck_price_a, atr_a, n, neck2_true_bar, top2_right_window,
+                                                 False, bullish, pivot_spike_excess_atr_max)
+                if not (top2_left_ok or top2_right_ok):
+                    continue
+
+                win_start2 = neck2_true_bar + int(np.ceil(interval2n * symmetry_ratio_min))
+                win_end2 = neck2_true_bar + int(np.floor(interval2n * symmetry_ratio_max))
+                if win_end2 > n - 1:
+                    win_end2 = n - 1
+                if win_start2 > win_end2:
+                    continue
+
+                lo12 = top1_price if top1_price < top2_price else top2_price
+                hi12 = top1_price if top1_price > top2_price else top2_price
+                worst12 = lo12 if bullish else hi12
+
+                window_invalidated2 = False
+                top3_true_bar = -1
+                top3_price = 0.0
+                for j in range(win_start2, win_end2 + 1):
+                    if top_tolerance_is_pct:
+                        tol_j = top_tolerance_pct_value
+                    else:
+                        tol_j = atr_a[j] * top_tolerance_atr_mult
+                    if bullish:
+                        breach = low_a[j] < (worst12 - tol_j)
+                    else:
+                        breach = high_a[j] > (worst12 + tol_j)
+                    if breach:
+                        window_invalidated2 = True
+                        break
+                    # 谷2側と同じ理由(素通り防止)で谷3も窓内で最初に一致した
+                    # 安値に固定する。
+                    if top3_true_bar == -1 and ext_flags[j]:
+                        cand = ext_price_a[j]
+                        lo_all = cand if cand < lo12 else lo12
+                        hi_all = cand if cand > hi12 else hi12
+                        if (hi_all - lo_all) <= tol_j:
+                            top3_true_bar = j
+                            top3_price = cand
+
+                if window_invalidated2 or top3_true_bar == -1:
+                    continue
+                top3_confirm_bar = top3_true_bar + pivot_confirm_lag
+
+                interval3 = top3_true_bar - neck2_true_bar
+                top3_left_window = int(round(interval3 * pivot_spike_window_ratio))
+                top3_left_ok = _shape_spike_ok(ext_price_a, atr_a, n, top3_true_bar, top3_left_window,
+                                                False, not bullish, pivot_spike_excess_atr_max)
+                neck2_right_ok = _shape_spike_ok(neck_price_a, atr_a, n, neck2_true_bar, top3_left_window,
+                                                  True, bullish, pivot_spike_excess_atr_max)
+                if not (neck2_left_ok or neck2_right_ok):
+                    continue
+
+                avg_extreme23 = (top2_price + top3_price) / 2.0
+                if bullish:
+                    depth2 = neck2_price - avg_extreme23
+                else:
+                    depth2 = avg_extreme23 - neck2_price
+                depth_min2 = atr_a[top3_true_bar] * min_valley_depth_atr_mult
+                if max_valley_depth_atr_mult <= 0.0:
+                    depth_max2 = np.inf
+                else:
+                    depth_max2 = atr_a[top3_true_bar] * max_valley_depth_atr_mult
+                if not (depth_min2 <= depth2 <= depth_max2):
+                    continue
+
+                confirm_floor = top1_confirm_bar
+                if neck1_confirm_bar > confirm_floor:
+                    confirm_floor = neck1_confirm_bar
+                if top2_confirm_bar > confirm_floor:
+                    confirm_floor = top2_confirm_bar
+                if neck2_confirm_bar > confirm_floor:
+                    confirm_floor = neck2_confirm_bar
+                if top3_confirm_bar > confirm_floor:
+                    confirm_floor = top3_confirm_bar
+                if confirm_floor >= n:
+                    continue
+
+                eff1 = _shape_eff_ratio(close_a, pre_bar, top1_true_bar)
+                eff2 = _shape_eff_ratio(close_a, top1_true_bar, neck1_true_bar)
+                eff3 = _shape_eff_ratio(close_a, neck1_true_bar, top2_true_bar)
+                eff4 = _shape_eff_ratio(close_a, top2_true_bar, neck2_true_bar)
+                eff5 = _shape_eff_ratio(close_a, neck2_true_bar, top3_true_bar)
+                legs_ok = (
+                    eff1 >= efficiency_ratio_floor
+                    and eff2 >= efficiency_ratio_floor
+                    and eff3 >= efficiency_ratio_floor
+                    and eff4 >= efficiency_ratio_floor
+                    and eff5 >= efficiency_ratio_floor
+                    and (eff1 + eff2 + eff3 + eff4 + eff5) / 5.0 >= efficiency_ratio_min
+                    and _shape_dev_ok(high_a, low_a, atr_a, pre_bar, pre_level, top1_true_bar, top1_price,
+                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                    and _shape_dev_ok(high_a, low_a, atr_a, top1_true_bar, top1_price, neck1_true_bar, neck1_price,
+                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                    and _shape_dev_ok(high_a, low_a, atr_a, neck1_true_bar, neck1_price, top2_true_bar, top2_price,
+                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                    and _shape_dev_ok(high_a, low_a, atr_a, top2_true_bar, top2_price, neck2_true_bar, neck2_price,
+                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                    and _shape_dev_ok(high_a, low_a, atr_a, neck2_true_bar, neck2_price, top3_true_bar, top3_price,
+                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                )
+                if not legs_ok:
+                    continue
+
+                formed_bar = confirm_floor
+                detected_a[formed_bar] = True
+
+                # ネックライン=ネック1・ネック2の高い方(bullish)/低い方(not
+                # bullish) - 両方の山を上抜けて初めてブレイク成立とみなす
+                # 保守的な判定(高い方を超えれば自動的に低い方も超えている)。
+                if bullish:
+                    neckline_price = neck1_price if neck1_price > neck2_price else neck2_price
+                else:
+                    neckline_price = neck1_price if neck1_price < neck2_price else neck2_price
+
+                # 猶予・バッファは直近の間隔/深さ(谷2→ネック2)基準 - パターン
+                # が進むにつれてスケールが変わっても自然に追従できるため。
+                expire_bars = interval2n * breakout_deadline_ratio_max
+                scan_start = top3_true_bar + 1
+                if formed_bar > scan_start:
+                    scan_start = formed_bar
+                scan_end = top3_true_bar + int(np.ceil(expire_bars))
+                if scan_end > n - 1:
+                    scan_end = n - 1
+
+                breakout_buffer_pct_value2 = depth2 * (breakout_buffer_pct / 100.0)
+
+                retested = False
+                outcome = 4  # expired
+                outcome_bar = scan_end
+
+                if scan_start <= scan_end:
+                    worst_extreme = top1_price
+                    if bullish:
+                        if top2_price < worst_extreme:
+                            worst_extreme = top2_price
+                        if top3_price < worst_extreme:
+                            worst_extreme = top3_price
+                    else:
+                        if top2_price > worst_extreme:
+                            worst_extreme = top2_price
+                        if top3_price > worst_extreme:
+                            worst_extreme = top3_price
+
+                    seen_near = False
+                    found = False
+                    for j in range(scan_start, scan_end + 1):
+                        if breakout_buffer_is_pct:
+                            buf_j = breakout_buffer_pct_value2
+                        else:
+                            buf_j = atr_a[j] * breakout_buffer_atr_mult
+
+                        if breakout_type_is_close:
+                            if bullish:
+                                confirm_j = close_a[j] > (neckline_price + buf_j)
+                                fail_j = close_a[j] < (worst_extreme - buf_j)
+                            else:
+                                confirm_j = close_a[j] < (neckline_price - buf_j)
+                                fail_j = close_a[j] > (worst_extreme + buf_j)
+                        else:
+                            if bullish:
+                                confirm_j = high_a[j] > (neckline_price + buf_j)
+                                fail_j = low_a[j] < (worst_extreme - buf_j)
+                            else:
+                                confirm_j = low_a[j] < (neckline_price - buf_j)
+                                fail_j = high_a[j] > (worst_extreme + buf_j)
+
+                        retest_lo = neckline_price - buf_j * retest_buffer_mult
+                        retest_hi = neckline_price + buf_j * retest_buffer_mult
+                        near_j = (
+                            (retest_lo <= high_a[j] <= retest_hi)
+                            or (retest_lo <= low_a[j] <= retest_hi)
+                            or (low_a[j] <= retest_lo and high_a[j] >= retest_hi)
+                        )
+                        seen_near = seen_near or near_j
+
+                        if confirm_j or fail_j:
+                            found = True
+                            retested = seen_near
+                            if fail_j:
+                                outcome = 3  # failed
+                                outcome_bar = j
+                            else:
+                                bars_since_formed = j - formed_bar
+                                if bars_since_formed < breakout_deadline_min_bars:
+                                    outcome = 1  # rejected
+                                    outcome_bar = j
+                                else:
+                                    time1 = j - neck2_true_bar
+                                    symmetric_ok = (
+                                        time1 * interval_symmetry_ratio_min <= interval0 <= time1 * interval_symmetry_ratio_max
+                                    )
+                                    eff_breakout = _shape_eff_ratio(close_a, top3_true_bar, j)
+
+                                    if bullish:
+                                        seg_min2 = low_a[neck2_true_bar]
+                                        for jj in range(neck2_true_bar + 1, j + 1):
+                                            if low_a[jj] < seg_min2:
+                                                seg_min2 = low_a[jj]
+                                        no_undercut = top3_price <= seg_min2
+                                    else:
+                                        seg_max2 = high_a[neck2_true_bar]
+                                        for jj in range(neck2_true_bar + 1, j + 1):
+                                            if high_a[jj] > seg_max2:
+                                                seg_max2 = high_a[jj]
+                                        no_undercut = top3_price >= seg_max2
+
+                                    top3_right_window = int(round((j - top3_true_bar) * pivot_spike_window_ratio))
+                                    max_window3 = j - top3_true_bar
+                                    if top3_right_window > max_window3:
+                                        top3_right_window = max_window3
+                                    top3_right_ok = _shape_spike_ok(
+                                        ext_price_a, atr_a, n, top3_true_bar, top3_right_window,
+                                        True, not bullish, pivot_spike_excess_atr_max,
+                                    )
+                                    top3_isolation_ok = top3_left_ok or top3_right_ok
+
+                                    if breakout_type_is_close:
+                                        end_price_for_dev = close_a[j]
+                                    else:
+                                        end_price_for_dev = high_a[j] if bullish else low_a[j]
+
+                                    breakout_leg_ok = (
+                                        symmetric_ok
+                                        and eff_breakout >= efficiency_ratio_floor
+                                        and eff_breakout >= efficiency_ratio_min
+                                        and no_undercut
+                                        and top3_isolation_ok
+                                        and _shape_dev_ok(high_a, low_a, atr_a, top3_true_bar, top3_price, j, end_price_for_dev,
+                                                           trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                                    )
+                                    if not breakout_leg_ok:
+                                        outcome = 1  # rejected
+                                        outcome_bar = j
+                                    else:
+                                        outcome = 2  # confirmed
+                                        outcome_bar = j
+                            break
+                    if not found:
+                        retested = seen_near
+
+                exists_end = outcome_bar
+                exists_a[formed_bar: exists_end + 1] = True
+                formed_bar_a[formed_bar: exists_end + 1] = formed_bar
+                top1_bar_a[formed_bar] = top1_true_bar
+                top2_bar_a[formed_bar] = top2_true_bar
+                top3_bar_a[formed_bar] = top3_true_bar
+                top1_price_a[formed_bar] = top1_price
+                top2_price_a[formed_bar] = top2_price
+                top3_price_a[formed_bar] = top3_price
+                neck1_bar_a[formed_bar] = neck1_true_bar
+                neck1_price_a[formed_bar] = neck1_price
+                neck2_bar_a[formed_bar] = neck2_true_bar
+                neck2_price_a[formed_bar] = neck2_price
+
+                if outcome == 1:
+                    rejected_a[outcome_bar] = True
+                elif outcome == 2:
+                    resolve_a[outcome_bar] = True
+                elif outcome == 3:
+                    if retested:
+                        failed_after_retest_a[outcome_bar] = True
+                    else:
+                        failed_before_retest_a[outcome_bar] = True
+                else:
+                    expired_a[outcome_bar] = True
+
+    return (
+        exists_a, detected_a, rejected_a, resolve_a, failed_after_retest_a,
+        failed_before_retest_a, expired_a, formed_bar_a,
+        top1_bar_a, top2_bar_a, top3_bar_a,
+        top1_price_a, top2_price_a, top3_price_a,
+        neck1_bar_a, neck1_price_a, neck2_bar_a, neck2_price_a,
+    )
+
+
+def _triple_top_bottom_shape_state(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    bullish: bool,
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 0.0,
+    pivot_spike_excess_atr_max: float = 1.3,
+    pivot_spike_window_ratio: float = 0.5,
+    pre_trend_lookback_bars: int = 0,
+    pre_trend_atr_mult: float = 0.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 3.33,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    neckline_tolerance_pct: float = 30.0,
+    min_valley_depth_atr_mult: float = 1.0,
+    max_valley_depth_atr_mult: float = 0.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 7.5,
+    efficiency_ratio_min: float = 0.25,
+    efficiency_ratio_floor: float = 0.07,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 0.8,
+    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_ratio_max: float = 3.33,
+    interval_symmetry_ratio_min: float = 0.67,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.5,
+    breakout_type: str = "close",
+) -> dict[str, pd.Series]:
+    """モジュール冒頭のコメント参照。bullish=Trueでトリプルボトム、Falseで
+    トリプルトップ(高値/安値・上下を反転させた鏡像)。_double_top_bottom_
+    shape_stateの「谷1→ネック→谷2」をそのまま使い、「谷2→ネック2→谷3」を
+    もう一段追加した拡張版。"""
+    n = len(high)
+    idx_index = high.index
+    high_a = high.to_numpy(dtype=float)
+    low_a = low.to_numpy(dtype=float)
+    close_a = close.to_numpy(dtype=float)
+    df = pd.DataFrame({"high": high, "low": low, "close": close})
+    atr_a = _atr_series(df, 14).to_numpy()
+
+    if breakout_type not in ("close", "wick"):
+        raise ValueError(f"未対応のbreakout_typeです(close/wickのみ対応): {breakout_type}")
+    if trendline_dev_basis not in ("atr", "price_pct"):
+        raise ValueError(f"未対応のtrendline_dev_basisです(atr/price_pctのみ対応): {trendline_dev_basis}")
+
+    ext_price_a = low_a if bullish else high_a
+    neck_price_a = high_a if bullish else low_a
+
+    plain_pivot_ext = (
+        _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+    ).to_numpy()
+    plain_pivot_neck = (
+        _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
+        if bullish
+        else _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
+    ).to_numpy()
+
+    boundary_other_a = high_a if bullish else low_a
+    left_boundary = pd.Series(boundary_other_a).shift(pivot_left_bars).to_numpy()
+    right_boundary = pd.Series(boundary_other_a).shift(-pivot_right_bars).to_numpy()
+    prom_thresh = atr_a * prominence_atr_mult
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_ext = (left_boundary - ext_price_a >= prom_thresh) & (right_boundary - ext_price_a >= prom_thresh)
+        else:
+            prominence_ok_ext = (ext_price_a - left_boundary >= prom_thresh) & (ext_price_a - right_boundary >= prom_thresh)
+    prominence_ok_ext = np.nan_to_num(prominence_ok_ext, nan=0.0).astype(bool)
+
+    neck_boundary_other_a = low_a if bullish else high_a
+    left_boundary_neck = pd.Series(neck_boundary_other_a).shift(pivot_left_bars).to_numpy()
+    right_boundary_neck = pd.Series(neck_boundary_other_a).shift(-pivot_right_bars).to_numpy()
+    with np.errstate(invalid="ignore"):
+        if bullish:
+            prominence_ok_neck = (neck_price_a - left_boundary_neck >= prom_thresh) & (neck_price_a - right_boundary_neck >= prom_thresh)
+        else:
+            prominence_ok_neck = (left_boundary_neck - neck_price_a >= prom_thresh) & (right_boundary_neck - neck_price_a >= prom_thresh)
+    prominence_ok_neck = np.nan_to_num(prominence_ok_neck, nan=0.0).astype(bool)
+
+    ext_flags = plain_pivot_ext & prominence_ok_ext
+    neck_flags = plain_pivot_neck & prominence_ok_neck
+
+    pivot_confirm_lag = pivot_right_bars
+
+    (
+        exists_a, detected_a, rejected_a, resolve_a, failed_after_retest_a,
+        failed_before_retest_a, expired_a, formed_bar_a,
+        top1_bar_a, top2_bar_a, top3_bar_a,
+        top1_price_a, top2_price_a, top3_price_a,
+        neck1_bar_a, neck1_price_a, neck2_bar_a, neck2_price_a,
+    ) = _shape_state_core3(
+        high_a, low_a, close_a, atr_a,
+        ext_price_a, neck_price_a,
+        ext_flags, neck_flags,
+        bool(bullish),
+        int(pivot_confirm_lag),
+        float(pivot_spike_excess_atr_max), float(pivot_spike_window_ratio),
+        int(pre_trend_lookback_bars), float(pre_trend_atr_mult),
+        int(min_bars_between_tops), int(max_bars_between_tops),
+        float(symmetry_ratio_min), float(symmetry_ratio_max),
+        top_tolerance_basis == "price_pct", float(top_tolerance_atr_mult), float(top_tolerance_pct),
+        float(neckline_tolerance_pct),
+        float(min_valley_depth_atr_mult), float(max_valley_depth_atr_mult),
+        breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_pct),
+        float(efficiency_ratio_min), float(efficiency_ratio_floor),
+        trendline_dev_basis == "atr", float(trendline_dev_atr_mult), float(trendline_dev_pct),
+        int(breakout_deadline_min_bars), float(breakout_deadline_ratio_max),
+        float(interval_symmetry_ratio_min), float(interval_symmetry_ratio_max),
+        float(retest_buffer_mult),
+        breakout_type == "close",
+    )
+
+    return {
+        "exists": pd.Series(exists_a, index=idx_index),
+        "detected": pd.Series(detected_a, index=idx_index),
+        "rejected": pd.Series(rejected_a, index=idx_index),
+        "confirmed": pd.Series(resolve_a, index=idx_index),
+        "failed_after_retest": pd.Series(failed_after_retest_a, index=idx_index),
+        "failed_before_retest": pd.Series(failed_before_retest_a, index=idx_index),
+        "expired": pd.Series(expired_a, index=idx_index),
+        "formed_bar": pd.Series(formed_bar_a, index=idx_index),
+        "top1_bar": pd.Series(top1_bar_a, index=idx_index),
+        "top2_bar": pd.Series(top2_bar_a, index=idx_index),
+        "top3_bar": pd.Series(top3_bar_a, index=idx_index),
+        "top1_price": pd.Series(top1_price_a, index=idx_index),
+        "top2_price": pd.Series(top2_price_a, index=idx_index),
+        "top3_price": pd.Series(top3_price_a, index=idx_index),
+        "neck1_bar": pd.Series(neck1_bar_a, index=idx_index),
+        "neck1_price": pd.Series(neck1_price_a, index=idx_index),
+        "neck2_bar": pd.Series(neck2_bar_a, index=idx_index),
+        "neck2_price": pd.Series(neck2_price_a, index=idx_index),
+    }
+
+
+def triple_bottom_shape(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 0.0,
+    pivot_spike_excess_atr_max: float = 1.3,
+    pivot_spike_window_ratio: float = 0.5,
+    pre_trend_lookback_bars: int = 0,
+    pre_trend_atr_mult: float = 0.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 3.33,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    neckline_tolerance_pct: float = 30.0,
+    min_valley_depth_atr_mult: float = 1.0,
+    max_valley_depth_atr_mult: float = 0.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 7.5,
+    efficiency_ratio_min: float = 0.25,
+    efficiency_ratio_floor: float = 0.07,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 0.8,
+    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_ratio_max: float = 3.33,
+    interval_symmetry_ratio_min: float = 0.67,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.5,
+    breakout_type: str = "close",
+    **p,
+) -> np.ndarray:
+    """トリプルボトム(形状判定版) - モジュール冒頭のコメント参照。
+    double_bottom_shapeの「谷1→ネック→谷2」に「谷2→ネック2→谷3」を追加した
+    拡張版(既存のdouble_bottom_shape/triple_bottom_breakoutとは完全に
+    独立した実装、そちらは一切変更していない)。"""
+    result = _triple_top_bottom_shape_state(
+        high, low, close, True,
+        pivot_left_bars, pivot_right_bars, prominence_atr_mult,
+        pivot_spike_excess_atr_max, pivot_spike_window_ratio,
+        pre_trend_lookback_bars, pre_trend_atr_mult,
+        min_bars_between_tops, max_bars_between_tops,
+        symmetry_ratio_min, symmetry_ratio_max,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        neckline_tolerance_pct,
+        min_valley_depth_atr_mult, max_valley_depth_atr_mult,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        efficiency_ratio_min, efficiency_ratio_floor,
+        trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        breakout_deadline_min_bars, breakout_deadline_ratio_max,
+        interval_symmetry_ratio_min, interval_symmetry_ratio_max,
+        retest_buffer_mult,
+        breakout_type,
+    )
+    key = _SHAPE_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
+
+
+def triple_top_shape(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    state: str = "confirmed",
+    pivot_left_bars: int = 5,
+    pivot_right_bars: int = 5,
+    prominence_atr_mult: float = 0.0,
+    pivot_spike_excess_atr_max: float = 1.3,
+    pivot_spike_window_ratio: float = 0.5,
+    pre_trend_lookback_bars: int = 0,
+    pre_trend_atr_mult: float = 0.0,
+    min_bars_between_tops: int = 5,
+    max_bars_between_tops: int = 500,
+    symmetry_ratio_min: float = 0.3,
+    symmetry_ratio_max: float = 3.33,
+    top_tolerance_basis: str = "price_pct",
+    top_tolerance_atr_mult: float = 2.0,
+    top_tolerance_pct: float = 15.0,
+    neckline_tolerance_pct: float = 30.0,
+    min_valley_depth_atr_mult: float = 1.0,
+    max_valley_depth_atr_mult: float = 0.0,
+    breakout_buffer_basis: str = "price_pct",
+    breakout_buffer_atr_mult: float = 0.5,
+    breakout_buffer_pct: float = 7.5,
+    efficiency_ratio_min: float = 0.25,
+    efficiency_ratio_floor: float = 0.07,
+    trendline_dev_basis: str = "price_pct",
+    trendline_dev_atr_mult: float = 0.9,
+    trendline_dev_pct: float = 0.8,
+    breakout_deadline_min_bars: int = 3,
+    breakout_deadline_ratio_max: float = 3.33,
+    interval_symmetry_ratio_min: float = 0.67,
+    interval_symmetry_ratio_max: float = 1.5,
+    retest_buffer_mult: float = 1.5,
+    breakout_type: str = "close",
+    **p,
+) -> np.ndarray:
+    """Mirror image of triple_bottom_shape - トリプルトップ(形状判定版)。"""
+    result = _triple_top_bottom_shape_state(
+        high, low, close, False,
+        pivot_left_bars, pivot_right_bars, prominence_atr_mult,
+        pivot_spike_excess_atr_max, pivot_spike_window_ratio,
+        pre_trend_lookback_bars, pre_trend_atr_mult,
+        min_bars_between_tops, max_bars_between_tops,
+        symmetry_ratio_min, symmetry_ratio_max,
+        top_tolerance_basis, top_tolerance_atr_mult, top_tolerance_pct,
+        neckline_tolerance_pct,
+        min_valley_depth_atr_mult, max_valley_depth_atr_mult,
+        breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_pct,
+        efficiency_ratio_min, efficiency_ratio_floor,
+        trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        breakout_deadline_min_bars, breakout_deadline_ratio_max,
+        interval_symmetry_ratio_min, interval_symmetry_ratio_max,
+        retest_buffer_mult,
+        breakout_type,
+    )
+    key = _SHAPE_STATE_KEYS.get(state, "confirmed")
+    return result[key].to_numpy(dtype=float)
 
 
 def double_top_shape(

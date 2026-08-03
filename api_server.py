@@ -1128,6 +1128,8 @@ INDICATOR_LABELS: dict[str, str] = {
     # との対称性等で「本物のW字/M字か」を厳密に判定する形状判定ロジック。
     "double_top_shape": "ダブルトップ",
     "double_bottom_shape": "ダブルボトム",
+    "triple_top_shape": "トリプルトップ",
+    "triple_bottom_shape": "トリプルボトム",
     "triple_top_breakdown": "トリプルトップ ネックライン割れ",
     "triple_bottom_breakout": "トリプルボトム ネックライン突破",
     "head_and_shoulders_breakdown": "ヘッド&ショルダーズ ネックライン割れ",
@@ -1361,6 +1363,71 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "breakout_deadline_ratio_max", "label": "この倍率(×山1→ネックの本数)を超えるとブレイク猶予切れ", "default": 3.33, "type": "float"},
     {"name": "interval_symmetry_ratio_min", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する下限倍率)", "default": 0.67, "type": "float"},
     {"name": "interval_symmetry_ratio_max", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
+]
+# トリプルボトム(形状判定版) - ダブルボトム(形状判定版)の「谷1→ネック→
+# 谷2」に「谷2→ネック2→谷3」をもう一段追加した拡張版(2026-08-01、
+# engine/chart_patterns.py::_triple_top_bottom_shape_stateのモジュール
+# 冒頭コメント参照)。パラメータのほとんどはダブルボトムと共用(interval1
+# 系の判定基準を2つのレッグ両方に適用する設計)で、neckline_tolerance_pct
+# だけ新規(ネック1・ネック2自体の水準が近いかの任意チェック)。
+_TRIPLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
+    {"name": "prominence_atr_mult", "label": "谷1・谷2・谷3・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェック: 突出幅の許容(ATR倍率、0=無効)", "default": 1.3, "type": "float"},
+    {"name": "pivot_spike_window_ratio", "label": "谷1・谷2・谷3・ネックの孤立度チェック: 隣接区間の本数に対する倍率", "default": 0.5, "type": "float"},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数(0=無効)", "default": 0, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の下げ幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "min_bars_between_tops", "label": "谷→ネックの間隔(最小本数、両レッグ共通)", "default": 5, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "谷→ネックの間隔(最大本数、0=無制限、両レッグ共通)", "default": 500, "type": "int"},
+    {"name": "symmetry_ratio_min", "label": "次の谷の探索窓: ネックからの本数(直前区間の本数に対する下限倍率)", "default": 0.3, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "次の谷の探索窓: ネックからの本数(直前区間の本数に対する上限倍率)", "default": 3.33, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "谷1・谷2・谷3の水準許容誤差(3点全体の最大最小差、谷1→ネックの値幅に対する%)", "default": 15.0, "type": "float"},
+    {"name": "neckline_tolerance_pct", "label": "ネック1・ネック2の水準許容誤差(谷1→ネックの値幅に対する%、0=無効)", "default": 30.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率、両レッグ共通)", "default": 1.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、0=無制限、両レッグ共通)", "default": 0.0, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(谷2→ネック2の深さに対する%)", "default": 7.5, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準(5区間の平均)", "default": 0.25, "type": "float"},
+    {"name": "efficiency_ratio_floor", "label": "値動きのなめらかさ(効率比)の下限(区間ごとに個別に満たす必要あり)", "default": 0.07, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する倍率)", "default": 0.8, "type": "float"},
+    {"name": "breakout_deadline_min_bars", "label": "谷3からこの本数未満のブレイクは早すぎるとして無効", "default": 3, "type": "int"},
+    {"name": "breakout_deadline_ratio_max", "label": "この倍率(×谷2→ネック2の本数)を超えるとブレイク猶予切れ", "default": 3.33, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "谷1前→ネック1の本数(ネック2→ブレイクの本数に対する下限倍率)", "default": 0.67, "type": "float"},
+    {"name": "interval_symmetry_ratio_max", "label": "谷1前→ネック1の本数(ネック2→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
+    {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
+]
+# トリプルトップ(形状判定版) - 概念はトリプルボトム側と左右対称(ラベル
+# 文言だけ「山/谷」を手書きで入れ替え、ダブルトップ側の慣習に合わせて
+# 「谷」の深さ系の語はそのまま不変)。
+_TRIPLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int"},
+    {"name": "prominence_atr_mult", "label": "山1・山2・山3・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェック: 突出幅の許容(ATR倍率、0=無効)", "default": 1.3, "type": "float"},
+    {"name": "pivot_spike_window_ratio", "label": "山1・山2・山3・ネックの孤立度チェック: 隣接区間の本数に対する倍率", "default": 0.5, "type": "float"},
+    {"name": "pre_trend_lookback_bars", "label": "トレンド確認の参照本数(0=無効)", "default": 0, "type": "int"},
+    {"name": "pre_trend_atr_mult", "label": "トレンド確認の上げ幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float"},
+    {"name": "min_bars_between_tops", "label": "山→ネックの間隔(最小本数、両レッグ共通)", "default": 5, "type": "int"},
+    {"name": "max_bars_between_tops", "label": "山→ネックの間隔(最大本数、0=無制限、両レッグ共通)", "default": 500, "type": "int"},
+    {"name": "symmetry_ratio_min", "label": "次の山の探索窓: ネックからの本数(直前区間の本数に対する下限倍率)", "default": 0.3, "type": "float"},
+    {"name": "symmetry_ratio_max", "label": "次の山の探索窓: ネックからの本数(直前区間の本数に対する上限倍率)", "default": 3.33, "type": "float"},
+    {"name": "top_tolerance_pct", "label": "山1・山2・山3の水準許容誤差(3点全体の最大最小差、山1→ネックの値幅に対する%)", "default": 15.0, "type": "float"},
+    {"name": "neckline_tolerance_pct", "label": "ネック1・ネック2の水準許容誤差(山1→ネックの値幅に対する%、0=無効)", "default": 30.0, "type": "float"},
+    {"name": "min_valley_depth_atr_mult", "label": "谷の最低深さ(ATR倍率、両レッグ共通)", "default": 1.0, "type": "float"},
+    {"name": "max_valley_depth_atr_mult", "label": "谷の最大深さ(ATR倍率、0=無制限、両レッグ共通)", "default": 0.0, "type": "float"},
+    {"name": "breakout_buffer_pct", "label": "ブレイク判定の余白(山2→ネック2の深さに対する%)", "default": 7.5, "type": "float"},
+    {"name": "efficiency_ratio_min", "label": "値動きのなめらかさ(効率比)の最低基準(5区間の平均)", "default": 0.25, "type": "float"},
+    {"name": "efficiency_ratio_floor", "label": "値動きのなめらかさ(効率比)の下限(区間ごとに個別に満たす必要あり)", "default": 0.07, "type": "float"},
+    {"name": "trendline_dev_pct", "label": "直線乖離の許容幅(区間の価格差に対する倍率)", "default": 0.8, "type": "float"},
+    {"name": "breakout_deadline_min_bars", "label": "山3からこの本数未満のブレイクは早すぎるとして無効", "default": 3, "type": "int"},
+    {"name": "breakout_deadline_ratio_max", "label": "この倍率(×山2→ネック2の本数)を超えるとブレイク猶予切れ", "default": 3.33, "type": "float"},
+    {"name": "interval_symmetry_ratio_min", "label": "山1前→ネック1の本数(ネック2→ブレイクの本数に対する下限倍率)", "default": 0.67, "type": "float"},
+    {"name": "interval_symmetry_ratio_max", "label": "山1前→ネック1の本数(ネック2→ブレイクの本数に対する上限倍率)", "default": 1.5, "type": "float"},
     {"name": "retest_buffer_mult", "label": "リテスト判定の余白倍率(×ブレイク判定の余白)", "default": 1.5, "type": "float"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES},
 ]
@@ -1947,6 +2014,8 @@ INDICATOR_PARAM_SPECS.update({
     ],
     "double_top_shape": list(_DOUBLE_TOP_SHAPE_PARAM_SPEC),
     "double_bottom_shape": list(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC),
+    "triple_top_shape": list(_TRIPLE_TOP_SHAPE_PARAM_SPEC),
+    "triple_bottom_shape": list(_TRIPLE_BOTTOM_SHAPE_PARAM_SPEC),
     "triple_top_breakdown": [
         {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
         {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
@@ -2664,6 +2733,15 @@ _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
 _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = {
     spec["name"]: spec["default"] for spec in _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC if spec["name"] != "state"
 }
+# トリプルトップ/ボトム(形状判定版) - 上と同じ仕組みだが、根拠となる点が
+# 3つの山/谷+2つのネックになる(2026-08-01)。
+_TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
+    "triple_top_shape": (False, "top"),
+    "triple_bottom_shape": (True, "bottom"),
+}
+_TRIPLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = {
+    spec["name"]: spec["default"] for spec in _TRIPLE_BOTTOM_SHAPE_PARAM_SPEC if spec["name"] != "state"
+}
 
 
 def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) -> None:
@@ -2677,14 +2755,19 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
     indicator = node.get("indicator")
     # MTF(他時間足)指定があると、このチャートが読み込んでいるdf(自足)には
     # 対応する山/谷のバー位置が存在しないため、自足の条件のみ対象にする。
-    is_pattern_indicator = indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    is_pattern_indicator = (
+        indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+        or indicator in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    )
     if is_pattern_indicator and not node.get("timeframe"):
         params = node.get("params") or {}
         key = (indicator, tuple(sorted(params.items())))
         out[key] = (indicator, params)
 
     value = node.get("value")
-    is_pattern_value = isinstance(value, str) and value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    is_pattern_value = isinstance(value, str) and (
+        value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES or value in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+    )
     if is_pattern_value and not node.get("value_timeframe"):
         value_params = node.get("value_params") or {}
         key = (value, tuple(sorted(value_params.items())))
@@ -2692,9 +2775,9 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
 
 
 def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list[dict]:
-    """条件ツリーに含まれるダブルトップ/ボトム系indicatorそれぞれについて、
-    実際にresolve/failed(existsは区間の開始バー)が成立した回だけ、その根拠
-    となった2つの山/谷の時刻・価格を返す。"""
+    """条件ツリーに含まれるダブル/トリプルトップ・ボトム系indicatorそれぞれ
+    について、実際にresolve/failed(existsは区間の開始バー)が成立した回だけ、
+    その根拠となった山/谷・ネックラインの時刻・価格を返す。"""
     collected: dict[tuple, tuple] = {}
     for tree in trees:
         _collect_pattern_marker_specs(tree, collected)
@@ -2704,58 +2787,69 @@ def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list
     times = df["datetime"]
     events: list[dict] = []
     for indicator, params in collected.values():
+        is_triple = indicator in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
         # 見る状態(output_key)はnode自身のparams["state"]で決まる(既定は
         # confirmed)。
-        bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
-        output_key = params.get("state", "confirmed")
-        shape_kwargs = {
-            name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
-        }
-        state = chart_patterns._double_top_bottom_shape_state(
-            df["high"], df["low"], df["close"], bullish, **shape_kwargs
-        )
+        if is_triple:
+            bullish, kind = _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+            output_key = params.get("state", "confirmed")
+            shape_kwargs = {
+                name: params.get(name, default) for name, default in _TRIPLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+            }
+            state = chart_patterns._triple_top_bottom_shape_state(
+                df["high"], df["low"], df["close"], bullish, **shape_kwargs
+            )
+        else:
+            bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+            output_key = params.get("state", "confirmed")
+            shape_kwargs = {
+                name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+            }
+            state = chart_patterns._double_top_bottom_shape_state(
+                df["high"], df["low"], df["close"], bullish, **shape_kwargs
+            )
         flag = state[output_key]
         if output_key == "exists":
             # existsはパターン形成中ずっとTrueの区間なので、区間の最初の
-            # バー(=2つの山/谷が確定した瞬間)だけを1回のイベントとして扱う。
+            # バー(=山/谷が出揃った瞬間)だけを1回のイベントとして扱う。
             flag = flag & ~flag.shift(1).fillna(False)
 
         formed_bar = state["formed_bar"]
-        top1_bar, top2_bar = state["top1_bar"], state["top2_bar"]
-        top1_price, top2_price = state["top1_price"], state["top2_price"]
-        neckline_bar, neckline_price = state["neckline_bar"], state["neckline_price"]
+        # 決着バーではなく、山/谷が出揃った(formedした)瞬間のスナップ
+        # ショットで固定して読む - formed後にネックラインの元になる安値/
+        # 高値が更に更新され得るため(既存ロジックの正しい挙動)、決着バーの
+        # 時点で読むと時系列が矛盾した表示になり得る(実際に発生を確認)。
+        if is_triple:
+            point_bars = (state["top1_bar"], state["top2_bar"], state["top3_bar"], state["neck1_bar"], state["neck2_bar"])
+            point_prices = (state["top1_price"], state["top2_price"], state["top3_price"], state["neck1_price"], state["neck2_price"])
+            point_keys = ("top1", "top2", "top3", "neck1", "neck2")
+        else:
+            point_bars = (state["top1_bar"], state["top2_bar"], state["neckline_bar"])
+            point_prices = (state["top1_price"], state["top2_price"], state["neckline_price"])
+            point_keys = ("top1", "top2", "neckline")
+
         for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
-            # 山1/山2/ネックラインは、resolve/failedが実際に成立したバーでは
-            # なく、2つの山/谷が出揃った(formedした)瞬間のスナップショットで
-            # 固定して読む - formed後にネックラインの元になる安値/高値が
-            # 更に更新され得るため(既存ロジックの正しい挙動)、決着バーの
-            # 時点で読むと「谷が2つ目の山より後」のような時系列が矛盾した
-            # 表示になり得る(実際に発生を確認)。
             f = formed_bar.iloc[i]
             if pd.isna(f):
                 continue
             f = int(f)
             if not (0 <= f < len(df)):
                 continue
-            b1, b2, b3 = top1_bar.iloc[f], top2_bar.iloc[f], neckline_bar.iloc[f]
-            if pd.isna(b1) or pd.isna(b2) or pd.isna(b3):
+            raw_bars = [b.iloc[f] for b in point_bars]
+            if any(pd.isna(b) for b in raw_bars):
                 continue
-            b1, b2, b3 = int(b1), int(b2), int(b3)
-            if not (0 <= b1 < len(df) and 0 <= b2 < len(df) and 0 <= b3 < len(df)):
+            bars = [int(b) for b in raw_bars]
+            if not all(0 <= b < len(df) for b in bars):
                 continue
-            events.append(
-                {
-                    "indicator": indicator,
-                    "kind": kind,
-                    "event_time": times.iloc[i].isoformat(),
-                    "top1_time": times.iloc[b1].isoformat(),
-                    "top1_price": float(top1_price.iloc[f]),
-                    "top2_time": times.iloc[b2].isoformat(),
-                    "top2_price": float(top2_price.iloc[f]),
-                    "neckline_time": times.iloc[b3].isoformat(),
-                    "neckline_price": float(neckline_price.iloc[f]),
-                }
-            )
+            event = {
+                "indicator": indicator,
+                "kind": kind,
+                "event_time": times.iloc[i].isoformat(),
+            }
+            for key, bar, price in zip(point_keys, bars, point_prices):
+                event[f"{key}_time"] = times.iloc[bar].isoformat()
+                event[f"{key}_price"] = float(price.iloc[f])
+            events.append(event)
     return events
 
 

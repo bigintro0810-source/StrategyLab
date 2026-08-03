@@ -180,8 +180,17 @@ export interface PatternMarkerEvent {
   top2_price: number
   // ネックライン(2つの山/谷の間の谷/山) - パターン成立・ブレイク判定の
   // 基準ラインになる第3の点(ユーザー指摘:「谷も条件に必要でしょ」)。
-  neckline_time: string
-  neckline_price: number
+  // double_top_shape/double_bottom_shapeのみ。
+  neckline_time?: string
+  neckline_price?: number
+  // triple_top_shape/triple_bottom_shapeのみ(2026-08-01) - 山/谷が3つ・
+  // ネックが2つになるため、neckline_*の代わりにこちらを使う。
+  top3_time?: string
+  top3_price?: number
+  neck1_time?: string
+  neck1_price?: number
+  neck2_time?: string
+  neck2_price?: number
 }
 
 export async function fetchStrategyPatternMarkers(

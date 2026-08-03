@@ -791,6 +791,8 @@ INDICATOR_REGISTRY.update({
 INDICATOR_REGISTRY.update({
     "double_top_shape": lambda df, **p: _chart.double_top_shape(df["high"], df["low"], df["close"], **p),
     "double_bottom_shape": lambda df, **p: _chart.double_bottom_shape(df["high"], df["low"], df["close"], **p),
+    "triple_top_shape": lambda df, **p: _chart.triple_top_shape(df["high"], df["low"], df["close"], **p),
+    "triple_bottom_shape": lambda df, **p: _chart.triple_bottom_shape(df["high"], df["low"], df["close"], **p),
     "triple_top_breakdown": lambda df, **p: _chart.triple_top_breakdown(df["high"], df["low"], df["close"], **p),
     "triple_bottom_breakout": lambda df, **p: _chart.triple_bottom_breakout(df["high"], df["low"], df["close"], **p),
     "head_and_shoulders_breakdown": lambda df, **p: _chart.head_and_shoulders_breakdown(df["high"], df["low"], df["close"], **p),

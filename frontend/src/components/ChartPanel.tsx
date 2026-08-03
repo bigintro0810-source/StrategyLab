@@ -346,44 +346,45 @@ export default function ChartPanel({
 
     const patternMarkerPoints =
       showPatternMarkers && patternMarkers
-        ? patternMarkers.flatMap((e) => [
-            {
-              time: toChartTime(e.top1_time),
-              position: (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const,
-              color: '#ff17d1',
-              shape: 'circle' as const,
-              text: e.kind === 'top' ? '山1' : '谷1',
-            },
-            {
-              time: toChartTime(e.top2_time),
-              position: (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const,
-              color: '#ff17d1',
-              shape: 'circle' as const,
-              text: e.kind === 'top' ? '山2' : '谷2',
-            },
-            // ネックライン(2つの山/谷の間の谷/山) - 山側パターンなら谷なので
-            // belowBar、谷側パターンなら山なのでaboveBar(山/谷マーカーとは
-            // 逆側)。ユーザー指摘:「ネックラインは谷がないとわからない
-            // よね?谷も条件に必要でしょ」への対応。
-            {
-              time: toChartTime(e.neckline_time),
-              position: (e.kind === 'top' ? 'belowBar' : 'aboveBar') as const,
-              color: '#f59e0b',
-              shape: 'circle' as const,
-              text: 'ネック',
-            },
-          ])
+        ? patternMarkers.flatMap((e) => {
+            const extremeLabel = (n: number) => (e.kind === 'top' ? `山${n}` : `谷${n}`)
+            const extremePos = (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const
+            const neckPos = (e.kind === 'top' ? 'belowBar' : 'aboveBar') as const
+            // triple_top_shape/triple_bottom_shapeは山/谷が3つ・ネックが2つ
+            // (2026-08-01) - top3_timeの有無で判定する。
+            const isTriple = e.top3_time !== undefined && e.neck1_time !== undefined && e.neck2_time !== undefined
+            if (isTriple) {
+              return [
+                { time: toChartTime(e.top1_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(1) },
+                { time: toChartTime(e.neck1_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック1' },
+                { time: toChartTime(e.top2_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(2) },
+                { time: toChartTime(e.neck2_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック2' },
+                { time: toChartTime(e.top3_time!), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(3) },
+              ]
+            }
+            return [
+              { time: toChartTime(e.top1_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(1) },
+              { time: toChartTime(e.top2_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(2) },
+              // ネックライン(2つの山/谷の間の谷/山) - 山側パターンなら谷なので
+              // belowBar、谷側パターンなら山なのでaboveBar(山/谷マーカーとは
+              // 逆側)。ユーザー指摘:「ネックラインは谷がないとわからない
+              // よね?谷も条件に必要でしょ」への対応。
+              { time: toChartTime(e.neckline_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック' },
+            ]
+          })
         : []
 
-    // 2つの山/谷とネックラインの関係を一目で追えるよう、ネックラインの
-    // 実際の価格水準を、ネック確定バーからパターン成立/決着バーまでの
-    // 破線でつなぐ(単なる印だけだと「このライン基準で判定した」がチャート
-    // から読み取りにくいため)。
+    // 山/谷とネックラインの関係を一目で追えるよう、ネックラインの実際の
+    // 価格水準を、ネック確定バーからパターン成立/決着バーまでの破線で
+    // つなぐ(単なる印だけだと「このライン基準で判定した」がチャートから
+    // 読み取りにくいため)。トリプル版はネックが2つあるので、ネック1は
+    // ネック2確定バーまで、ネック2はパターン成立/決着バーまでの2本に
+    // 分けて引く。
     if (showPatternMarkers && patternMarkers) {
-      for (const e of patternMarkers) {
-        const neckTime = toChartTime(e.neckline_time)
-        const endTime = toChartTime(e.event_time)
-        if (endTime <= neckTime) continue
+      const drawNeckline = (start: string, end: string, price: number) => {
+        const startTime = toChartTime(start)
+        const endTime = toChartTime(end)
+        if (endTime <= startTime) return
         const necklineSeries = chart.addSeries(LineSeries, {
           color: '#f59e0b',
           lineWidth: 1,
@@ -392,9 +393,18 @@ export default function ChartPanel({
           lastValueVisible: false,
         })
         necklineSeries.setData([
-          { time: neckTime, value: e.neckline_price },
-          { time: endTime, value: e.neckline_price },
+          { time: startTime, value: price },
+          { time: endTime, value: price },
         ])
+      }
+      for (const e of patternMarkers) {
+        const isTriple = e.top3_time !== undefined && e.neck1_time !== undefined && e.neck2_time !== undefined
+        if (isTriple) {
+          drawNeckline(e.neck1_time!, e.neck2_time!, e.neck1_price!)
+          drawNeckline(e.neck2_time!, e.event_time, e.neck2_price!)
+        } else {
+          drawNeckline(e.neckline_time!, e.event_time, e.neckline_price!)
+        }
       }
     }
 

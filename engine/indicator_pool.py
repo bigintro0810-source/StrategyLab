@@ -904,6 +904,16 @@ INDICATOR_POOL.extend([
         param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
     IndicatorSpec(
+        "triple_top_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
+    ),
+    IndicatorSpec(
+        "triple_bottom_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
+    ),
+    IndicatorSpec(
         "triple_top_breakdown", "boolean_signal", literal_choices=[1.0],
         param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.3, 0.5, 0.75, 1.0]},
     ),
