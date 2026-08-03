@@ -99,6 +99,14 @@ def analyze_param_sensitivity(
     is_intraday: bool,
 ) -> pd.DataFrame:
     rows = []
+    # Every run_backtest call below shares this same `df` for the whole
+    # function (unlike walk_forward.py's per-window slices), so it's safe to
+    # keep one indicator_cache dict alive across the whole loop - see
+    # engine/conditions.py::evaluate_condition_tree's docstring for the exact
+    # same-df contract this relies on. Lets indicator arrays (ema, rsi, ...)
+    # be reused across the many parameter variants that don't actually
+    # change which indicators get computed.
+    indicator_cache: dict = {}
 
     for key, values in param_space.items():
         if len(values) <= 1:
@@ -113,6 +121,7 @@ def analyze_param_sensitivity(
                 params=variant_params,
                 return_trades=False,
                 is_intraday=is_intraday,
+                indicator_cache=indicator_cache,
             )
 
             rows.append(

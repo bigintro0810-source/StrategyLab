@@ -36,6 +36,19 @@ MAX_WORKERS = max((os.cpu_count() or 16) // 2, 1)
 
 _WORKER_DF = None
 _WORKER_IS_INTRADAY = True
+# Same pattern/safety contract as main.py's _WORKER_INDICATOR_CACHE (see
+# that file's comment above its own copy for the full reasoning): each call
+# to run_optimization() below creates a brand-new ProcessPoolExecutor whose
+# workers are initialized (via init_worker) with exactly one window's
+# train_df for that pool's entire lifetime, so every run_one() task a given
+# worker ever executes shares the same df - safe to keep an indicator cache
+# alive across those tasks per engine/conditions.py::evaluate_condition_tree's
+# docstring. This does NOT contradict that docstring's warning about
+# walk_forward.py specifically: the warning is about NOT sharing a cache
+# across DIFFERENT windows' dfs in the same process, and it isn't - each
+# window gets a fresh executor, so a fresh worker process, so a fresh (empty)
+# copy of this global, exactly like main.py's worker model.
+_WORKER_INDICATOR_CACHE: dict = {}
 
 
 def build_windows() -> list[dict]:
@@ -73,6 +86,11 @@ def init_worker(df: pd.DataFrame) -> None:
     global _WORKER_DF, _WORKER_IS_INTRADAY
     _WORKER_DF = df
     _WORKER_IS_INTRADAY = compute_is_intraday(df["datetime"])
+    # See main.py's init_worker for why this clear() matters even though a
+    # fresh process normally means a fresh empty dict already - defends
+    # against any future caller that invokes init_worker more than once
+    # in the same process (e.g. direct/test usage) with a different df.
+    _WORKER_INDICATOR_CACHE.clear()
 
 
 def run_one(task: tuple[int, dict]) -> dict:
@@ -88,6 +106,7 @@ def run_one(task: tuple[int, dict]) -> dict:
         params=params,
         return_trades=False,
         is_intraday=_WORKER_IS_INTRADAY,
+        indicator_cache=_WORKER_INDICATOR_CACHE,
     )
 
     result["param_id"] = param_id
