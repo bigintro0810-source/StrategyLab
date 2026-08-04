@@ -61,7 +61,7 @@ export default function IndicatorPicker({ indicators, value, onSelect, className
     return (
       <div className={className}>
         <select
-          className="glass-input rounded-lg px-2 py-1"
+          className="glass-input glass-select rounded-lg py-0.5 pl-2"
           value=""
           onChange={(e) => {
             const key = e.target.value as ConditionGenreKey
@@ -94,14 +94,20 @@ export default function IndicatorPicker({ indicators, value, onSelect, className
     const subGenreItemsMap = buildSubGenreItemsMap(genreItems)
     return (
       <div className={className}>
-        <div className="mb-1 text-[11px] text-blue-300">
+        {/* mb-0.5 + leading-none: 他のボックスのラベル→入力欄の間隔
+            (LabeledFieldのgap-0.5 + text-[9px] leading-none)と揃える
+            (ユーザー報告:「チャートパターンっていう文字の隙間をそのほかの
+            ボックスと同じにして」→「同じになった？もう少し下じゃない？」
+            - mb-0.5だけではdiv自体の行の高さ(line-height)分の余白が文字の
+            下に残ったままだったため、leading-noneも追加してその分も詰める)。 */}
+        <div className="mb-0.5 text-[11px] leading-none text-blue-300">
           <button type="button" className="hover:underline" onClick={goToGenreLevel}>
             インジケーター
           </button>
           {' ▸ '}
         </div>
         <select
-          className="glass-input rounded-lg px-2 py-1"
+          className="glass-input glass-select rounded-lg py-0.5 pl-2"
           value=""
           onChange={(e) => {
             const key = e.target.value as IndicatorSubGenreKey
@@ -146,7 +152,13 @@ export default function IndicatorPicker({ indicators, value, onSelect, className
 
   return (
     <div className={className}>
-      <div className="mb-1 flex items-center gap-1 text-[11px] text-blue-300">
+      {/* mb-0.5 + leading-none: 他のボックスのラベル→入力欄の間隔
+          (LabeledFieldのgap-0.5 + text-[9px] leading-none)と揃える
+          (ユーザー報告:「チャートパターンっていう文字の隙間をそのほかの
+          ボックスと同じにして」→「同じになった？もう少し下じゃない？」
+          - mb-0.5だけではdiv自体の行の高さ(line-height)分の余白が文字の
+          下に残ったままだったため、leading-noneも追加してその分も詰める)。 */}
+      <div className="mb-0.5 flex items-center gap-1 text-[11px] leading-none text-blue-300">
         <button type="button" className="hover:underline" onClick={goToGenreLevel}>
           {genreLabel}
         </button>
@@ -159,7 +171,21 @@ export default function IndicatorPicker({ indicators, value, onSelect, className
           </>
         )}
       </div>
-      <select className="glass-input rounded-lg px-2 py-1" value={value} onChange={(e) => onSelect(e.target.value)}>
+      {/* 指標名(ダブルトップ等)が長いと、幅を決めずに置くと親のflex-wrap行
+          いっぱいまで伸びたり、逆に狭い時は文字とネイティブ矢印の間に余白が
+          目立ったりしていた(ユーザー報告:「チャートパターン名のボックスも
+          …と矢印の間に空白が目立つ」)。state等のパラメータ欄と同じ
+          glass-select(自前の矢印アイコン)+truncateで、幅を固定して統一する。 */}
+      <select
+        // text-xsを外し、数値入力欄と同じtext-sm継承にして高さを揃える
+        // (ユーザー報告:「文字のボックスは数字のボックスよりも高さが少し
+        // 低い」)。幅は元の280px(280÷280=1倍)から0.8倍の224pxに変更
+        // (ユーザー要望:「チャートパターンのボックスを0.8倍にして」)。
+        className="glass-input glass-select w-28 truncate rounded-lg py-0.5 pl-2"
+        style={{ width: '224px' }}
+        value={value}
+        onChange={(e) => onSelect(e.target.value)}
+      >
         {items.map((ind) => (
           <option key={ind.id} value={ind.id}>
             {ind.label}

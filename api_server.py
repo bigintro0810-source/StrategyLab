@@ -1314,14 +1314,14 @@ _SHAPE_BREAKOUT_TYPE_CHOICES = [
 # 共有する(パラメータの意味自体は左右対称なので、ラベル文言だけ「山/谷」
 # を入れ替える)。
 _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
-    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings"},
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
     {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "谷1・谷2・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷1→ネック・ネック→谷2の本数(上限0=無制限)", "default_min": 5, "default_max": 500, "value_type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷1→ネック・ネック→谷2の本数(上限0=無制限)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
     {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→谷2の本数(谷1→ネックの本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "谷2→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "谷2→ブレイクの本数上限(谷1→ネックの本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
@@ -1343,14 +1343,14 @@ _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
 # 「谷の最低深さ」はネックラインの谷型を指す語なので、ダブルトップ側でも
 # 「谷」のまま不変)。
 _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
-    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings"},
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
     {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "山1・山2・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山1→ネック・ネック→山2の本数(上限0=無制限)", "default_min": 5, "default_max": 500, "value_type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山1→ネック・ネック→山2の本数(上限0=無制限)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
     {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→山2の本数(山1→ネックの本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "山2→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "山2→ブレイクの本数上限(山1→ネックの本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
@@ -1374,14 +1374,14 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
 # 系の判定基準を2つのレッグ両方に適用する設計)で、neckline_tolerance_pct
 # だけ新規(ネック1・ネック2自体の水準が近いかの任意チェック)。
 _TRIPLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
-    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings"},
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷2→ネック2の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
     {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "谷1・谷2・谷3・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷→ネック・ネック→次の谷の本数(全レッグ共通、上限0=無制限)", "default_min": 5, "default_max": 500, "value_type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷→ネック・ネック→次の谷の本数(全レッグ共通、上限0=無制限)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
     {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→次の谷の本数(直前区間の本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "谷3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "谷3→ブレイクの本数上限(谷2→ネック2の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
@@ -1403,14 +1403,14 @@ _TRIPLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
 # 文言だけ「山/谷」を手書きで入れ替え、ダブルトップ側の慣習に合わせて
 # 「谷」の深さ系の語はそのまま不変)。
 _TRIPLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
-    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES},
-    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings"},
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(山2→ネック2の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
     {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "山1・山2・山3・ネックの値幅基準(ATR倍率、0=無効)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山→ネック・ネック→次の山の本数(全レッグ共通、上限0=無制限)", "default_min": 5, "default_max": 500, "value_type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山→ネック・ネック→次の山の本数(全レッグ共通、上限0=無制限)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
     {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→次の山の本数(直前区間の本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "山3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "山3→ブレイクの本数上限(山2→ネック2の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},

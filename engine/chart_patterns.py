@@ -1143,6 +1143,20 @@ def _shape_neckline_intact(high_a, low_a, neck_bar, next_top_bar, neckline_price
     return True
 
 
+# max_bars_between_tops<=0(ユーザー入力上は「無制限」)を文字通り無制限
+# スキャンにすると、強いトレンドが続く銘柄(例: ゴールド)でネックの「より
+# 良い方」更新が延々と連鎖し、山1ごとにネックイベント全件近くを走査する
+# O(ピボット数の2乗)的な劣化が起きる(2026-08-04、ユーザー報告: 「無制限
+# にしたらゴールドとかのバックテストで異常に時間かかった」→デフォルトを
+# 500にして回避していたが、「500は実質無制限のつもりで設定してるから、
+# 本当は0にしたい」との要望)。3000本(15分足で約1か月)を超えて離れた
+# 山1→山2はどのみちダブル/トリプルトップとして意味を持たないため、
+# 「無制限」指定時もこの上限だけは内部的にかけてスキャンを打ち切る -
+# ユーザーが指定できる実用的な範囲では気づかれない上限でありながら、
+# 病的に長いトレンド区間での暴走を防ぐ。
+_MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP = 3000
+
+
 @njit(cache=True)
 def _shape_state_core(
     high_a, low_a, close_a, atr_a,
@@ -1180,6 +1194,11 @@ def _shape_state_core(
     # 値でも「早すぎ判定」がそのまま機能する。よってクランプ自体が不要に
     # なった(ユーザー判断2026-08-04)。
     effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
+    # max_bars_between_tops<=0(無制限)でも、_MAX_BARS_BETWEEN_TOPS_
+    # UNLIMITED_CAP(モジュール冒頭のコメント参照)だけは内部的にかける。
+    effective_max_bars_between_tops = (
+        max_bars_between_tops if max_bars_between_tops > 0 else _MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP
+    )
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1213,7 +1232,7 @@ def _shape_state_core(
         for ki in range(start_idx, n_neck):
             k = neck_events[ki]
             interval1_candidate = k - top1_true_bar
-            if max_bars_between_tops > 0 and interval1_candidate > max_bars_between_tops:
+            if interval1_candidate > effective_max_bars_between_tops:
                 break
             if interval1_candidate < min_bars_between_tops:
                 continue
@@ -1249,10 +1268,9 @@ def _shape_state_core(
             abs_win_start = neck_true_bar + min_bars_between_tops
             if abs_win_start > win_start:
                 win_start = abs_win_start
-            if max_bars_between_tops > 0:
-                abs_win_end = neck_true_bar + max_bars_between_tops
-                if abs_win_end < win_end:
-                    win_end = abs_win_end
+            abs_win_end = neck_true_bar + effective_max_bars_between_tops
+            if abs_win_end < win_end:
+                win_end = abs_win_end
             if win_end > n - 1:
                 win_end = n - 1
             if win_start > win_end:
@@ -1570,7 +1588,7 @@ def _double_top_bottom_shape_state(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
@@ -1779,7 +1797,7 @@ def double_bottom_shape(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
@@ -1898,6 +1916,11 @@ def _shape_state_core3(
     # は2026-08-04に撤去(谷3のスキャンをtrue_bar+1から始められるように
     # なったため、規定本数がどんな値でも「早すぎ判定」がそのまま機能する)。
     effective_breakout_deadline_min_bars = float(breakout_deadline_min_bars)
+    # max_bars_between_tops<=0(無制限)でも、_MAX_BARS_BETWEEN_TOPS_
+    # UNLIMITED_CAP(モジュール冒頭のコメント参照)だけは内部的にかける。
+    effective_max_bars_between_tops = (
+        max_bars_between_tops if max_bars_between_tops > 0 else _MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP
+    )
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1935,7 +1958,7 @@ def _shape_state_core3(
         for ki in range(start_idx, n_neck):
             k = neck_events[ki]
             interval1_candidate = k - top1_true_bar
-            if max_bars_between_tops > 0 and interval1_candidate > max_bars_between_tops:
+            if interval1_candidate > effective_max_bars_between_tops:
                 break
             if interval1_candidate < min_bars_between_tops:
                 continue
@@ -1969,10 +1992,9 @@ def _shape_state_core3(
             abs_win_start = neck1_true_bar + min_bars_between_tops
             if abs_win_start > win_start:
                 win_start = abs_win_start
-            if max_bars_between_tops > 0:
-                abs_win_end = neck1_true_bar + max_bars_between_tops
-                if abs_win_end < win_end:
-                    win_end = abs_win_end
+            abs_win_end = neck1_true_bar + effective_max_bars_between_tops
+            if abs_win_end < win_end:
+                win_end = abs_win_end
             if win_end > n - 1:
                 win_end = n - 1
             if win_start > win_end:
@@ -2084,7 +2106,7 @@ def _shape_state_core3(
             for ki2 in range(start_idx2, n_neck):
                 k2 = neck_events[ki2]
                 interval2n_candidate = k2 - top2_true_bar
-                if max_bars_between_tops > 0 and interval2n_candidate > max_bars_between_tops:
+                if interval2n_candidate > effective_max_bars_between_tops:
                     break
                 if interval2n_candidate < min_bars_between_tops:
                     continue
@@ -2127,10 +2149,9 @@ def _shape_state_core3(
                 abs_win_start2 = neck2_true_bar + min_bars_between_tops
                 if abs_win_start2 > win_start2:
                     win_start2 = abs_win_start2
-                if max_bars_between_tops > 0:
-                    abs_win_end2 = neck2_true_bar + max_bars_between_tops
-                    if abs_win_end2 < win_end2:
-                        win_end2 = abs_win_end2
+                abs_win_end2 = neck2_true_bar + effective_max_bars_between_tops
+                if abs_win_end2 < win_end2:
+                    win_end2 = abs_win_end2
                 if win_end2 > n - 1:
                     win_end2 = n - 1
                 if win_start2 > win_end2:
@@ -2435,7 +2456,7 @@ def _triple_top_bottom_shape_state(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
@@ -2603,7 +2624,7 @@ def triple_bottom_shape(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
@@ -2674,7 +2695,7 @@ def triple_top_shape(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",
@@ -2742,7 +2763,7 @@ def double_top_shape(
     pivot_spike_excess_atr_max: float = 1.3,
     pivot_spike_window_ratio: float = 0.5,
     min_bars_between_tops: int = 5,
-    max_bars_between_tops: int = 500,
+    max_bars_between_tops: int = 0,
     symmetry_ratio_min: float = 0.3,
     symmetry_ratio_max: float = 3.33,
     top_tolerance_basis: str = "price_pct",

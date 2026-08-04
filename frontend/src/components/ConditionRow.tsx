@@ -120,7 +120,7 @@ function OffsetField({
     <>
       <LabeledField label="オフセット種別">
         <select
-          className="glass-input rounded-lg px-1 py-1 text-xs"
+          className="glass-input rounded-lg px-1 py-0.5"
           value={effectiveMode}
           onChange={(e) => onModeChange(e.target.value as OffsetMode)}
         >
@@ -147,7 +147,7 @@ function OffsetField({
           // number入力のネイティブ上下スピナーと重なっていた - ユーザー報告:
           // 「オフセットの±Pipsのsとプルダウンのマークがかぶってっる」)。
           placeholder="±"
-          className="w-16 glass-input rounded-lg px-2 py-1"
+          className="w-16 glass-input rounded-lg px-2 py-0.5"
           value={amount ?? ''}
           onChange={(e) => onAmountChange(e.target.value === '' ? undefined : Number(e.target.value))}
         />
@@ -157,7 +157,7 @@ function OffsetField({
           <input
             type="number"
             step="1"
-            className="w-14 glass-input rounded-lg px-2 py-1"
+            className="w-14 glass-input rounded-lg px-2 py-0.5"
             value={atrLength ?? 14}
             onChange={(e) => onAtrLengthChange(e.target.value === '' ? undefined : Number(e.target.value))}
           />
@@ -426,7 +426,7 @@ export function ParamField({
             type="number"
             step={spec.value_type === 'float' ? '0.1' : '1'}
             title={`${spec.label}(下限)`}
-            className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+            className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_min!] ?? spec.default_min}
             onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
             onBlur={onBlur}
@@ -436,7 +436,7 @@ export function ParamField({
             type="number"
             step={spec.value_type === 'float' ? '0.1' : '1'}
             title={`${spec.label}(上限)`}
-            className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+            className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_max!] ?? spec.default_max}
             onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
             onBlur={onBlur}
@@ -445,7 +445,7 @@ export function ParamField({
       ) : spec.type === 'choice' ? (
         <select
           title={spec.label}
-          className="glass-input w-20 rounded-lg px-2 py-1 text-xs"
+          className="glass-input glass-select w-16 rounded-lg py-0.5 pl-2"
           value={params[spec.name!] ?? spec.default}
           onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
           onBlur={onBlur}
@@ -466,10 +466,19 @@ export function ParamField({
           title={spec.label}
           // 選択中の文字列が長いと、ネイティブのプルダウン矢印と重なって
           // 見えていた(ユーザー報告:「状態のボックス内の文字とプル
-          // ダウンの矢印がかぶってる」)。ボックス幅(w-24)は変えず、矢印
-          // 分の余白をpr-5で確保し、収まらない文字はtruncateで省略する
-          // (ユーザー了承:「文字は今と同じで途中で切れてていい」)。
-          className="glass-input w-24 truncate rounded-lg py-1 pl-2 pr-5 text-xs"
+          // ダウンの矢印がかぶってる」)。既定幅(w-28)はspec.width(生の
+          // CSS長さ値)でstyle経由で個別に上書きできる(ユーザー要望:
+          // 「状態のボックスサイズを1.5倍、ブレイク判定基準のボックスを
+          // 1.3倍にして」- 同じstring_choice typeでもパラメータごとに違う
+          // 倍率が要る)。Tailwindのクラス名では実現できない(APIから届く
+          // 実行時の値はビルド時静的解析で検出されない)ためstyleを使う。
+          // 収まらない文字はtruncateで省略する(ユーザー了承:「文字は今と
+          // 同じで途中で切れてていい」)。text-xsを外しているのは、number
+          // input側(サイズ指定なし=text-sm継承)と文字サイズを揃えて高さを
+          // 一致させるため(ユーザー報告:「文字のボックスは数字のボックス
+          // よりも高さが少し低い」)。
+          className="glass-input glass-select w-28 truncate rounded-lg py-0.5 pl-2"
+          style={spec.width ? { width: spec.width } : undefined}
           value={params[spec.name!] ?? spec.default}
           onChange={(e) => onChange({ ...params, [spec.name!]: e.target.value })}
           onBlur={onBlur}
@@ -486,7 +495,7 @@ export function ParamField({
           step={spec.type === 'float' ? '0.1' : '1'}
           title={paramTooltip(spec)}
           placeholder={spec.label}
-          className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+          className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
           value={params[spec.name!] ?? spec.default}
           onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
           onBlur={onBlur}
@@ -792,7 +801,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
 
           <LabeledField label="時間足">
             <select
-              className="glass-input rounded-lg px-1 py-1 text-xs"
+              className="glass-input rounded-lg px-1 py-0.5"
               title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
               value={node.timeframe ?? ''}
               onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
@@ -833,14 +842,14 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
 
       {fixedLiteralValue !== null ? (
         /* 「陽線」等、比較できる値が「一致(==) 1.0」の1通りしかあり得ない
-           指標は、方向/比較先のボックスごと表示せず代わりにこの説明文だけ
-           出す(ユーザー報告:「陽線の時比較先出す必要あるの?」- 選ぶ余地が
-           無いものをドロップダウン+数値入力で見せるのはかえって紛らわしい
-           ため)。SuperTrend方向等、比較先の値が複数あり得る指標は下の
-           通常表示のまま。 */
-        <div className="flex items-center rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1 text-xs text-blue-100">
-          この指標が発生したことを判定します(常に「一致 = {fixedLiteralValue}」)
-        </div>
+           指標は、方向/比較先のボックスごと表示しない(ユーザー報告:「陽線の
+           時比較先出す必要あるの?」- 選ぶ余地が無いものをドロップダウン+
+           数値入力で見せるのはかえって紛らわしいため)。以前はここに説明文
+           だけ出していたが、ユーザー判断でそれも無しにした(2026-08-04:
+           「この指標が発生したことを判定します」の表示要否を訊かれ→「3で」
+           = 完全非表示を選択)。SuperTrend方向等、比較先の値が複数あり得る
+           指標は下の通常表示のまま。 */
+        <></>
       ) : (
         <>
           {/* 方向(演算子: ＜/＞/一致など) - 画面上の並び「比較元 方向 比較先」
@@ -852,7 +861,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           <div className="flex items-center rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
             <span className="mr-2 rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">方向</span>
             <select
-              className="glass-input rounded-lg px-2 py-1"
+              className="glass-input rounded-lg px-2 py-0.5"
               value={node.operator}
               onChange={(e) => onChange({ ...node, operator: e.target.value as Operator })}
             >
@@ -868,7 +877,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           <div className="flex flex-wrap items-end gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
             <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較先</span>
             <select
-              className="glass-input rounded-lg px-2 py-1"
+              className="glass-input rounded-lg px-2 py-0.5"
               value={compareMode}
               onChange={(e) => {
                 if (e.target.value === 'literal') {
@@ -904,7 +913,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                 {lockedLiteralValue === null && info?.kind && PIP_OFFSET_KINDS.has(info.kind) && (
                   <LabeledField label="固定値の種類">
                     <select
-                      className="glass-input rounded-lg px-1 py-1 text-xs"
+                      className="glass-input rounded-lg px-1 py-0.5"
                       value={normalizedLiteralMode(node.literal_mode, info.kind) ?? 'value'}
                       onChange={(e) => {
                         const mode = e.target.value as LiteralMode
@@ -924,7 +933,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                 <LabeledField label={literalUnitLabel(info, node.literal_mode)}>
                   <input
                     type="number"
-                    className="w-20 glass-input rounded-lg px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-20 glass-input rounded-lg px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-60"
                     title={
                       lockedLiteralValue !== null
                         ? `この指標は${lockedLiteralValue}との比較だけが銘柄をまたいで意味を持つため、値は固定されています`
@@ -976,7 +985,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                     <input
                       type="number"
                       step="1"
-                      className="w-14 glass-input rounded-lg px-2 py-1"
+                      className="w-14 glass-input rounded-lg px-2 py-0.5"
                       value={node.literal_atr_length ?? 14}
                       onChange={(e) =>
                         onChange({
@@ -1025,7 +1034,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
 
                   <LabeledField label="時間足">
                     <select
-                      className="glass-input rounded-lg px-1 py-1 text-xs"
+                      className="glass-input rounded-lg px-1 py-0.5"
                       title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
                       value={node.value_timeframe ?? ''}
                       onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}

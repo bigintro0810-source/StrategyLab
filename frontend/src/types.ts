@@ -125,6 +125,14 @@ export interface IndicatorParamSpec {
   // 「山1→ネック・ネック→山2」の3つは別の1行、というように区間ごとに
   // まとめる)。未設定なら従来通り親のflex-wrapに任せて自然に詰める。
   group?: string
+  // 入力欄の幅を生のCSS長さ値(例: "168px")で個別に上書きする(ユーザー
+  // 要望:「状態のボックスサイズを1.5倍、ブレイク判定基準のボックスを
+  // 1.3倍にして」- どちらも同じtype(string_choice)を共有しているため、
+  // typeごとの既定幅だけでは個別に指定できない)。APIから届く実行時の値
+  // なのでTailwindのw-[...]クラス名では効かない(ビルド時の静的解析で
+  // 検出されずCSSが生成されない) - ParamField側でstyle={{width}}として
+  // 適用する。未設定なら各typeの既定幅(ParamField参照)を使う。
+  width?: string
 }
 
 export interface IndicatorInfo {
