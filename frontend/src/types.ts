@@ -119,6 +119,12 @@ export interface IndicatorParamSpec {
   // できるようにして」→EMA本数を可変にしつつ、選んでいない分のEMA欄まで
   // 常時表示すると紛らわしいための対応)。
   show_if?: { param: string; min: number }
+  // 同じgroup文字列を持つ連続したパラメータ同士を1行にまとめて表示する
+  // (ユーザー要望:「【】でくくったものを1行にまとめて、そのほかは今まで
+  // 通り」- 例: ダブルトップの「山1前→山1」の効率比/直線乖離の2つは1行、
+  // 「山1→ネック・ネック→山2」の3つは別の1行、というように区間ごとに
+  // まとめる)。未設定なら従来通り親のflex-wrapに任せて自然に詰める。
+  group?: string
 }
 
 export interface IndicatorInfo {

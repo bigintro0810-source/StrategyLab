@@ -76,7 +76,11 @@ const TIMEFRAME_OPTIONS = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d', '1
 // の上に常時ラベルを出すことで、ホバーしなくても常に分かるようにする。
 function LabeledField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col items-start gap-0.5">
+    // flex-shrink-0: グループまとめ表示(下のParamInputs参照)でflex-nowrap
+    // の行に複数欄を並べた時、幅が足りないからと入力欄側が潰れて縮むのを
+    // 防ぐ(潰れると数値が見えなくなる) - 足りない分は行ごと横スクロール
+    // で見せる。
+    <div className="flex flex-shrink-0 flex-col items-start gap-0.5">
       <span className="px-0.5 text-[9px] leading-none text-gray-400">{label}</span>
       {children}
     </div>
@@ -394,6 +398,104 @@ function paramTooltip(spec: IndicatorParamSpec): string {
 // fast/slow/signal, stochastic's 3 periods, ichimoku's 3 periods, fib's
 // ratio) silently kept their Python-side default for every param past the
 // first.
+// 1つのパラメータ欄(ラベル+入力)を描画する。ParamInputs内のグループ
+// まとめ表示・単独表示に加えて、ConditionRow側で"state"パラメータだけを
+// 比較元/比較先バッジのすぐ隣(ヘッダー行)に単独で出す時にも使う(ユーザー
+// 要望:「【比較元、チャートパターン、状態、時間足】」を1行にまとめて」)。
+export function ParamField({
+  spec,
+  params,
+  onChange,
+  onBlur,
+}: {
+  spec: IndicatorParamSpec
+  params: ConditionParams
+  onChange: (next: ConditionParams) => void
+  onBlur?: () => void
+}) {
+  return (
+    <LabeledField label={spec.label}>
+      {spec.type === 'range' ? (
+        // 下限〜上限のペア(例: 探索窓の倍率)を1つのラベルの下に
+        // "[下限] 〜 [上限]" の2欄で表示する(ユーザー要望:「下限倍率と
+        // 上限倍率合わせて記載する」)。name_min/name_maxは別々の
+        // パラメータ名としてparamsに保存する(裏の値としては従来通り
+        // 2つのまま、見た目だけまとめる)。
+        <span className="flex items-center gap-1">
+          <input
+            type="number"
+            step={spec.value_type === 'float' ? '0.1' : '1'}
+            title={`${spec.label}(下限)`}
+            className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+            value={params[spec.name_min!] ?? spec.default_min}
+            onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
+            onBlur={onBlur}
+          />
+          <span className="text-gray-400">〜</span>
+          <input
+            type="number"
+            step={spec.value_type === 'float' ? '0.1' : '1'}
+            title={`${spec.label}(上限)`}
+            className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+            value={params[spec.name_max!] ?? spec.default_max}
+            onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
+            onBlur={onBlur}
+          />
+        </span>
+      ) : spec.type === 'choice' ? (
+        <select
+          title={spec.label}
+          className="glass-input w-20 rounded-lg px-2 py-1 text-xs"
+          value={params[spec.name!] ?? spec.default}
+          onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
+          onBlur={onBlur}
+        >
+          {/* ラベルは上のLabeledFieldに既に出ているので、選択肢には値だけ
+              表示する(以前は"{spec.label}:{choice}"と重複表示していて、
+              "EMA本数:3"のような長い文字列がw-20の枠に収まらずネイティブ
+              の▼マークと重なっていた - ユーザー報告:「EMA本数の文字と
+              プルダウンのマークがかぶってる」)。 */}
+          {(spec.choices ?? []).map((choice) => (
+            <option key={choice} value={choice}>
+              {choice}
+            </option>
+          ))}
+        </select>
+      ) : spec.type === 'string_choice' ? (
+        <select
+          title={spec.label}
+          // 選択中の文字列が長いと、ネイティブのプルダウン矢印と重なって
+          // 見えていた(ユーザー報告:「状態のボックス内の文字とプル
+          // ダウンの矢印がかぶってる」)。ボックス幅(w-24)は変えず、矢印
+          // 分の余白をpr-5で確保し、収まらない文字はtruncateで省略する
+          // (ユーザー了承:「文字は今と同じで途中で切れてていい」)。
+          className="glass-input w-24 truncate rounded-lg py-1 pl-2 pr-5 text-xs"
+          value={params[spec.name!] ?? spec.default}
+          onChange={(e) => onChange({ ...params, [spec.name!]: e.target.value })}
+          onBlur={onBlur}
+        >
+          {(spec.string_choices ?? []).map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type="number"
+          step={spec.type === 'float' ? '0.1' : '1'}
+          title={paramTooltip(spec)}
+          placeholder={spec.label}
+          className="w-24 glass-input rounded-lg py-1 pl-2 pr-2"
+          value={params[spec.name!] ?? spec.default}
+          onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
+          onBlur={onBlur}
+        />
+      )}
+    </LabeledField>
+  )
+}
+
 export function ParamInputs({
   info,
   params,
@@ -415,102 +517,62 @@ export function ParamInputs({
   // ため(ユーザー要望:「パーフェクトオーダーは現在4本だけど3〜5本まで
   // 選択できるようにして」への対応)。制御元パラメータがまだparamsに
   // 無い(未変更でデフォルトのまま)場合は、そのパラメータ自身のデフォルト
-  // 値で判定する。
+  // 値で判定する。"state"はConditionRow側でヘッダー行に単独表示するため
+  // ここでは除外する(二重表示を防ぐ)。
   const visibleParams = info.params.filter((spec) => {
+    if (spec.name === 'state') return false
     if (!spec.show_if) return true
     const controllerSpec = info.params.find((s) => s.name === spec.show_if!.param)
     const controllerValue = Number(params[spec.show_if.param] ?? controllerSpec?.default ?? 0)
     return controllerValue >= spec.show_if.min
   })
 
+  // 同じspec.groupを持つ連続したパラメータを1つの塊(run)にまとめる
+  // (ユーザー要望:「【】でくくったものを1行にまとめて、そのほかは今まで
+  // 通り」)。groupが無いパラメータは従来通り単独のrunとして扱い、親の
+  // flex-wrapに任せて他の欄と自然に詰めて表示する。
+  type ParamRun = { group: string; specs: IndicatorParamSpec[] } | { group: null; spec: IndicatorParamSpec }
+  const runs: ParamRun[] = []
+  for (const spec of visibleParams) {
+    const prev = runs[runs.length - 1]
+    if (spec.group && prev && 'group' in prev && prev.group === spec.group) {
+      prev.specs.push(spec)
+    } else if (spec.group) {
+      runs.push({ group: spec.group, specs: [spec] })
+    } else {
+      runs.push({ group: null, spec })
+    }
+  }
+
   return (
     <>
-      {visibleParams.map((spec: IndicatorParamSpec) => (
-        // w-fullで親のflex-wrap行を強制改行させ、他のボックス(インジケーター
-        // 選択欄や他のパラメータ欄)と同じ行に並ばないようにする(ユーザー
-        // 要望:「UIでそれぞれ1行にして。他のボックスはその行に入れないで」)。
-        <div key={spec.name ?? `${spec.name_min}_${spec.name_max}`} className="w-full">
-        <LabeledField label={spec.label}>
-          {spec.type === 'range' ? (
-            // 下限〜上限のペア(例: 探索窓の倍率)を1つのラベルの下に
-            // "[下限] 〜 [上限]" の2欄で表示する(ユーザー要望:「下限倍率と
-            // 上限倍率合わせて記載する」)。name_min/name_maxは別々の
-            // パラメータ名としてparamsに保存する(裏の値としては従来通り
-            // 2つのまま、見た目だけまとめる)。
-            <span className="flex items-center gap-1">
-              <input
-                type="number"
-                step={spec.value_type === 'float' ? '0.1' : '1'}
-                title={`${spec.label}(下限)`}
-                className="w-24 glass-input rounded-lg py-1 pl-2 pr-5"
-                value={params[spec.name_min!] ?? spec.default_min}
-                onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
+      {runs.map((run) =>
+        run.group === null ? (
+          <ParamField
+            key={run.spec.name ?? `${run.spec.name_min}_${run.spec.name_max}`}
+            spec={run.spec}
+            params={params}
+            onChange={onChange}
+            onBlur={onBlur}
+          />
+        ) : (
+          // w-fullで親のflex-wrap行を強制改行させ、グループ内の欄同士だけを
+          // 1行にまとめる(他のボックスはこの行に入らない)。幅に収まらない
+          // 時は横スクロールではなく折り返す(ユーザー要望:「長くて1行に
+          // 入りきらない時は横スクロールじゃなくて改行でいい」)。
+          <div key={run.group} className="flex w-full flex-wrap items-end gap-2">
+            {run.specs.map((spec) => (
+              <ParamField
+                key={spec.name ?? `${spec.name_min}_${spec.name_max}`}
+                spec={spec}
+                params={params}
+                onChange={onChange}
                 onBlur={onBlur}
               />
-              <span className="text-gray-400">〜</span>
-              <input
-                type="number"
-                step={spec.value_type === 'float' ? '0.1' : '1'}
-                title={`${spec.label}(上限)`}
-                className="w-24 glass-input rounded-lg py-1 pl-2 pr-5"
-                value={params[spec.name_max!] ?? spec.default_max}
-                onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
-                onBlur={onBlur}
-              />
-            </span>
-          ) : spec.type === 'choice' ? (
-            <select
-              title={spec.label}
-              className="glass-input w-20 rounded-lg px-2 py-1 text-xs"
-              value={params[spec.name!] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
-              onBlur={onBlur}
-            >
-              {/* ラベルは上のLabeledFieldに既に出ているので、選択肢には値だけ
-                  表示する(以前は"{spec.label}:{choice}"と重複表示していて、
-                  "EMA本数:3"のような長い文字列がw-20の枠に収まらずネイティブ
-                  の▼マークと重なっていた - ユーザー報告:「EMA本数の文字と
-                  プルダウンのマークがかぶってる」)。 */}
-              {(spec.choices ?? []).map((choice) => (
-                <option key={choice} value={choice}>
-                  {choice}
-                </option>
-              ))}
-            </select>
-          ) : spec.type === 'string_choice' ? (
-            <select
-              title={spec.label}
-              // 選択中の文字列が長いと、ネイティブのプルダウン矢印と重なって
-              // 見えていた(ユーザー報告:「状態のボックス内の文字とプル
-              // ダウンの矢印がかぶってる」)。ボックス幅(w-24)は変えず、矢印
-              // 分の余白をpr-5で確保し、収まらない文字はtruncateで省略する
-              // (ユーザー了承:「文字は今と同じで途中で切れてていい」)。
-              className="glass-input w-24 truncate rounded-lg py-1 pl-2 pr-5 text-xs"
-              value={params[spec.name!] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name!]: e.target.value })}
-              onBlur={onBlur}
-            >
-              {(spec.string_choices ?? []).map((choice) => (
-                <option key={choice.value} value={choice.value}>
-                  {choice.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              type="number"
-              step={spec.type === 'float' ? '0.1' : '1'}
-              title={paramTooltip(spec)}
-              placeholder={spec.label}
-              className="w-24 glass-input rounded-lg py-1 pl-2 pr-5"
-              value={params[spec.name!] ?? spec.default}
-              onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
-              onBlur={onBlur}
-            />
-          )}
-        </LabeledField>
-        </div>
-      ))}
+            ))}
+          </div>
+        ),
+      )}
     </>
   )
 }
@@ -519,6 +581,10 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
   const compareMode = typeof node.value === 'string' ? 'indicator' : 'literal'
   const info = indicatorInfo(indicators, node.indicator)
   const valueIndicatorInfo = typeof node.value === 'string' ? indicatorInfo(indicators, node.value) : undefined
+  // "state"(状態)パラメータを持つ指標(ダブルトップ等の形状判定系)だけ、
+  // ヘッダー行(比較元/比較先バッジのすぐ隣)に単独で出す(下のJSX参照)。
+  const stateSpec = info?.params.find((p) => p.name === 'state')
+  const valueStateSpec = valueIndicatorInfo?.params.find((p) => p.name === 'state')
   // EMA/高値/安値などの価格系指標、ATRなどのボラティリティ系指標は固定値
   // との比較に意味がないため、「固定値」の選択肢自体を出さない(ユーザー
   // 要望:「EMAなどの固定値とは比較不可能なものを選択したときも固定値を
@@ -693,19 +759,53 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           「チャートパターン」のボックスと「状態」と「ピボット左本数」の
           ボックスの高さがずれてる。下端でそろえて」)。 */}
       <div className="flex flex-wrap items-end gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
-        <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較元</span>
-        {/* ジャンル/サブジャンル/指標の選択欄を1つのボックスにまとめた
-            (ユーザー要望:「今ジャンルのボックス×2とインジケーターなどを
-            決定するボックス×1があるけどこれを1つにしたい。プルダウンで
-            インジケーターを選択したらそれに対する選択肢が出てくるように
-            したいが、ボックス自体は1つ」)。中身は同じ1つのselectがジャンル
-            →(インジケーターの時だけ)サブジャンル→指標、と段階的に入れ替わる
-            (詳細はIndicatorPicker.tsx参照)。 */}
-        <IndicatorPicker
-          indicators={indicators}
-          value={node.indicator}
-          onSelect={(id) => onChange(applyMainIndicatorChange(node, indicators, id))}
-        />
+        {/* 比較元バッジ・ジャンル/指標選択・状態(stateパラメータ)・時間足を
+            まとめて1行で表示する(ユーザー要望:「【比較元、チャートパターン、
+            状態、時間足】」を1行にまとめて」)。w-fullで親のflex-wrap行を
+            強制改行させ、下の各パラメータグループとは別行にする。 */}
+        <div className="flex w-full flex-wrap items-end gap-2">
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較元</span>
+          {/* ジャンル/サブジャンル/指標の選択欄を1つのボックスにまとめた
+              (ユーザー要望:「今ジャンルのボックス×2とインジケーターなどを
+              決定するボックス×1があるけどこれを1つにしたい。プルダウンで
+              インジケーターを選択したらそれに対する選択肢が出てくるように
+              したいが、ボックス自体は1つ」)。中身は同じ1つのselectがジャンル
+              →(インジケーターの時だけ)サブジャンル→指標、と段階的に入れ替わる
+              (詳細はIndicatorPicker.tsx参照)。 */}
+          <IndicatorPicker
+            indicators={indicators}
+            value={node.indicator}
+            onSelect={(id) => onChange(applyMainIndicatorChange(node, indicators, id))}
+          />
+
+          {/* "state"(状態)パラメータだけは他のパラメータ群より先にここで
+              単独表示する(見つからない指標では何も出さない) - 下の
+              ParamInputs側は"state"を除外済みなので二重表示にはならない。 */}
+          {stateSpec && (
+            <ParamField
+              spec={stateSpec}
+              params={node.params}
+              onChange={(next) => onChange({ ...node, params: next })}
+              onBlur={nudgeIfSelfCompared}
+            />
+          )}
+
+          <LabeledField label="時間足">
+            <select
+              className="glass-input rounded-lg px-1 py-1 text-xs"
+              title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+              value={node.timeframe ?? ''}
+              onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
+            >
+              <option value="">(自足)</option>
+              {TIMEFRAME_OPTIONS.map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
+            </select>
+          </LabeledField>
+        </div>
 
         <ParamInputs
           info={info}
@@ -729,22 +829,6 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
             onAtrLengthChange={(v) => onChange({ ...node, offset_atr_length: v })}
           />
         )}
-
-        <LabeledField label="時間足">
-          <select
-            className="glass-input rounded-lg px-1 py-1 text-xs"
-            title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
-            value={node.timeframe ?? ''}
-            onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
-          >
-            <option value="">(自足)</option>
-            {TIMEFRAME_OPTIONS.map((tf) => (
-              <option key={tf} value={tf}>
-                {tf}
-              </option>
-            ))}
-          </select>
-        </LabeledField>
       </div>
 
       {fixedLiteralValue !== null ? (
@@ -906,26 +990,56 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
               </>
             ) : (
               <>
-                <IndicatorPicker
-                  indicators={compatibleValueIndicators}
-                  value={node.value as string}
-                  onSelect={(id) => {
-                    const nextInfo = indicatorInfo(indicators, id)
-                    onChange({
-                      ...node,
-                      value: id,
-                      value_params: differentiatedValueParams(nextInfo, node.indicator, node.params, id),
-                      // 切り替え先がPips非対応kindならoffsetを持ち越さない
-                      // (上のapplyMainIndicatorChangeと同じ理由)。
-                      value_offset_pips:
-                        nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_pips : undefined,
-                      value_offset_mode:
-                        nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_mode : undefined,
-                      value_offset_atr_length:
-                        nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_atr_length : undefined,
-                    })
-                  }}
-                />
+                {/* 比較元側と同じ理由(そちらのコメント参照) - 指標選択・
+                    状態(stateパラメータ)・時間足をまとめて1行にする。 */}
+                <div className="flex w-full flex-wrap items-end gap-2">
+                  <IndicatorPicker
+                    indicators={compatibleValueIndicators}
+                    value={node.value as string}
+                    onSelect={(id) => {
+                      const nextInfo = indicatorInfo(indicators, id)
+                      onChange({
+                        ...node,
+                        value: id,
+                        value_params: differentiatedValueParams(nextInfo, node.indicator, node.params, id),
+                        // 切り替え先がPips非対応kindならoffsetを持ち越さない
+                        // (上のapplyMainIndicatorChangeと同じ理由)。
+                        value_offset_pips:
+                          nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_pips : undefined,
+                        value_offset_mode:
+                          nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_mode : undefined,
+                        value_offset_atr_length:
+                          nextInfo?.kind && PIP_OFFSET_KINDS.has(nextInfo.kind) ? node.value_offset_atr_length : undefined,
+                      })
+                    }}
+                  />
+
+                  {valueStateSpec && (
+                    <ParamField
+                      spec={valueStateSpec}
+                      params={node.value_params}
+                      onChange={(next) => onChange({ ...node, value_params: next })}
+                      onBlur={nudgeIfSelfCompared}
+                    />
+                  )}
+
+                  <LabeledField label="時間足">
+                    <select
+                      className="glass-input rounded-lg px-1 py-1 text-xs"
+                      title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+                      value={node.value_timeframe ?? ''}
+                      onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}
+                    >
+                      <option value="">(自足)</option>
+                      {TIMEFRAME_OPTIONS.map((tf) => (
+                        <option key={tf} value={tf}>
+                          {tf}
+                        </option>
+                      ))}
+                    </select>
+                  </LabeledField>
+                </div>
+
                 <ParamInputs
                   info={valueIndicatorInfo}
                   params={node.value_params}
@@ -946,22 +1060,6 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                     onAtrLengthChange={(v) => onChange({ ...node, value_offset_atr_length: v })}
                   />
                 )}
-
-                <LabeledField label="時間足">
-                  <select
-                    className="glass-input rounded-lg px-1 py-1 text-xs"
-                    title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
-                    value={node.value_timeframe ?? ''}
-                    onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}
-                  >
-                    <option value="">(自足)</option>
-                    {TIMEFRAME_OPTIONS.map((tf) => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
-                </LabeledField>
               </>
             )}
           </div>
