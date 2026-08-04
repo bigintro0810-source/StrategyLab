@@ -426,7 +426,11 @@ export function ParamInputs({
   return (
     <>
       {visibleParams.map((spec: IndicatorParamSpec) => (
-        <LabeledField key={spec.name ?? `${spec.name_min}_${spec.name_max}`} label={spec.label}>
+        // w-fullで親のflex-wrap行を強制改行させ、他のボックス(インジケーター
+        // 選択欄や他のパラメータ欄)と同じ行に並ばないようにする(ユーザー
+        // 要望:「UIでそれぞれ1行にして。他のボックスはその行に入れないで」)。
+        <div key={spec.name ?? `${spec.name_min}_${spec.name_max}`} className="w-full">
+        <LabeledField label={spec.label}>
           {spec.type === 'range' ? (
             // 下限〜上限のペア(例: 探索窓の倍率)を1つのラベルの下に
             // "[下限] 〜 [上限]" の2欄で表示する(ユーザー要望:「下限倍率と
@@ -505,6 +509,7 @@ export function ParamInputs({
             />
           )}
         </LabeledField>
+        </div>
       ))}
     </>
   )
