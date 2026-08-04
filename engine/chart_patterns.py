@@ -1158,6 +1158,8 @@ def _shape_state_core(
     breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_mult,
     efficiency_ratio_min, efficiency_ratio_floor,
     trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct,
+    efficiency_ratio_min_context, efficiency_ratio_floor_context,
+    trendline_dev_is_atr_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
     breakout_deadline_is_top1top2, breakout_deadline_min_bars,
     breakout_deadline_ratio_min, breakout_deadline_ratio_max,
     interval_symmetry_ratio_min, interval_symmetry_ratio_max,
@@ -1357,21 +1359,31 @@ def _shape_state_core(
             if confirm_floor >= n:
                 continue
 
+            # eff1(山1前→山1)は形そのものではなく前後関係でしかないので、
+            # 緩めた基準(_context)で見る。山1→ネック・ネック→山2・山2→
+            # ブレイク(下のbreakout_leg_ok側)は3区間とも同じ厳しい基準の
+            # まま(2026-08-04、ユーザー判断: 「山1前→山1よりは山2→ブレイク
+            # のほうが大事」 - ブレイクは実際にエントリーの引き金になる瞬間
+            # なので、山1前→山1(単なる前後関係)より厳しく見る価値がある)。
             eff1 = _shape_eff_ratio(close_a, pre_bar, top1_true_bar)
             eff2 = _shape_eff_ratio(close_a, top1_true_bar, neck_true_bar)
             eff3 = _shape_eff_ratio(close_a, neck_true_bar, top2_true_bar)
-            legs_ok = (
-                eff1 >= efficiency_ratio_floor
-                and eff2 >= efficiency_ratio_floor
+            core_legs_ok = (
+                eff2 >= efficiency_ratio_floor
                 and eff3 >= efficiency_ratio_floor
-                and (eff1 + eff2 + eff3) / 3.0 >= efficiency_ratio_min
-                and _shape_dev_ok(high_a, low_a, atr_a, pre_bar, pre_level, top1_true_bar, top1_price,
-                                  trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                and (eff2 + eff3) / 2.0 >= efficiency_ratio_min
                 and _shape_dev_ok(high_a, low_a, atr_a, top1_true_bar, top1_price, neck_true_bar, neck_price,
                                   trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
                 and _shape_dev_ok(high_a, low_a, atr_a, neck_true_bar, neck_price, top2_true_bar, top2_price,
                                   trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
             )
+            context_legs_ok = (
+                eff1 >= efficiency_ratio_floor_context
+                and eff1 >= efficiency_ratio_min_context
+                and _shape_dev_ok(high_a, low_a, atr_a, pre_bar, pre_level, top1_true_bar, top1_price,
+                                  trendline_dev_is_atr_context, trendline_dev_atr_mult_context, trendline_dev_pct_context)
+            )
+            legs_ok = core_legs_ok and context_legs_ok
             if not legs_ok:
                 continue
 
@@ -1574,8 +1586,13 @@ def _double_top_bottom_shape_state(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
     breakout_deadline_basis: str = "top1_top2",
-    breakout_deadline_min_bars: int = 8,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_min: float = 0.3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
@@ -1711,6 +1728,8 @@ def _double_top_bottom_shape_state(
         breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_mult),
         float(efficiency_ratio_min), float(efficiency_ratio_floor),
         trendline_dev_basis == "atr", float(trendline_dev_atr_mult), float(trendline_dev_pct),
+        float(efficiency_ratio_min_context), float(efficiency_ratio_floor_context),
+        trendline_dev_basis_context == "atr", float(trendline_dev_atr_mult_context), float(trendline_dev_pct_context),
         breakout_deadline_basis == "top1_top2", int(breakout_deadline_min_bars),
         float(breakout_deadline_ratio_min), float(breakout_deadline_ratio_max),
         float(interval_symmetry_ratio_min), float(interval_symmetry_ratio_max),
@@ -1771,7 +1790,12 @@ def double_bottom_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -1794,6 +1818,8 @@ def double_bottom_shape(
         breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        efficiency_ratio_min_context, efficiency_ratio_floor_context,
+        trendline_dev_basis_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
         "top1_top2", breakout_deadline_min_bars, 0.3, breakout_deadline_ratio_max,
         interval_symmetry_ratio_min, interval_symmetry_ratio_max,
         retest_buffer_mult,
@@ -1848,6 +1874,8 @@ def _shape_state_core3(
     breakout_buffer_is_pct, breakout_buffer_atr_mult, breakout_buffer_mult,
     efficiency_ratio_min, efficiency_ratio_floor,
     trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct,
+    efficiency_ratio_min_context, efficiency_ratio_floor_context,
+    trendline_dev_is_atr_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
     breakout_deadline_min_bars, breakout_deadline_ratio_max,
     interval_symmetry_ratio_min, interval_symmetry_ratio_max,
     retest_buffer_mult,
@@ -2172,20 +2200,20 @@ def _shape_state_core3(
                 if confirm_floor >= n:
                     continue
 
+                # ダブル版と同じ理由(そちらのコメント参照) - eff1(山1前→山1)
+                # だけ緩めた基準(_context)、中間の4区間(eff2〜eff5)は従来の
+                # 厳しい基準のまま。
                 eff1 = _shape_eff_ratio(close_a, pre_bar, top1_true_bar)
                 eff2 = _shape_eff_ratio(close_a, top1_true_bar, neck1_true_bar)
                 eff3 = _shape_eff_ratio(close_a, neck1_true_bar, top2_true_bar)
                 eff4 = _shape_eff_ratio(close_a, top2_true_bar, neck2_true_bar)
                 eff5 = _shape_eff_ratio(close_a, neck2_true_bar, top3_true_bar)
-                legs_ok = (
-                    eff1 >= efficiency_ratio_floor
-                    and eff2 >= efficiency_ratio_floor
+                core_legs_ok = (
+                    eff2 >= efficiency_ratio_floor
                     and eff3 >= efficiency_ratio_floor
                     and eff4 >= efficiency_ratio_floor
                     and eff5 >= efficiency_ratio_floor
-                    and (eff1 + eff2 + eff3 + eff4 + eff5) / 5.0 >= efficiency_ratio_min
-                    and _shape_dev_ok(high_a, low_a, atr_a, pre_bar, pre_level, top1_true_bar, top1_price,
-                                      trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
+                    and (eff2 + eff3 + eff4 + eff5) / 4.0 >= efficiency_ratio_min
                     and _shape_dev_ok(high_a, low_a, atr_a, top1_true_bar, top1_price, neck1_true_bar, neck1_price,
                                       trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
                     and _shape_dev_ok(high_a, low_a, atr_a, neck1_true_bar, neck1_price, top2_true_bar, top2_price,
@@ -2195,6 +2223,13 @@ def _shape_state_core3(
                     and _shape_dev_ok(high_a, low_a, atr_a, neck2_true_bar, neck2_price, top3_true_bar, top3_price,
                                       trendline_dev_is_atr, trendline_dev_atr_mult, trendline_dev_pct)
                 )
+                context_legs_ok = (
+                    eff1 >= efficiency_ratio_floor_context
+                    and eff1 >= efficiency_ratio_min_context
+                    and _shape_dev_ok(high_a, low_a, atr_a, pre_bar, pre_level, top1_true_bar, top1_price,
+                                      trendline_dev_is_atr_context, trendline_dev_atr_mult_context, trendline_dev_pct_context)
+                )
+                legs_ok = core_legs_ok and context_legs_ok
                 if not legs_ok:
                     continue
 
@@ -2406,7 +2441,12 @@ def _triple_top_bottom_shape_state(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2508,6 +2548,8 @@ def _triple_top_bottom_shape_state(
         breakout_buffer_basis == "price_pct", float(breakout_buffer_atr_mult), float(breakout_buffer_mult),
         float(efficiency_ratio_min), float(efficiency_ratio_floor),
         trendline_dev_basis == "atr", float(trendline_dev_atr_mult), float(trendline_dev_pct),
+        float(efficiency_ratio_min_context), float(efficiency_ratio_floor_context),
+        trendline_dev_basis_context == "atr", float(trendline_dev_atr_mult_context), float(trendline_dev_pct_context),
         int(breakout_deadline_min_bars), float(breakout_deadline_ratio_max),
         float(interval_symmetry_ratio_min), float(interval_symmetry_ratio_max),
         float(retest_buffer_mult),
@@ -2562,7 +2604,12 @@ def triple_bottom_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2586,6 +2633,8 @@ def triple_bottom_shape(
         breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        efficiency_ratio_min_context, efficiency_ratio_floor_context,
+        trendline_dev_basis_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
         breakout_deadline_min_bars, breakout_deadline_ratio_max,
         interval_symmetry_ratio_min, interval_symmetry_ratio_max,
         retest_buffer_mult,
@@ -2621,7 +2670,12 @@ def triple_top_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2642,6 +2696,8 @@ def triple_top_shape(
         breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        efficiency_ratio_min_context, efficiency_ratio_floor_context,
+        trendline_dev_basis_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
         breakout_deadline_min_bars, breakout_deadline_ratio_max,
         interval_symmetry_ratio_min, interval_symmetry_ratio_max,
         retest_buffer_mult,
@@ -2676,7 +2732,12 @@ def double_top_shape(
     trendline_dev_basis: str = "price_pct",
     trendline_dev_atr_mult: float = 0.9,
     trendline_dev_pct: float = 0.8,
-    breakout_deadline_min_bars: int = 8,
+    efficiency_ratio_min_context: float = 0.1,
+    efficiency_ratio_floor_context: float = 0.0,
+    trendline_dev_basis_context: str = "price_pct",
+    trendline_dev_atr_mult_context: float = 0.9,
+    trendline_dev_pct_context: float = 2.0,
+    breakout_deadline_min_bars: int = 3,
     breakout_deadline_ratio_max: float = 3.33,
     interval_symmetry_ratio_min: float = 0.67,
     interval_symmetry_ratio_max: float = 1.5,
@@ -2696,6 +2757,8 @@ def double_top_shape(
         breakout_buffer_basis, breakout_buffer_atr_mult, breakout_buffer_mult,
         efficiency_ratio_min, efficiency_ratio_floor,
         trendline_dev_basis, trendline_dev_atr_mult, trendline_dev_pct,
+        efficiency_ratio_min_context, efficiency_ratio_floor_context,
+        trendline_dev_basis_context, trendline_dev_atr_mult_context, trendline_dev_pct_context,
         "top1_top2", breakout_deadline_min_bars, 0.3, breakout_deadline_ratio_max,
         interval_symmetry_ratio_min, interval_symmetry_ratio_max,
         retest_buffer_mult,

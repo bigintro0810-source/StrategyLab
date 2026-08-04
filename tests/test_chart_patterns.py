@@ -155,12 +155,16 @@ def test_triple_bottom_shape_rejects_when_third_valley_is_deeper_downtrend():
 
 
 def test_triple_bottom_shape_rejects_too_early_breakout():
-    # ブレイクがformed直後(breakout_deadline_min_bars未満)に起きる場合は
-    # confirmedではなくrejectedになるべき(早すぎるブレイクは無効)。
+    # ブレイクがbreakout_deadline_min_bars未満で起きる場合はconfirmedでは
+    # なくrejectedになるべき(早すぎるブレイクは無効)。breakout_deadline_
+    # min_bars自体はデフォルト値ではなく明示的に大きい値を渡す
+    # (2026-08-04、デフォルトが8→3に変わってこのテストの前提=「20本の
+    # ゆっくりしたブレイクでもデフォルトより早い」が崩れたため、テストの
+    # 意図をデフォルト値の変化に左右されないようにする)。
     closes = _triple_bottom_closes(breakout_n=20)
     high, low, close = _hlc(closes)
-    confirmed = cp.triple_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0)
-    rejected = cp.triple_bottom_shape(high, low, close, state="rejected", pivot_spike_excess_atr_max=0.0)
+    confirmed = cp.triple_bottom_shape(high, low, close, state="confirmed", pivot_spike_excess_atr_max=0.0, breakout_deadline_min_bars=30)
+    rejected = cp.triple_bottom_shape(high, low, close, state="rejected", pivot_spike_excess_atr_max=0.0, breakout_deadline_min_bars=30)
     check("triple_bottom_shape marks a too-fast breakout as rejected, not confirmed", confirmed.sum() == 0 and rejected.sum() >= 1, detail=f"confirmed={confirmed.sum()} rejected={rejected.sum()}")
 
 
