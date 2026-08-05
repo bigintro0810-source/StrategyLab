@@ -404,13 +404,62 @@ function paramTooltip(spec: IndicatorParamSpec): string {
 // ように下限と上限間違えて逆転したときは0.2～0.3のように入れ替えて」)。
 // 上限側が0(このセッションの一連の変更で「上限0=無制限」に統一した
 // パラメータ群)の時は、上限が下限より小さいのではなく「無制限」を
-// 意味するので入れ替えない。
+// 意味するので入れ替えない。負の値・空欄が入力された場合は先に0へ丸めて
+// から入れ替え判定する(ユーザー要望:「全て0以上にできない?」- 全
+// パラメータで0未満は無効な値のため)。空欄をこの関数の中だけで即0に
+// せず、下のonChangeでは空文字列のまま保持しているのは、Backspace/
+// Deleteで消した直後に0が居座って再入力しづらくなるのを防ぐため
+// (ユーザー要望:「デリートやバックスペースで消しても0が残る。何も
+// 入力せずにそのボックスを離れたときだけ0になるようにして」) -
+// この関数(フォーカスを外した時)で初めて空欄→0に確定する。
 function swapRangeIfInverted(spec: IndicatorParamSpec, params: ConditionParams, onChange: (next: ConditionParams) => void) {
   if (spec.type !== 'range') return
-  const minVal = Number(params[spec.name_min!] ?? spec.default_min)
-  const maxVal = Number(params[spec.name_max!] ?? spec.default_max)
+  const rawMin = params[spec.name_min!] ?? spec.default_min
+  const rawMax = params[spec.name_max!] ?? spec.default_max
+  const numMin = Number(rawMin)
+  const numMax = Number(rawMax)
+  const minVal = Math.max(0, Number.isNaN(numMin) ? 0 : numMin)
+  const maxVal = Math.max(0, Number.isNaN(numMax) ? 0 : numMax)
   if (maxVal > 0 && minVal > maxVal) {
     onChange({ ...params, [spec.name_min!]: maxVal, [spec.name_max!]: minVal })
+  } else if (rawMin !== minVal || rawMax !== maxVal) {
+    onChange({ ...params, [spec.name_min!]: minVal, [spec.name_max!]: maxVal })
+  }
+}
+
+// 通常の数値欄(range型以外)でフォーカスを外した時に値を確定する: 負の値は
+// 0に丸め(ユーザー要望:「全て0以上にできない?」)、空欄のまま離れた時も
+// 0にする(ユーザー要望:「デリートやバックスペースで消しても0が残る。
+// 何も入力せずにそのボックスを離れたときだけ0になるようにして」-
+// swapRangeIfInvertedのコメント参照、range型と同じ理由)。
+function finalizeNumberField(spec: IndicatorParamSpec, params: ConditionParams, onChange: (next: ConditionParams) => void) {
+  if (spec.type !== 'int' && spec.type !== 'float') return
+  if (!spec.name) return
+  const raw = params[spec.name] ?? spec.default
+  const num = Number(raw)
+  const resolved = Math.max(0, Number.isNaN(num) ? 0 : num)
+  if (raw !== resolved) {
+    onChange({ ...params, [spec.name]: resolved })
+  }
+}
+
+// pivot_left_bars/pivot_right_barsは片方だけ0にする分には意味を持つ
+// (0にした側は判定を省いてもう片方だけで判定する - engine/chart_patterns.py
+// 側の設計)が、両方0だと判定の基準が何も残らないため許可しない(ユーザー
+// 判断:「左本数右本数どちらも0にした時はどうすべきかな」→「左本数だけ0に
+// したら右本数だけで判断する」案に対し「お願い」で承認)。エンジン側にも
+// 同じガード(pivot_left_bars = max(0, pivot_left_bars); 両方0ならpivot_
+// left_bars=1)があるが、表示上の値がエンジンの実際の判定と食い違わない
+// よう、UI側でも同じ結果になるよう補正する。
+function clampPivotBothZero(info: IndicatorInfo | undefined, params: ConditionParams, onChange: (next: ConditionParams) => void) {
+  if (!info) return
+  const hasLeft = info.params.some((p) => p.name === 'pivot_left_bars')
+  const hasRight = info.params.some((p) => p.name === 'pivot_right_bars')
+  if (!hasLeft || !hasRight) return
+  const left = Number(params['pivot_left_bars'] ?? 0)
+  const right = Number(params['pivot_right_bars'] ?? 0)
+  if (left <= 0 && right <= 0) {
+    onChange({ ...params, pivot_right_bars: 1 })
   }
 }
 
@@ -441,10 +490,11 @@ export function ParamField({
           <input
             type="number"
             step={spec.value_type === 'float' ? '0.1' : '1'}
+            min={0}
             title={`${spec.label}(下限)`}
             className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_min!] ?? spec.default_min}
-            onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
+            onChange={(e) => onChange({ ...params, [spec.name_min!]: e.target.value === '' ? '' : Number(e.target.value) })}
             onBlur={() => {
               swapRangeIfInverted(spec, params, onChange)
               onBlur?.()
@@ -454,10 +504,11 @@ export function ParamField({
           <input
             type="number"
             step={spec.value_type === 'float' ? '0.1' : '1'}
+            min={0}
             title={`${spec.label}(上限)`}
             className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_max!] ?? spec.default_max}
-            onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
+            onChange={(e) => onChange({ ...params, [spec.name_max!]: e.target.value === '' ? '' : Number(e.target.value) })}
             onBlur={() => {
               swapRangeIfInverted(spec, params, onChange)
               onBlur?.()
@@ -515,12 +566,16 @@ export function ParamField({
         <input
           type="number"
           step={spec.type === 'float' ? '0.1' : '1'}
+          min={0}
           title={paramTooltip(spec)}
           placeholder={spec.label}
           className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
           value={params[spec.name!] ?? spec.default}
-          onChange={(e) => onChange({ ...params, [spec.name!]: Number(e.target.value) })}
-          onBlur={onBlur}
+          onChange={(e) => onChange({ ...params, [spec.name!]: e.target.value === '' ? '' : Number(e.target.value) })}
+          onBlur={() => {
+            finalizeNumberField(spec, params, onChange)
+            onBlur?.()
+          }}
         />
       )}
     </LabeledField>
@@ -584,6 +639,14 @@ export function ParamInputs({
 
   const extraGroupFieldPlaced = extraGroupField ? runs.some((r) => r.group === extraGroupField.group) : true
 
+  // pivot_left_bars/pivot_right_barsが両方0にならないようにするガード
+  // (clampPivotBothZero参照)を、既存のonBlur(自己比較の自動ずらし等)に
+  // 重ねてすべてのParamFieldへ適用する。
+  const wrappedOnBlur = () => {
+    clampPivotBothZero(info, params, onChange)
+    onBlur?.()
+  }
+
   return (
     <>
       {runs.map((run) =>
@@ -593,7 +656,7 @@ export function ParamInputs({
             spec={run.spec}
             params={params}
             onChange={onChange}
-            onBlur={onBlur}
+            onBlur={wrappedOnBlur}
           />
         ) : (
           // w-fullで親のflex-wrap行を強制改行させ、グループ内の欄同士だけを
@@ -608,7 +671,7 @@ export function ParamInputs({
                 spec={spec}
                 params={params}
                 onChange={onChange}
-                onBlur={onBlur}
+                onBlur={wrappedOnBlur}
               />
             ))}
           </div>

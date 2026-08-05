@@ -185,6 +185,81 @@ def _detect_pivot_lows_left_only(low: pd.Series, left: int) -> pd.Series:
     return (low == left_min).fillna(False)
 
 
+def _detect_pivot_highs_right_only(high: pd.Series, right: int) -> pd.Series:
+    """_detect_pivot_highsの左側確認を外した版 - pivot_left_bars=0の時、
+    山1・ネック側の判定に使う(2026-08-05、ユーザー判断: 「ピボット左本数
+    だけ0にしたらピボット右本数だけで判断ということにできない?」)。
+    _detect_pivot_highs_left_onlyと違って未来方向(right本先)を見て確定する
+    ため、既存のpivot_confirm_lag(=pivot_right_bars)による遅延の仕組みは
+    そのまま機能する。横ばいの天井が複数バーにまたがるケースは
+    _detect_pivot_highsと同じ性質(「連続で真」になるのはタイの時だけ、
+    _left_onlyのような「動き続けている間ずっと真」にはならない)なので、
+    _collapse_consecutive_runsで先頭1本に絞る。"""
+    right_max = high[::-1].rolling(window=right + 1).max()[::-1]
+    is_pivot = (high == right_max).fillna(False)
+    return _collapse_consecutive_runs(is_pivot)
+
+
+def _detect_pivot_lows_right_only(low: pd.Series, right: int) -> pd.Series:
+    """_detect_pivot_highs_right_onlyの安値版。"""
+    right_min = low[::-1].rolling(window=right + 1).min()[::-1]
+    is_pivot = (low == right_min).fillna(False)
+    return _collapse_consecutive_runs(is_pivot)
+
+
+def _pivot_flags(extreme: pd.Series, pivot_left_bars: int, pivot_right_bars: int, is_high_type: bool) -> pd.Series:
+    """pivot_left_bars/pivot_right_barsの0/非0に応じて、両側確認・右側のみ・
+    左側のみのいずれかのピボット判定を選ぶ(2026-08-05、ユーザー判断:
+    「ピボット左本数だけ0にしたらピボット右本数だけで判断」の一般化 - 山1・
+    ネック側の判定全般に適用する。呼び出し側でpivot_left_bars/
+    pivot_right_barsが両方0にならないことを保証している前提)。"""
+    if pivot_left_bars > 0 and pivot_right_bars > 0:
+        return _detect_pivot_highs(extreme, pivot_left_bars, pivot_right_bars) if is_high_type else _detect_pivot_lows(
+            extreme, pivot_left_bars, pivot_right_bars
+        )
+    if pivot_right_bars > 0:
+        return (
+            _detect_pivot_highs_right_only(extreme, pivot_right_bars)
+            if is_high_type
+            else _detect_pivot_lows_right_only(extreme, pivot_right_bars)
+        )
+    return (
+        _detect_pivot_highs_left_only(extreme, pivot_left_bars)
+        if is_high_type
+        else _detect_pivot_lows_left_only(extreme, pivot_left_bars)
+    )
+
+
+def _prominence_flags(
+    extreme_a: np.ndarray,
+    boundary_other_a: np.ndarray,
+    pivot_left_bars: int,
+    pivot_right_bars: int,
+    prom_thresh: np.ndarray,
+    is_high_type: bool,
+) -> np.ndarray:
+    """値幅(prominence)チェック。pivot_left_bars/pivot_right_barsが0の側は
+    比較対象がバー自身になり(shift(0))常に差0に退化してしまうため、0の側は
+    そもそも計算しない(2026-08-05、ユーザー判断による一般化)。両方0で
+    呼ばれた場合(top2/谷2側の右本数は元から常に0扱い、かつpivot_left_bars
+    自体も0の時)はチェック自体を無効化する。"""
+    checks = []
+    if pivot_left_bars > 0:
+        left_boundary = pd.Series(boundary_other_a).shift(pivot_left_bars).to_numpy()
+        with np.errstate(invalid="ignore"):
+            checks.append((extreme_a - left_boundary >= prom_thresh) if is_high_type else (left_boundary - extreme_a >= prom_thresh))
+    if pivot_right_bars > 0:
+        right_boundary = pd.Series(boundary_other_a).shift(-pivot_right_bars).to_numpy()
+        with np.errstate(invalid="ignore"):
+            checks.append((extreme_a - right_boundary >= prom_thresh) if is_high_type else (right_boundary - extreme_a >= prom_thresh))
+    if not checks:
+        return np.ones(len(extreme_a), dtype=bool)
+    combined = checks[0]
+    for c in checks[1:]:
+        combined = combined & c
+    return np.nan_to_num(combined, nan=0.0).astype(bool)
+
+
 def _collapse_consecutive_runs(flags: pd.Series) -> pd.Series:
     """engine/smc_indicators.py::_collapse_consecutive_runsと同じ(平坦な
     天井/底が窓の等号判定に複数バーで一致してしまうのを、最初の1本だけに
@@ -1699,6 +1774,17 @@ def _double_top_bottom_shape_state(
     if trendline_dev_basis not in ("atr", "price_pct"):
         raise ValueError(f"未対応のtrendline_dev_basisです(atr/price_pctのみ対応): {trendline_dev_basis}")
 
+    # pivot_left_bars/pivot_right_barsはマイナスを許さない(2026-08-05、
+    # ユーザー判断: 「全て0以上にできない?」) - UI側のmin=0ガードと同じ
+    # 制約をエンジン側でも保証する(保存済みJSON経由でUIを介さず渡された
+    # 場合の保険)。両方0は「確認材料が左右ゼロ」で意味を持たない状態
+    # (2026-08-05、ユーザー判断: 「左右どちらも0にはできないようにする」)
+    # なので、片方だけ最低1に引き上げる。
+    pivot_left_bars = max(0, pivot_left_bars)
+    pivot_right_bars = max(0, pivot_right_bars)
+    if pivot_left_bars == 0 and pivot_right_bars == 0:
+        pivot_left_bars = 1
+
     # 「山」= 高値側の反転点、「谷」= 安値側の反転点。bullish(ダブルボトム)
     # は谷1→ネック(高値側)→谷2、ダブルトップはその鏡像。
     ext_price_a = low_a if bullish else high_a  # 山1/山2側(反転点そのもの)
@@ -1706,56 +1792,37 @@ def _double_top_bottom_shape_state(
 
     # ① 値幅込みのピボット判定 - 通常のピボット判定(_detect_pivot_highs/
     # _detect_pivot_lows)に、「左右の境界からATR×prominence_atr_mult以上
-    # 離れているか」という値幅の下限を追加でANDする。
-    plain_pivot_ext = (
-        _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
-        if bullish
-        else _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
-    ).to_numpy()
-    plain_pivot_neck = (
-        _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
-        if bullish
-        else _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
-    ).to_numpy()
-
+    # 離れているか」という値幅の下限を追加でANDする。pivot_left_bars/
+    # pivot_right_barsの片方が0の時は、その側の確認を丸ごと省略して
+    # 反対側だけで判定する(2026-08-05、ユーザー判断: 「ピボット左本数だけ
+    # 0にしたらピボット右本数だけで判断ということにできない?」) -
+    # _pivot_flags/_prominence_flags(モジュール冒頭)が0/非0を見て自動で
+    # 両側確認・右側のみ・左側のみを切り替える。両方0にはできない前提
+    # (呼び出し元で保証、フロントエンドのUI側でも防止)。
     boundary_other_a = high_a if bullish else low_a  # 反転点側の判定に使う「境界」の反対サイド
-    left_boundary = pd.Series(boundary_other_a).shift(pivot_left_bars).to_numpy()
-    right_boundary = pd.Series(boundary_other_a).shift(-pivot_right_bars).to_numpy()
     prom_thresh = atr_a * prominence_atr_mult
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_ext = (left_boundary - ext_price_a >= prom_thresh) & (right_boundary - ext_price_a >= prom_thresh)
-        else:
-            prominence_ok_ext = (ext_price_a - left_boundary >= prom_thresh) & (ext_price_a - right_boundary >= prom_thresh)
-    prominence_ok_ext = np.nan_to_num(prominence_ok_ext, nan=0.0).astype(bool)
+    ext_flags = (
+        _pivot_flags(low if bullish else high, pivot_left_bars, pivot_right_bars, not bullish).to_numpy()
+        & _prominence_flags(ext_price_a, boundary_other_a, pivot_left_bars, pivot_right_bars, prom_thresh, not bullish)
+    )
 
     neck_boundary_other_a = low_a if bullish else high_a
-    left_boundary_neck = pd.Series(neck_boundary_other_a).shift(pivot_left_bars).to_numpy()
-    right_boundary_neck = pd.Series(neck_boundary_other_a).shift(-pivot_right_bars).to_numpy()
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_neck = (neck_price_a - left_boundary_neck >= prom_thresh) & (neck_price_a - right_boundary_neck >= prom_thresh)
-        else:
-            prominence_ok_neck = (left_boundary_neck - neck_price_a >= prom_thresh) & (right_boundary_neck - neck_price_a >= prom_thresh)
-    prominence_ok_neck = np.nan_to_num(prominence_ok_neck, nan=0.0).astype(bool)
-
-    ext_flags = plain_pivot_ext & prominence_ok_ext
-    neck_flags = plain_pivot_neck & prominence_ok_neck
+    neck_flags = (
+        _pivot_flags(high if bullish else low, pivot_left_bars, pivot_right_bars, bullish).to_numpy()
+        & _prominence_flags(neck_price_a, neck_boundary_other_a, pivot_left_bars, pivot_right_bars, prom_thresh, bullish)
+    )
 
     # 山2/谷2(ブレイクへ直接つながる最後の反転点)専用: 右側確認を外した
     # ピボット判定(2026-08-04、ユーザー判断: 「山2は左だけで右は無でも
-    # よくないか」)。山1・ネックはext_flags/neck_flags(左右両方)のまま。
+    # よくないか」)。山1・ネックはext_flags/neck_flags(上の一般化済みの
+    # 判定)のまま。値幅チェックはpivot_right_bars=0として渡し、右側を
+    # 見ない(_prominence_flags参照)。
     plain_pivot_ext_left_only = (
         _detect_pivot_lows_left_only(low, pivot_left_bars)
         if bullish
         else _detect_pivot_highs_left_only(high, pivot_left_bars)
     ).to_numpy()
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_ext_left_only = left_boundary - ext_price_a >= prom_thresh
-        else:
-            prominence_ok_ext_left_only = ext_price_a - left_boundary >= prom_thresh
-    prominence_ok_ext_left_only = np.nan_to_num(prominence_ok_ext_left_only, nan=0.0).astype(bool)
+    prominence_ok_ext_left_only = _prominence_flags(ext_price_a, boundary_other_a, pivot_left_bars, 0, prom_thresh, not bullish)
     ext_flags_top2 = plain_pivot_ext_left_only & prominence_ok_ext_left_only
 
     pivot_confirm_lag = pivot_right_bars
@@ -2555,59 +2622,41 @@ def _triple_top_bottom_shape_state(
     if trendline_dev_basis not in ("atr", "price_pct"):
         raise ValueError(f"未対応のtrendline_dev_basisです(atr/price_pctのみ対応): {trendline_dev_basis}")
 
+    # ダブル版と同じ理由(そちらのコメント参照)。
+    pivot_left_bars = max(0, pivot_left_bars)
+    pivot_right_bars = max(0, pivot_right_bars)
+    if pivot_left_bars == 0 and pivot_right_bars == 0:
+        pivot_left_bars = 1
+
     ext_price_a = low_a if bullish else high_a
     neck_price_a = high_a if bullish else low_a
 
-    plain_pivot_ext = (
-        _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
-        if bullish
-        else _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
-    ).to_numpy()
-    plain_pivot_neck = (
-        _detect_pivot_highs(high, pivot_left_bars, pivot_right_bars)
-        if bullish
-        else _detect_pivot_lows(low, pivot_left_bars, pivot_right_bars)
-    ).to_numpy()
-
+    # ダブル版と同じ理由(そちらのコメント参照) - pivot_left_bars/
+    # pivot_right_barsの片方が0の時は_pivot_flags/_prominence_flagsが
+    # 自動で判定方式を切り替える。
     boundary_other_a = high_a if bullish else low_a
-    left_boundary = pd.Series(boundary_other_a).shift(pivot_left_bars).to_numpy()
-    right_boundary = pd.Series(boundary_other_a).shift(-pivot_right_bars).to_numpy()
     prom_thresh = atr_a * prominence_atr_mult
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_ext = (left_boundary - ext_price_a >= prom_thresh) & (right_boundary - ext_price_a >= prom_thresh)
-        else:
-            prominence_ok_ext = (ext_price_a - left_boundary >= prom_thresh) & (ext_price_a - right_boundary >= prom_thresh)
-    prominence_ok_ext = np.nan_to_num(prominence_ok_ext, nan=0.0).astype(bool)
+    ext_flags = (
+        _pivot_flags(low if bullish else high, pivot_left_bars, pivot_right_bars, not bullish).to_numpy()
+        & _prominence_flags(ext_price_a, boundary_other_a, pivot_left_bars, pivot_right_bars, prom_thresh, not bullish)
+    )
 
     neck_boundary_other_a = low_a if bullish else high_a
-    left_boundary_neck = pd.Series(neck_boundary_other_a).shift(pivot_left_bars).to_numpy()
-    right_boundary_neck = pd.Series(neck_boundary_other_a).shift(-pivot_right_bars).to_numpy()
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_neck = (neck_price_a - left_boundary_neck >= prom_thresh) & (neck_price_a - right_boundary_neck >= prom_thresh)
-        else:
-            prominence_ok_neck = (left_boundary_neck - neck_price_a >= prom_thresh) & (right_boundary_neck - neck_price_a >= prom_thresh)
-    prominence_ok_neck = np.nan_to_num(prominence_ok_neck, nan=0.0).astype(bool)
-
-    ext_flags = plain_pivot_ext & prominence_ok_ext
-    neck_flags = plain_pivot_neck & prominence_ok_neck
+    neck_flags = (
+        _pivot_flags(high if bullish else low, pivot_left_bars, pivot_right_bars, bullish).to_numpy()
+        & _prominence_flags(neck_price_a, neck_boundary_other_a, pivot_left_bars, pivot_right_bars, prom_thresh, bullish)
+    )
 
     # 谷3(ブレイクへ直接つながる最後の反転点)専用: 右側確認を外したピボット
     # 判定(2026-08-04、ダブル版と同じユーザー判断 - モジュール冒頭コメント
-    # 参照)。谷1・ネック1・谷2・ネック2はext_flags/neck_flags(左右両方)の
-    # まま - トリプルの「最後の点」は谷3のみ。
+    # 参照)。谷1・ネック1・谷2・ネック2はext_flags/neck_flags(上の一般化
+    # 済みの判定)のまま - トリプルの「最後の点」は谷3のみ。
     plain_pivot_ext_left_only = (
         _detect_pivot_lows_left_only(low, pivot_left_bars)
         if bullish
         else _detect_pivot_highs_left_only(high, pivot_left_bars)
     ).to_numpy()
-    with np.errstate(invalid="ignore"):
-        if bullish:
-            prominence_ok_ext_left_only = left_boundary - ext_price_a >= prom_thresh
-        else:
-            prominence_ok_ext_left_only = ext_price_a - left_boundary >= prom_thresh
-    prominence_ok_ext_left_only = np.nan_to_num(prominence_ok_ext_left_only, nan=0.0).astype(bool)
+    prominence_ok_ext_left_only = _prominence_flags(ext_price_a, boundary_other_a, pivot_left_bars, 0, prom_thresh, not bullish)
     ext_flags_top3 = plain_pivot_ext_left_only & prominence_ok_ext_left_only
 
     pivot_confirm_lag = pivot_right_bars
