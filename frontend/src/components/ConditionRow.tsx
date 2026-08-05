@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import IndicatorPicker from './IndicatorPicker'
 import type { ConditionNode, ConditionParams, IndicatorInfo, IndicatorParamSpec, Operator } from '../types'
 
@@ -398,6 +399,21 @@ function paramTooltip(spec: IndicatorParamSpec): string {
 // fast/slow/signal, stochastic's 3 periods, ichimoku's 3 periods, fib's
 // ratio) silently kept their Python-side default for every param past the
 // first.
+// range型(下限〜上限)欄でフォーカスを外した時、下限>上限のまま(例:
+// 0.3〜0.2)になっていたら黙って入れ替える(ユーザー要望:「0.3～0.2の
+// ように下限と上限間違えて逆転したときは0.2～0.3のように入れ替えて」)。
+// 上限側が0(このセッションの一連の変更で「上限0=無制限」に統一した
+// パラメータ群)の時は、上限が下限より小さいのではなく「無制限」を
+// 意味するので入れ替えない。
+function swapRangeIfInverted(spec: IndicatorParamSpec, params: ConditionParams, onChange: (next: ConditionParams) => void) {
+  if (spec.type !== 'range') return
+  const minVal = Number(params[spec.name_min!] ?? spec.default_min)
+  const maxVal = Number(params[spec.name_max!] ?? spec.default_max)
+  if (maxVal > 0 && minVal > maxVal) {
+    onChange({ ...params, [spec.name_min!]: maxVal, [spec.name_max!]: minVal })
+  }
+}
+
 // 1つのパラメータ欄(ラベル+入力)を描画する。ParamInputs内のグループ
 // まとめ表示・単独表示に加えて、ConditionRow側で"state"パラメータだけを
 // 比較元/比較先バッジのすぐ隣(ヘッダー行)に単独で出す時にも使う(ユーザー
@@ -429,7 +445,10 @@ export function ParamField({
             className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_min!] ?? spec.default_min}
             onChange={(e) => onChange({ ...params, [spec.name_min!]: Number(e.target.value) })}
-            onBlur={onBlur}
+            onBlur={() => {
+              swapRangeIfInverted(spec, params, onChange)
+              onBlur?.()
+            }}
           />
           <span className="text-gray-400">〜</span>
           <input
@@ -439,7 +458,10 @@ export function ParamField({
             className="w-20 glass-input rounded-lg py-0.5 pl-2 pr-[6px]"
             value={params[spec.name_max!] ?? spec.default_max}
             onChange={(e) => onChange({ ...params, [spec.name_max!]: Number(e.target.value) })}
-            onBlur={onBlur}
+            onBlur={() => {
+              swapRangeIfInverted(spec, params, onChange)
+              onBlur?.()
+            }}
           />
         </span>
       ) : spec.type === 'choice' ? (
@@ -510,6 +532,7 @@ export function ParamInputs({
   params,
   onChange,
   onBlur,
+  extraGroupField,
 }: {
   info: IndicatorInfo | undefined
   params: ConditionParams
@@ -517,8 +540,14 @@ export function ParamInputs({
   // 値が変わるたびにではなく、フィールドから離れて確定した時だけ呼びたい
   // 補正処理(比較元/比較先の自己比較チェックなど)向けのフック - 省略可。
   onBlur?: () => void
+  // 指標のパラメータではない欄(時間足選択など)を、特定のgroup行の先頭に
+  // 割り込ませたい時に使う(ユーザー要望:「『時間足』をブレイク判定基準と
+  // 同じ行の一番前にして」)。指定したgroupが今の指標に存在しない場合は
+  // 末尾に単独表示する(時間足はどの指標でも常に出す欄のため、group自体が
+  // 無い指標でも消えないようにする)。
+  extraGroupField?: { group: string; node: ReactNode }
 }) {
-  if (!info || info.params.length === 0) return null
+  if (!info || info.params.length === 0) return extraGroupField?.node ?? null
 
   // show_ifを持つパラメータ(EMA5等)は、制御元パラメータ(EMA本数等)の
   // 現在値がmin未満なら表示自体をスキップする - 選んでいない分の入力欄が
@@ -553,6 +582,8 @@ export function ParamInputs({
     }
   }
 
+  const extraGroupFieldPlaced = extraGroupField ? runs.some((r) => r.group === extraGroupField.group) : true
+
   return (
     <>
       {runs.map((run) =>
@@ -570,6 +601,7 @@ export function ParamInputs({
           // 時は横スクロールではなく折り返す(ユーザー要望:「長くて1行に
           // 入りきらない時は横スクロールじゃなくて改行でいい」)。
           <div key={run.group} className="flex w-full flex-wrap items-end gap-2">
+            {extraGroupField?.group === run.group && extraGroupField.node}
             {run.specs.map((spec) => (
               <ParamField
                 key={spec.name ?? `${spec.name_min}_${spec.name_max}`}
@@ -582,11 +614,18 @@ export function ParamInputs({
           </div>
         ),
       )}
+      {!extraGroupFieldPlaced && extraGroupField!.node}
     </>
   )
 }
 
 export default function ConditionRow({ node, indicators, onChange, onRemove }: Props) {
+  // 初期設定ボタンの確認ダイアログ(ユーザー要望:「バックテスト実行ボタンの
+  // ようなダイヤログボックスにして」- App.tsxのバックテスト実行確認ダイアログ
+  // と同じ見た目のカスタムダイアログにする。native window.confirm()は
+  // アプリのダーク系デザインと合わないため使わない)。どちら側(比較元/
+  // 比較先)のボタンから開いたかをnullでない値で覚えておく。
+  const [resetConfirmSide, setResetConfirmSide] = useState<'main' | 'value' | null>(null)
   const compareMode = typeof node.value === 'string' ? 'indicator' : 'literal'
   const info = indicatorInfo(indicators, node.indicator)
   const valueIndicatorInfo = typeof node.value === 'string' ? indicatorInfo(indicators, node.value) : undefined
@@ -755,6 +794,7 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
   }
 
   return (
+    <>
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2 text-sm">
       {/* 比較元(メイン指標: EMAなど) - 比較元/向き/比較先の3つの役割を枠と
           バッジで見分けられるようにする(ユーザー要望:「1つのエントリー
@@ -768,10 +808,14 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           「チャートパターン」のボックスと「状態」と「ピボット左本数」の
           ボックスの高さがずれてる。下端でそろえて」)。 */}
       <div className="flex flex-wrap items-end gap-2 rounded-lg border-2 border-blue-400/50 bg-blue-500/20 px-2 py-1">
-        {/* 比較元バッジ・ジャンル/指標選択・状態(stateパラメータ)・時間足を
-            まとめて1行で表示する(ユーザー要望:「【比較元、チャートパターン、
-            状態、時間足】」を1行にまとめて」)。w-fullで親のflex-wrap行を
-            強制改行させ、下の各パラメータグループとは別行にする。 */}
+        {/* 比較元バッジ・ジャンル/指標選択・状態(stateパラメータ)・初期設定
+            ボタンをまとめて1行で表示する(ユーザー要望:「【比較元、チャート
+            パターン、状態、時間足】」を1行にまとめて」→その後「時間足を
+            ブレイク判定基準と同じ行の一番前にして」で時間足だけ下の
+            ParamInputs側のbreak_settingsグループへ移動→さらに「初期設定
+            ボタンをチャートパターンのボックスと同じ行に置いて」)。w-fullで
+            親のflex-wrap行を強制改行させ、下の各パラメータグループとは
+            別行にする。 */}
         <div className="flex w-full flex-wrap items-end gap-2">
           <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-blue-200 bg-blue-500/40">比較元</span>
           {/* ジャンル/サブジャンル/指標の選択欄を1つのボックスにまとめた
@@ -799,21 +843,24 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
             />
           )}
 
-          <LabeledField label="時間足">
-            <select
-              className="glass-input rounded-lg px-1 py-0.5"
-              title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
-              value={node.timeframe ?? ''}
-              onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
+          {/* 初期設定(パラメータを全てデフォルト値に戻す)ボタン。数値入力欄
+              と同じ幅・高さ(w-20、text-sizeは指定せずtext-smを継承)にして
+              青系のボタンにする(ユーザー要望:「ボタンの大きさは数値の
+              ボックスと同じサイズで青にして」)。ml-autoでこの行の右端に
+              寄せる(ユーザー要望:「初期設定ボタンは右端に移動して」)。
+              押すと確認ダイアログを出してから戻す(ユーザー要望:「初期設定
+              ボタンを押したらダイヤログボックスが出てきて、『パラメーターを
+              初期設定に戻します。』って確認出して」)。 */}
+          {info && (
+            <button
+              type="button"
+              className="ml-auto w-20 rounded-lg border border-blue-400/20 bg-blue-400/10 py-0.5 text-blue-200 hover:bg-blue-400/20"
+              title="このパラメータをすべて初期設定に戻す"
+              onClick={() => setResetConfirmSide('main')}
             >
-              <option value="">(自足)</option>
-              {TIMEFRAME_OPTIONS.map((tf) => (
-                <option key={tf} value={tf}>
-                  {tf}
-                </option>
-              ))}
-            </select>
-          </LabeledField>
+              初期設定
+            </button>
+          )}
         </div>
 
         <ParamInputs
@@ -821,6 +868,26 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
           params={node.params}
           onChange={(next) => onChange({ ...node, params: next })}
           onBlur={nudgeIfSelfCompared}
+          extraGroupField={{
+            group: 'break_settings',
+            node: (
+              <LabeledField key="timeframe" label="時間足">
+                <select
+                  className="glass-input rounded-lg px-1 py-0.5"
+                  title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+                  value={node.timeframe ?? ''}
+                  onChange={(e) => onChange({ ...node, timeframe: e.target.value || undefined })}
+                >
+                  <option value="">(自足)</option>
+                  {TIMEFRAME_OPTIONS.map((tf) => (
+                    <option key={tf} value={tf}>
+                      {tf}
+                    </option>
+                  ))}
+                </select>
+              </LabeledField>
+            ),
+          }}
         />
 
         {/* +/-○○Pips/価格%/ATR%のオフセット(ユーザー要望:「EMA+○○Pipsや
@@ -1000,7 +1067,8 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
             ) : (
               <>
                 {/* 比較元側と同じ理由(そちらのコメント参照) - 指標選択・
-                    状態(stateパラメータ)・時間足をまとめて1行にする。 */}
+                    状態(stateパラメータ)をまとめて1行にする。時間足は下の
+                    ParamInputs側のbreak_settingsグループへ移動済み。 */}
                 <div className="flex w-full flex-wrap items-end gap-2">
                   <IndicatorPicker
                     indicators={compatibleValueIndicators}
@@ -1032,21 +1100,17 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                     />
                   )}
 
-                  <LabeledField label="時間足">
-                    <select
-                      className="glass-input rounded-lg px-1 py-0.5"
-                      title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
-                      value={node.value_timeframe ?? ''}
-                      onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}
+                  {/* 比較元側と同じ理由(そちらのコメント参照)。 */}
+                  {valueIndicatorInfo && (
+                    <button
+                      type="button"
+                      className="ml-auto w-20 rounded-lg border border-blue-400/20 bg-blue-400/10 py-0.5 text-blue-200 hover:bg-blue-400/20"
+                      title="このパラメータをすべて初期設定に戻す"
+                      onClick={() => setResetConfirmSide('value')}
                     >
-                      <option value="">(自足)</option>
-                      {TIMEFRAME_OPTIONS.map((tf) => (
-                        <option key={tf} value={tf}>
-                          {tf}
-                        </option>
-                      ))}
-                    </select>
-                  </LabeledField>
+                      初期設定
+                    </button>
+                  )}
                 </div>
 
                 <ParamInputs
@@ -1054,6 +1118,26 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
                   params={node.value_params}
                   onChange={(next) => onChange({ ...node, value_params: next })}
                   onBlur={nudgeIfSelfCompared}
+                  extraGroupField={{
+                    group: 'break_settings',
+                    node: (
+                      <LabeledField key="timeframe" label="時間足">
+                        <select
+                          className="glass-input rounded-lg px-1 py-0.5"
+                          title="この指標を計算する時間足(未指定ならバックテスト自体の時間足)"
+                          value={node.value_timeframe ?? ''}
+                          onChange={(e) => onChange({ ...node, value_timeframe: e.target.value || undefined })}
+                        >
+                          <option value="">(自足)</option>
+                          {TIMEFRAME_OPTIONS.map((tf) => (
+                            <option key={tf} value={tf}>
+                              {tf}
+                            </option>
+                          ))}
+                        </select>
+                      </LabeledField>
+                    ),
+                  }}
                 />
 
                 {/* +/-○○Pips/価格%/ATR%(比較先側) - 「終値 > EMA+20Pips」
@@ -1085,5 +1169,47 @@ export default function ConditionRow({ node, indicators, onChange, onRemove }: P
         </button>
       )}
     </div>
+    {/* 初期設定ボタンの確認ダイアログ - App.tsxのバックテスト実行確認
+        ダイアログと同じ見た目(fixed inset-0 + glass-panelカード)。
+        ConditionRowはbackdrop-filterを持つ祖先(.glass-panel、ストラテジー
+        ビルダー全体を覆っている)の奥深くにネストされているため、そのまま
+        ここでfixed配置すると祖先のbackdrop-filterが新しい包含ブロックを
+        作ってダイアログの位置がおかしくなる(AddCandidateModal.tsxの
+        同種の注意書き参照) - createPortalでdocument.bodyへ直接描画して
+        回避する。 */}
+    {resetConfirmSide &&
+      createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="glass-panel w-full max-w-sm rounded-2xl p-5">
+            <h2 className="text-sm font-semibold text-gray-100">初期設定に戻します</h2>
+            <p className="mt-2 text-xs leading-relaxed text-gray-400">パラメーターを初期設定に戻します。</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResetConfirmSide(null)}
+                className="glass-input rounded-lg px-3 py-1.5 text-xs font-semibold text-gray-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (resetConfirmSide === 'main' && info) {
+                    onChange({ ...node, params: defaultParamsFor(info) })
+                  } else if (resetConfirmSide === 'value' && valueIndicatorInfo) {
+                    onChange({ ...node, value_params: defaultParamsFor(valueIndicatorInfo) })
+                  }
+                  setResetConfirmSide(null)
+                }}
+                className="run-button rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                初期設定に戻す
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }

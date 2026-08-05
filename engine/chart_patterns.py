@@ -1110,6 +1110,10 @@ def _shape_dev_ok(high_a, low_a, atr_a, start_bar, start_price, end_bar, end_pri
     if dev_is_atr:
         tol = atr_a[end_bar] * dev_atr_mult
     else:
+        # dev_pct<=0(無制限)は乖離チェック自体を無効化する(2026-08-04、
+        # ユーザー判断: 「ブレイク判定余白以外すべて0=無制限にして」)。
+        if dev_pct <= 0.0:
+            return True
         tol = abs(end_price - start_price) * dev_pct
     for j in range(start_bar, end_bar + 1):
         line_v = start_price + (end_price - start_price) * (j - start_bar) / span
@@ -1156,6 +1160,14 @@ def _shape_neckline_intact(high_a, low_a, neck_bar, next_top_bar, neckline_price
 # 病的に長いトレンド区間での暴走を防ぐ。
 _MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP = 3000
 
+# symmetry_ratio_max/interval_symmetry_ratio_max/breakout_deadline_ratio_max
+# <=0(無制限)を表す代わりの倍率(2026-08-04、ユーザー判断: 「ブレイク判定
+# 余白以外すべて0=無制限にして」)。本数(interval1等)に掛けて窓の終端を
+# 求めるのに使うだけなので、掛けた結果がどのみち_MAX_BARS_BETWEEN_TOPS_
+# UNLIMITED_CAPやn-1で後からクランプされる - どんな現実的なデータ量でも
+# 絶対に効かないくらい大きければ十分。
+_UNLIMITED_RATIO = 1.0e9
+
 
 @njit(cache=True)
 def _shape_state_core(
@@ -1199,6 +1211,16 @@ def _shape_state_core(
     effective_max_bars_between_tops = (
         max_bars_between_tops if max_bars_between_tops > 0 else _MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP
     )
+    # symmetry_ratio_max/interval_symmetry_ratio_max/breakout_deadline_ratio_max
+    # <=0(無制限)は_UNLIMITED_RATIO(モジュール冒頭のコメント参照)に
+    # 差し替える。
+    effective_symmetry_ratio_max = symmetry_ratio_max if symmetry_ratio_max > 0.0 else _UNLIMITED_RATIO
+    effective_interval_symmetry_ratio_max = (
+        interval_symmetry_ratio_max if interval_symmetry_ratio_max > 0.0 else _UNLIMITED_RATIO
+    )
+    effective_breakout_deadline_ratio_max = (
+        breakout_deadline_ratio_max if breakout_deadline_ratio_max > 0.0 else _UNLIMITED_RATIO
+    )
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1238,7 +1260,7 @@ def _shape_state_core(
                 continue
             if neck_true_bar != -1:
                 interval1_prev = neck_true_bar - top1_true_bar
-                prev_win_end = neck_true_bar + int(np.floor(interval1_prev * symmetry_ratio_max))
+                prev_win_end = neck_true_bar + int(np.floor(interval1_prev * effective_symmetry_ratio_max))
                 if k > prev_win_end:
                     break
             if bullish:
@@ -1260,7 +1282,7 @@ def _shape_state_core(
                                             False, bullish, pivot_spike_excess_atr_max)
 
             win_start = neck_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
-            win_end = neck_true_bar + int(np.floor(interval1 * symmetry_ratio_max))
+            win_end = neck_true_bar + int(np.floor(interval1 * effective_symmetry_ratio_max))
             # ネック→山2の本数も、山1→ネックと同じmin/max_bars_between_tops
             # で追加拘束する(2026-08-04、ユーザー判断: 「山1→ネックと同じ
             # ところでパラメーターを変更できるように」) - 比率ベースの窓と
@@ -1276,7 +1298,12 @@ def _shape_state_core(
             if win_start > win_end:
                 continue
 
-            top_tolerance_value = abs(top1_price - neck_price) * top_tolerance_mult
+            # top_tolerance_mult<=0(無制限)は乖離許容を無限大にする
+            # (2026-08-04、ユーザー判断: 「ブレイク判定余白以外すべて0=無制限に
+            # して」)。
+            top_tolerance_value = (
+                np.inf if top_tolerance_mult <= 0.0 else abs(top1_price - neck_price) * top_tolerance_mult
+            )
 
             window_invalidated = False
             top2_true_bar = -1
@@ -1423,7 +1450,7 @@ def _shape_state_core(
             # 通常のスキャンをそのまま前倒しするだけで同じことができ、
             # breakout_deadline_min_barsがどんな値でも「早すぎ判定」が正しく
             # 機能するようになった)。
-            expire_bars = interval1 * breakout_deadline_ratio_max
+            expire_bars = interval1 * effective_breakout_deadline_ratio_max
             scan_start = top2_true_bar + 1
             scan_end = top2_true_bar + int(np.ceil(expire_bars))
             if scan_end > n - 1:
@@ -1457,13 +1484,19 @@ def _shape_state_core(
                             confirm_j = low_a[j] < (neck_price - buf_j)
                             fail_j = high_a[j] > (worse_extreme + buf_j)
 
-                    retest_lo = neck_price - buf_j * retest_buffer_mult
-                    retest_hi = neck_price + buf_j * retest_buffer_mult
-                    near_j = (
-                        (retest_lo <= high_a[j] <= retest_hi)
-                        or (retest_lo <= low_a[j] <= retest_hi)
-                        or (low_a[j] <= retest_lo and high_a[j] >= retest_hi)
-                    )
+                    # retest_buffer_mult<=0(無制限)は判定不要で常にTrue扱い
+                    # (2026-08-04、ユーザー判断: 「ブレイク判定余白以外すべて
+                    # 0=無制限にして」)。
+                    if retest_buffer_mult <= 0.0:
+                        near_j = True
+                    else:
+                        retest_lo = neck_price - buf_j * retest_buffer_mult
+                        retest_hi = neck_price + buf_j * retest_buffer_mult
+                        near_j = (
+                            (retest_lo <= high_a[j] <= retest_hi)
+                            or (retest_lo <= low_a[j] <= retest_hi)
+                            or (low_a[j] <= retest_lo and high_a[j] >= retest_hi)
+                        )
                     seen_near = seen_near or near_j
 
                     if confirm_j or fail_j:
@@ -1484,7 +1517,7 @@ def _shape_state_core(
                             else:
                                 time1 = j - neck_true_bar
                                 symmetric_ok = (
-                                    time1 * interval_symmetry_ratio_min <= interval0 <= time1 * interval_symmetry_ratio_max
+                                    time1 * interval_symmetry_ratio_min <= interval0 <= time1 * effective_interval_symmetry_ratio_max
                                 )
                                 eff4 = _shape_eff_ratio(close_a, top2_true_bar, j)
                                 if bullish:
@@ -1921,6 +1954,16 @@ def _shape_state_core3(
     effective_max_bars_between_tops = (
         max_bars_between_tops if max_bars_between_tops > 0 else _MAX_BARS_BETWEEN_TOPS_UNLIMITED_CAP
     )
+    # symmetry_ratio_max/interval_symmetry_ratio_max/breakout_deadline_ratio_max
+    # <=0(無制限)は_UNLIMITED_RATIO(モジュール冒頭のコメント参照)に
+    # 差し替える。
+    effective_symmetry_ratio_max = symmetry_ratio_max if symmetry_ratio_max > 0.0 else _UNLIMITED_RATIO
+    effective_interval_symmetry_ratio_max = (
+        interval_symmetry_ratio_max if interval_symmetry_ratio_max > 0.0 else _UNLIMITED_RATIO
+    )
+    effective_breakout_deadline_ratio_max = (
+        breakout_deadline_ratio_max if breakout_deadline_ratio_max > 0.0 else _UNLIMITED_RATIO
+    )
     exists_a = np.zeros(n, dtype=np.bool_)
     detected_a = np.zeros(n, dtype=np.bool_)
     rejected_a = np.zeros(n, dtype=np.bool_)
@@ -1964,7 +2007,7 @@ def _shape_state_core3(
                 continue
             if neck1_true_bar != -1:
                 interval1_prev = neck1_true_bar - top1_true_bar
-                prev_win_end = neck1_true_bar + int(np.floor(interval1_prev * symmetry_ratio_max))
+                prev_win_end = neck1_true_bar + int(np.floor(interval1_prev * effective_symmetry_ratio_max))
                 if k > prev_win_end:
                     break
             if bullish:
@@ -1986,7 +2029,7 @@ def _shape_state_core3(
                                              False, bullish, pivot_spike_excess_atr_max)
 
             win_start = neck1_true_bar + int(np.ceil(interval1 * symmetry_ratio_min))
-            win_end = neck1_true_bar + int(np.floor(interval1 * symmetry_ratio_max))
+            win_end = neck1_true_bar + int(np.floor(interval1 * effective_symmetry_ratio_max))
             # ダブル版と同じ理由(そちらのコメント参照) - ネック1→山2も
             # min/max_bars_between_topsで追加拘束する。
             abs_win_start = neck1_true_bar + min_bars_between_tops
@@ -2000,7 +2043,10 @@ def _shape_state_core3(
             if win_start > win_end:
                 continue
 
-            top_tolerance_value = abs(top1_price - neck1_price) * top_tolerance_mult
+            # ダブル版と同じ理由(そちらのコメント参照)。
+            top_tolerance_value = (
+                np.inf if top_tolerance_mult <= 0.0 else abs(top1_price - neck1_price) * top_tolerance_mult
+            )
 
             window_invalidated = False
             top2_true_bar = -1
@@ -2112,7 +2158,7 @@ def _shape_state_core3(
                     continue
                 if neck2_true_bar != -1:
                     interval2n_prev = neck2_true_bar - top2_true_bar
-                    prev_win_end2 = neck2_true_bar + int(np.floor(interval2n_prev * symmetry_ratio_max))
+                    prev_win_end2 = neck2_true_bar + int(np.floor(interval2n_prev * effective_symmetry_ratio_max))
                     if k2 > prev_win_end2:
                         break
                 if bullish:
@@ -2143,7 +2189,7 @@ def _shape_state_core3(
                     continue
 
                 win_start2 = neck2_true_bar + int(np.ceil(interval2n * symmetry_ratio_min))
-                win_end2 = neck2_true_bar + int(np.floor(interval2n * symmetry_ratio_max))
+                win_end2 = neck2_true_bar + int(np.floor(interval2n * effective_symmetry_ratio_max))
                 # ダブル版と同じ理由(そちらのコメント参照) - ネック2→山3も
                 # min/max_bars_between_topsで追加拘束する。
                 abs_win_start2 = neck2_true_bar + min_bars_between_tops
@@ -2295,7 +2341,7 @@ def _shape_state_core3(
 
                 # スキャンは谷3の直後から始める - ダブル版と同じ理由
                 # (そちらのコメント参照、報告のみformed_bar以降にクランプ)。
-                expire_bars = interval2n * breakout_deadline_ratio_max
+                expire_bars = interval2n * effective_breakout_deadline_ratio_max
                 scan_start = top3_true_bar + 1
                 scan_end = top3_true_bar + int(np.ceil(expire_bars))
                 if scan_end > n - 1:
@@ -2329,13 +2375,17 @@ def _shape_state_core3(
                                 confirm_j = low_a[j] < (neckline_price - buf_j)
                                 fail_j = high_a[j] > (worst_extreme + buf_j)
 
-                        retest_lo = neckline_price - buf_j * retest_buffer_mult
-                        retest_hi = neckline_price + buf_j * retest_buffer_mult
-                        near_j = (
-                            (retest_lo <= high_a[j] <= retest_hi)
-                            or (retest_lo <= low_a[j] <= retest_hi)
-                            or (low_a[j] <= retest_lo and high_a[j] >= retest_hi)
-                        )
+                        # ダブル版と同じ理由(そちらのコメント参照)。
+                        if retest_buffer_mult <= 0.0:
+                            near_j = True
+                        else:
+                            retest_lo = neckline_price - buf_j * retest_buffer_mult
+                            retest_hi = neckline_price + buf_j * retest_buffer_mult
+                            near_j = (
+                                (retest_lo <= high_a[j] <= retest_hi)
+                                or (retest_lo <= low_a[j] <= retest_hi)
+                                or (low_a[j] <= retest_lo and high_a[j] >= retest_hi)
+                            )
                         seen_near = seen_near or near_j
 
                         if confirm_j or fail_j:
@@ -2352,7 +2402,7 @@ def _shape_state_core3(
                                 else:
                                     time1 = j - neck2_true_bar
                                     symmetric_ok = (
-                                        time1 * interval_symmetry_ratio_min <= interval0 <= time1 * interval_symmetry_ratio_max
+                                        time1 * interval_symmetry_ratio_min <= interval0 <= time1 * effective_interval_symmetry_ratio_max
                                     )
                                     eff_breakout = _shape_eff_ratio(close_a, top3_true_bar, j)
 
