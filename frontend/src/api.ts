@@ -191,6 +191,30 @@ export interface PatternMarkerEvent {
   neck1_price?: number
   neck2_time?: string
   neck2_price?: number
+  // 2026-08-12以降にB方式で追加したパターン(トリプルトップ/カップ&ハンドル/
+  // ヘッド&ショルダーズ/エリオット推進波/フラッグ・ペナント/チャネル・
+  // ウェッジ・トライアングル13種)は構成点の数が4〜6と可変なので、
+  // top1/top2/neckline のような固定名ではなく point1_time / point1_price …
+  // という連番で返る。point_count があればこちらの形式。
+  // api_server.py::_compute_pattern_markers 参照。
+  point_count?: number
+  pattern_id?: string
+  level?: number
+  // ascending_triangle_shape/descending_triangle_shapeのみ(2026-08-19) -
+  // 判定に実際使った回帰直線(起点+2点だけで決まる、構成点全体の最小二乗
+  // とは別物)の両端の値と、水準線(水平)の値をそのまま返す。フロント側で
+  // 構成点から線を引き直すと判定に使った直線とズレて見えるため
+  // (ユーザー報告「下値支持線が許容誤差から外れて見える」)。
+  reg_line_start_price?: number
+  reg_line_end_price?: number
+  flat_level_price?: number
+  // rising_wedge_shapeのみ(2026-08-19) - 三角保ち合いと違い上値抵抗線も
+  // 水平ではなく回帰直線(下値支持線と同じ方式)なので、水準線ではなく
+  // reg_line_*と同じ形の両端の値を上下2本ぶん返す。
+  lower_line_start_price?: number
+  lower_line_end_price?: number
+  upper_line_start_price?: number
+  upper_line_end_price?: number
 }
 
 export async function fetchStrategyPatternMarkers(

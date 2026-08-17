@@ -56,7 +56,7 @@ _WORKER_INDICATOR_CACHE: dict = {}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Strategy Lab optimizer")
+    parser = argparse.ArgumentParser(description="StrategyX optimizer")
 
     parser.add_argument(
         "--mode",

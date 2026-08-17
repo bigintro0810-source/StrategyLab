@@ -8,7 +8,7 @@ Version: 2.0
 TradingView Pine Script の strategy() を可能な限り忠実に再現する
 Pythonバックテストエンジンを構築する。
 
-本エンジンは Strategy Lab の全ストラテジーで共通利用する。
+本エンジンは StrategyX の全ストラテジーで共通利用する。
 
 対象
 
@@ -363,4 +363,4 @@ DD
 
 これを達成したら
 
-Strategy Lab標準エンジンとする。
+StrategyX標準エンジンとする。

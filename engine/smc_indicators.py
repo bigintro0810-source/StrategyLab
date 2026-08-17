@@ -356,7 +356,7 @@ def mss_bullish(
     """Market Structure Shift(強気)。ICT界隈でもMSSとCHoCHは多くの情報源で
     同一概念として互換的に使われており、両者を明確に区別する統一定義は
     存在しない(唯一の「正解」がない、と本レビューでも指摘の通り)。
-    Strategy Labでは同じロジック(bos_choch_bullishのCHoCH側)を、検索性の
+    StrategyXでは同じロジック(bos_choch_bullishのCHoCH側)を、検索性の
     ため別名でも登録している - 計算結果はchoch_bullishと完全に同一。"""
     _bos, choch = bos_choch_bullish(high, low, close, lookback, break_basis)
     return choch

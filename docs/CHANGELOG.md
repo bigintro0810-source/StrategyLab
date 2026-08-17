@@ -1,4 +1,4 @@
-# Strategy Lab 更新履歴
+# StrategyX 更新履歴
 
 ## Version 1.0 (2026-06-29)
 

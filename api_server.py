@@ -1,4 +1,4 @@
-"""FastAPI backend for Strategy Lab's web frontend (frontend/).
+"""FastAPI backend for StrategyX's web frontend (frontend/).
 
 Thin wrapper over the existing, already-tested CLI pipeline (main.py) - reuses
 the exact subprocess invocation pattern gui_app.py already established (see
@@ -61,7 +61,7 @@ from engine.collection_registry import (
 )
 from main import DATA_DIRS, find_data_file, load_price_data, pip_size_for_symbol, resolve_output_dir
 
-app = FastAPI(title="Strategy Lab API")
+app = FastAPI(title="StrategyX API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1131,27 +1131,58 @@ INDICATOR_LABELS: dict[str, str] = {
     # チャートパターン (engine/chart_patterns.py) - 山1/谷1の値幅込みピボット
     # 判定・事前トレンド確認・値動きのなめらかさ(効率比・直線乖離)・山1前点
     # との対称性等で「本物のW字/M字か」を厳密に判定する形状判定ロジック。
-    "double_top_shape": "ダブルトップ",
-    "double_bottom_shape": "ダブルボトム",
-    "triple_top_shape": "トリプルトップ",
-    "triple_bottom_shape": "トリプルボトム",
-    "triple_top_breakdown": "トリプルトップ ネックライン割れ",
-    "triple_bottom_breakout": "トリプルボトム ネックライン突破",
-    "head_and_shoulders_breakdown": "ヘッド&ショルダーズ ネックライン割れ",
-    "inverse_head_and_shoulders_breakout": "逆ヘッド&ショルダーズ ネックライン突破",
-    "ascending_triangle_breakout": "上昇三角形 上抜けブレイク",
-    "descending_triangle_breakdown": "下降三角形 下抜けブレイク",
-    "symmetrical_triangle_breakout_bullish": "対称三角形 上抜けブレイク",
-    "symmetrical_triangle_breakout_bearish": "対称三角形 下抜けブレイク",
-    "rising_wedge_breakdown": "上昇ウェッジ 下抜けブレイク",
-    "falling_wedge_breakout": "下降ウェッジ 上抜けブレイク",
-    "bull_flag_breakout": "ブルフラッグ ブレイクアウト",
-    "bear_flag_breakdown": "ベアフラッグ ブレイクダウン",
-    "bullish_pennant_breakout": "上昇ペナント ブレイクアウト",
-    "bearish_pennant_breakdown": "下降ペナント ブレイクダウン",
-    "in_range_box": "レンジボックス継続中",
-    "range_box_breakout_bullish": "レンジボックス 上抜けブレイク",
-    "range_box_breakdown_bearish": "レンジボックス 下抜けブレイク",
+    "double_top_shape": "ダブルトップST",
+    "double_bottom_shape": "ダブルボトムST",
+    "triple_top_shape": "トリプルトップST",
+    "triple_bottom_shape": "トリプルボトムST",
+    "head_and_shoulders_shape": "ヘッド・アンド・ショルダーズST(三尊天井)",
+    "inverse_head_and_shoulders_shape": "逆ヘッド・アンド・ショルダーズST(逆三尊)",
+    "ascending_box_shape": "上昇ボックスST(レクタングル)",
+    "descending_box_shape": "下降ボックスST(レクタングル)",
+    "ascending_box_shape_legacy": "上昇ボックスST(レクタングル)（旧版）",
+    "descending_box_shape_legacy": "下降ボックスST(レクタングル)（旧版）",
+    "ascending_triangle_shape": "上昇三角保ち合いST",
+    "descending_triangle_shape": "下降三角保ち合いST",
+    "ascending_triangle_shape_legacy": "上昇三角保ち合いST（旧版）",
+    "descending_triangle_shape_legacy": "下降三角保ち合いST（旧版）",
+    "rising_wedge_shape": "上昇ウェッジST",
+    "rising_wedge_shape_x": "上昇ウェッジX",
+    "falling_wedge_shape": "下降ウェッジST",
+    "bullish_pennant_shape": "上昇ペナントST",
+    "bearish_pennant_shape": "下降ペナントST",
+    "bullish_flag_shape": "上昇フラッグST",
+    "bearish_flag_shape": "下降フラッグST",
+    "double_top_zigzag": "ダブルトップ",
+    "double_bottom_zigzag": "ダブルボトム",
+    "triple_top": "トリプルトップ",
+    "triple_bottom": "トリプルボトム",
+    "cup_and_handle": "カップ・アンド・ハンドル",
+    "inverted_cup_and_handle": "逆カップ・アンド・ハンドル",
+    "head_and_shoulders": "ヘッド・アンド・ショルダーズ(三尊)",
+    "inverse_head_and_shoulders": "逆ヘッド・アンド・ショルダーズ(逆三尊)",
+    "abcd_bullish": "ABCDパターン(強気)",
+    "abcd_bearish": "ABCDパターン(弱気)",
+    "abc_bullish": "ABCパターン(強気)",
+    "abc_bearish": "ABCパターン(弱気)",
+    "impulse_wave_bullish": "エリオット推進波(下降波・上昇シグナル)",
+    "impulse_wave_bearish": "エリオット推進波(上昇波・下落シグナル)",
+    "bullish_flag": "強気フラッグ",
+    "bearish_flag": "弱気フラッグ",
+    "bullish_pennant": "強気ペナント",
+    "bearish_pennant": "弱気ペナント",
+    "ascending_channel": "上昇チャネル",
+    "descending_channel": "下降チャネル",
+    "ranging_channel": "レンジチャネル",
+    "rising_wedge_expanding": "上昇ウェッジ(拡大)",
+    "falling_wedge_expanding": "下降ウェッジ(拡大)",
+    "diverging_triangle": "拡大トライアングル",
+    "ascending_triangle_expanding": "上昇トライアングル(拡大)",
+    "descending_triangle_expanding": "下降トライアングル(拡大)",
+    "rising_wedge_contracting": "上昇ウェッジ(収束)",
+    "falling_wedge_contracting": "下降ウェッジ(収束)",
+    "converging_triangle": "収束トライアングル",
+    "descending_triangle_contracting": "下降トライアングル(収束)",
+    "ascending_triangle_contracting": "上昇トライアングル(収束)",
     # 2026-07-08追加(3巡目)
     "cci": "CCI(商品チャネル指数)",
     "williams_r": "Williams %R",
@@ -1215,39 +1246,10 @@ INDICATOR_LABELS: dict[str, str] = {
     "ha_bearish": "平均足 陰線",
     "ha_strong_bullish": "平均足 強い陽線(下ヒゲなし)",
     "ha_strong_bearish": "平均足 強い陰線(上ヒゲなし)",
-    "gartley_bullish": "ガートレーパターン(上昇)",
-    "gartley_bearish": "ガートレーパターン(下降)",
-    "bat_bullish": "バットパターン(上昇)",
-    "bat_bearish": "バットパターン(下降)",
-    "butterfly_bullish": "バタフライパターン(上昇)",
-    "butterfly_bearish": "バタフライパターン(下降)",
-    "crab_bullish": "クラブパターン(上昇)",
-    "crab_bearish": "クラブパターン(下降)",
-    # 2026-07-08追加(4巡目)
-    "ab_cd_bullish": "AB=CDパターン(上昇)",
-    "ab_cd_bearish": "AB=CDパターン(下降)",
-    "three_drives_bullish": "スリードライブ(上昇、3連続安値切り下げ後の反転)",
-    "three_drives_bearish": "スリードライブ(下降、3連続高値切り上げ後の反転)",
-    "uptrend_line_break": "上昇トレンドライン割れ",
-    "downtrend_line_break": "下降トレンドライン抜け",
-    "ascending_channel_break": "上昇平行チャネル下抜け",
-    "descending_channel_break": "下降平行チャネル上抜け",
-    "false_breakout_bullish_reversal": "フェイクブレイク(下放れ失敗からの反転)",
-    "false_breakout_bearish_reversal": "フェイクブレイク(上放れ失敗からの反転)",
     "nr4": "NR4(過去4本で最も狭いレンジ)",
     "nr7": "NR7(過去7本で最も狭いレンジ)",
     "volume_climax_bullish": "出来高クライマックス(上昇)",
     "volume_climax_bearish": "出来高クライマックス(下降)",
-    # 2026-07-08追加(5巡目、HFM記事の未実装分)
-    "saucer_top": "ソーサートップ(丸い天井)",
-    "saucer_bottom": "ソーサーボトム(丸い底)",
-    "ascending_rectangle_breakout": "上昇レクタングル ブレイクアウト",
-    "descending_rectangle_breakdown": "下降レクタングル ブレイクダウン",
-    "broadening_formation_breakout_bullish": "ブロードニングフォーメーション 上抜けブレイク",
-    "broadening_formation_breakout_bearish": "ブロードニングフォーメーション 下抜けブレイク",
-    "diamond_formation_breakout_bullish": "ダイヤモンドフォーメーション 上抜けブレイク",
-    "diamond_formation_breakout_bearish": "ダイヤモンドフォーメーション 下抜けブレイク",
-    "cup_with_handle_breakout": "カップウィズハンドル ブレイクアウト",
     "equal_high": "Equal High(直近高値がほぼ同水準に並ぶ、流動性プール)",
     "equal_low": "Equal Low(直近安値がほぼ同水準に並ぶ、流動性プール)",
     "mss_bullish": "MSS(上昇/Market Structure Shift)",
@@ -1293,20 +1295,184 @@ _BREAK_BASIS_CHOICES: list[dict] = [
 # 早すぎるブレイクを無効化する"Rejected"を、既存の5状態に追加した独自の
 # 状態セット(既存のPATTERN_STATE_CHOICESとは別、既存indicatorは無変更)。
 _SHAPE_PATTERN_STATE_CHOICES = [
-    {"value": "detected", "label": "Detected(検出)"},
-    {"value": "rejected", "label": "Rejected(早すぎるブレイクで無効)"},
+    {"value": "candidate", "label": "Candidate(候補成立)"},
     {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
-    {"value": "failed_after_retest", "label": "Failed After Retest(リテスト後に失敗)"},
-    {"value": "failed_before_retest", "label": "Failed Before Retest(リテスト前に失敗)"},
-    {"value": "expired", "label": "Expired(期限切れ)"},
-]
-_TRENDLINE_DEV_BASIS_CHOICES = [
-    {"value": "atr", "label": "ATR倍率"},
-    {"value": "price_pct", "label": "区間の価格差(%)"},
+    {"value": "invalidated", "label": "Invalidated(無効)"},
 ]
 _SHAPE_BREAKOUT_TYPE_CHOICES = [
     {"value": "close", "label": "終値ブレイク"},
     {"value": "wick", "label": "ヒゲ(高値/安値)ブレイク"},
+]
+# ダブルトップ/ボトム(ZigZag方式、B方式実装)の状態 - 上の形状判定版とは
+# 別の状態セット。参考元に期限切れ・リテストの概念が無いため、Rejected/
+# Failed/Expiredに相当する状態が存在しない(docs/pattern_spec_double_top_
+# bottom_zigzag.md 7.5)。
+_ZIGZAG_DTDB_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(候補成立)"},
+    {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
+    {"value": "invalidated", "label": "Invalidated(第1山/谷を更新して無効)"},
+]
+# 同上のパラメータ仕様。参考元由来の公開パラメータはこの2つだけで、
+# 参考元に無い品質フィルター(ATR・効率比・直線乖離・ブレイク余白/期限・
+# リテスト等)は追加しない方針のため、形状判定版のような多数のtolerance系
+# パラメータは存在しない(仕様書2章・7.7)。
+_ZIGZAG_DTDB_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _ZIGZAG_DTDB_STATE_CHOICES, "width": "168px"},
+    {"name": "length", "label": "ZigZag期間(本、右側確認なしのlookback型ピボット)", "default": 10, "type": "int"},
+    {"name": "max_risk_ratio", "label": "最大リスク比率(%、|P3-P1|÷(|P3-P1|+|P3-P2|)×100の上限、未満で成立)", "default": 30.0, "type": "float"},
+]
+# トリプルトップ/ボトム・カップ&ハンドル・ヘッド&ショルダーズ(多段ZigZag方式、
+# B方式実装。docs/pattern_spec_reversal_chart_patterns_recursive.md)。6種類は
+# 共通の多段ZigZagから同時に検出されるため、パラメータ仕様も完全に共通。
+# Confirmed/Invalidatedは参考元に無く、全パターンで状態モデルを揃えるための
+# StrategyX独自拡張(仕様書6章)。
+_RRCP_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(形が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(ネックライン突破)"},
+    {"value": "invalidated", "label": "Invalidated(パターン極値を更新して無効)"},
+]
+_RRCP_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _RRCP_STATE_CHOICES, "width": "196px"},
+    {"name": "zigzag_length", "label": "ZigZag期間(本、右側確認なしのlookback型ピボット)", "default": 8, "type": "int"},
+    {"name": "error_percent", "label": "許容誤差(%、値幅比が1±この割合ならTap扱い)", "default": 13.0, "type": "float"},
+    {"name": "shoulder_start", "label": "肩の比率(下限、肩・ハンドル・ネックの判定に使う)", "default": 0.1, "type": "float"},
+    {"name": "shoulder_end", "label": "肩の比率(上限、ヘッドは この逆数〜下限の逆数)", "default": 0.5, "type": "float"},
+    {"name": "depth", "label": "ZigZag保持数(各レベルで保持するピボット数)", "default": 50, "type": "int"},
+    {"name": "min_zigzag_level", "label": "最小ZigZagレベル(これ未満のレベルは走査しない)", "default": 0, "type": "int"},
+]
+# ABCDパターン(投影型、B方式実装。docs/pattern_spec_abcd_projection.md)。
+# Confirmed/Invalidatedは参考元自身が定義・追跡しているもの(独自拡張ではない)。
+_ABCD_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(形が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(D点の利確に到達)"},
+    {"value": "invalidated", "label": "Invalidated(A点の損切りに到達)"},
+]
+_ABCD_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _ABCD_STATE_CHOICES, "width": "196px"},
+    {"name": "zigzag_length", "label": "ZigZag期間(本、右側確認なしのlookback型ピボット)", "default": 13, "type": "int"},
+    {"name": "min_abc_ratio", "label": "ABC比率の下限(C点の値幅比 |B-C|÷|A-B|)", "default": 0.5, "type": "float"},
+    {"name": "max_abc_ratio", "label": "ABC比率の上限", "default": 1.0, "type": "float"},
+    {"name": "avoid_overlap", "label": "直前パターンと重なる場合は検出しない", "default": True, "type": "bool"},
+]
+# ABCパターン(多段ZigZag、B方式実装。docs/pattern_spec_abc_recursive.md)。
+# Confirmed/Invalidatedは参考元自身が定義・追跡しているもの(独自拡張ではない)。
+_ABC_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(形が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(利確に到達)"},
+    {"value": "invalidated", "label": "Invalidated(損切りに到達)"},
+]
+_ABC_BASE_CHOICES_UI = [
+    {"value": "abc_extension", "label": "ABC延長(C + (B-A)×比率)"},
+    {"value": "bc_retracement", "label": "BC戻し(C - (C-B)×比率)"},
+]
+_ABC_CONDITION_CHOICES_UI = [
+    {"value": "any", "label": "指定なし"},
+    {"value": "trend", "label": "トレンド方向(A非新値・B新値)"},
+    {"value": "reverse", "label": "逆方向(A新値・B非新値)"},
+    {"value": "contracting", "label": "収束(A・Bとも非新値)"},
+    {"value": "expanding", "label": "拡大(A・Bとも新値)"},
+]
+_ABC_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _ABC_STATE_CHOICES, "width": "196px"},
+    {"name": "zigzag_length", "label": "ZigZag期間(本、右側確認なしのlookback型ピボット)", "default": 13, "type": "int"},
+    {"name": "trade_condition", "label": "方向フィルター(A・Bが新値かどうかの組み合わせ)", "default": "any", "type": "string_choice", "string_choices": _ABC_CONDITION_CHOICES_UI, "width": "220px"},
+    {"name": "base", "label": "水準の基準", "default": "abc_extension", "type": "string_choice", "string_choices": _ABC_BASE_CHOICES_UI, "width": "220px"},
+    {"name": "entry_ratio", "label": "エントリー比率", "default": 0.3, "type": "float"},
+    {"name": "target_ratio", "label": "利確比率", "default": 1.0, "type": "float"},
+    {"name": "stop_ratio", "label": "損切り比率(0以下)", "default": 0.0, "type": "float"},
+    {"name": "log_scale", "label": "対数スケールで水準を計算する", "default": False, "type": "bool"},
+    {"name": "use_close_for_entry", "label": "エントリー判定に終値を使う(OFFでヒゲ)", "default": True, "type": "bool"},
+    {"name": "use_close_for_target", "label": "利確判定に終値を使う(OFFでヒゲ)", "default": True, "type": "bool"},
+    {"name": "use_close_for_stop", "label": "損切り判定に終値を使う(OFFでヒゲ)", "default": True, "type": "bool"},
+    {"name": "depth", "label": "ZigZag保持数", "default": 200, "type": "int"},
+    {"name": "min_zigzag_level", "label": "最小ZigZagレベル", "default": 0, "type": "int"},
+]
+# エリオット推進波(多段ZigZag、B方式実装。docs/pattern_spec_motive_wave.md)。
+# 参考元は形を描画するだけで水準を一切定義していないため、Confirmed/Invalidated
+# の水準(ネックライン=P4、極値=P5)はStrategyX独自拡張(仕様書8.1)。
+_MOTIVE_WAVE_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(5波の形が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(第5波の起点P4を突破)"},
+    {"value": "invalidated", "label": "Invalidated(波の終点P5を更新して無効)"},
+]
+_MOTIVE_WAVE_LEVEL_TYPE_CHOICES = [
+    {"value": "minimum", "label": "以上(指定レベル以上を全て走査)"},
+    {"value": "absolute", "label": "一致(指定レベルだけ走査)"},
+]
+_MOTIVE_WAVE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _MOTIVE_WAVE_STATE_CHOICES, "width": "220px"},
+    {"name": "zigzag_length", "label": "ZigZag期間(本、右側確認なしのlookback型ピボット)", "default": 5, "type": "int"},
+    {"name": "zigzag_level", "label": "ZigZagレベル(1以上。1段上のZigZagの1波の中から5波を探す)", "default": 1, "type": "int"},
+    {"name": "level_type", "label": "レベルの扱い", "default": "minimum", "type": "string_choice", "string_choices": _MOTIVE_WAVE_LEVEL_TYPE_CHOICES, "width": "220px"},
+    {"name": "depth", "label": "ZigZag保持数(大きいほど重い。500は58万本で40秒前後)", "default": 200, "type": "int"},
+    {"name": "repaint", "label": "ピボット更新のたびに再判定する(OFFで確定待ち・検出は遅れる)", "default": True, "type": "bool"},
+]
+# フラッグ/ペナント(4本のZigZag、B方式実装。docs/pattern_spec_flags_pennants.md)。
+# Confirmed/Invalidatedの水準は参考元が旗竿探索に使っている invalidationPrice /
+# validationPrice をそのまま流用したもの(仕様書8.1)。
+_FNP_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(旗竿+土台が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(土台をブレイク)"},
+    {"value": "invalidated", "label": "Invalidated(反対側へ抜けて無効)"},
+]
+_FNP_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _FNP_STATE_CHOICES, "width": "220px"},
+    {"name": "error_threshold", "label": "許容誤差(%、2本の傾き/値幅比がこの割合内なら同じ線とみなす)", "default": 20.0, "type": "float"},
+    {"name": "flat_threshold", "label": "水平判定しきい値(%、トレンドラインの傾きを上/下/水平に分ける)", "default": 20.0, "type": "float"},
+    {"name": "flag_ratio", "label": "旗竿の最大戻し比率", "default": 0.618, "type": "float"},
+    {"name": "avoid_overlap", "label": "既存パターンと重なる場合は検出しない", "default": True, "type": "bool"},
+    {"name": "check_bar_ratio", "label": "バー間隔の比も確認する", "default": False, "type": "bool"},
+    {"name": "bar_ratio_limit", "label": "バー間隔比の下限(上限はこの逆数。上のONのときだけ有効)", "default": 0.382, "type": "float"},
+    {"name": "max_patterns", "label": "重複判定に使う直近パターン保持数", "default": 20, "type": "int"},
+    {"name": "use_zigzag1", "label": "ZigZag1を使う", "default": True, "type": "bool", "group": "fnp_zigzags"},
+    {"name": "zigzag_length1", "label": "ZigZag1 期間", "default": 3, "type": "int", "group": "fnp_zigzags"},
+    {"name": "depth1", "label": "ZigZag1 保持数", "default": 144, "type": "int", "group": "fnp_zigzags"},
+    {"name": "use_zigzag2", "label": "ZigZag2を使う", "default": True, "type": "bool", "group": "fnp_zigzags"},
+    {"name": "zigzag_length2", "label": "ZigZag2 期間", "default": 5, "type": "int", "group": "fnp_zigzags"},
+    {"name": "depth2", "label": "ZigZag2 保持数", "default": 89, "type": "int", "group": "fnp_zigzags"},
+    {"name": "use_zigzag3", "label": "ZigZag3を使う", "default": True, "type": "bool", "group": "fnp_zigzags"},
+    {"name": "zigzag_length3", "label": "ZigZag3 期間", "default": 8, "type": "int", "group": "fnp_zigzags"},
+    {"name": "depth3", "label": "ZigZag3 保持数", "default": 55, "type": "int", "group": "fnp_zigzags"},
+    {"name": "use_zigzag4", "label": "ZigZag4を使う", "default": True, "type": "bool", "group": "fnp_zigzags"},
+    {"name": "zigzag_length4", "label": "ZigZag4 期間", "default": 13, "type": "int", "group": "fnp_zigzags"},
+    {"name": "depth4", "label": "ZigZag4 保持数", "default": 34, "type": "int", "group": "fnp_zigzags"},
+]
+# チャネル/ウェッジ/トライアングル13種(4本のZigZag、B方式実装。
+# docs/pattern_spec_auto_chart_patterns.md)。Confirmed/Invalidatedの水準は
+# 参考元に無く、パターン自身の2本のトレンドラインから決めたStrategyX独自
+# 拡張(仕様書8.1)。
+_ACP_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(形が揃った)"},
+    {"value": "confirmed", "label": "Confirmed(最後の構成点側のラインをブレイク)"},
+    {"value": "invalidated", "label": "Invalidated(反対側のラインを抜けて無効)"},
+]
+_ACP_LAST_DIR_CHOICES = [
+    {"value": "both", "label": "指定なし(上下が混ざる)"},
+    {"value": "up", "label": "高値で終わるものだけ"},
+    {"value": "down", "label": "安値で終わるものだけ"},
+]
+_ACP_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _ACP_STATE_CHOICES, "width": "260px"},
+    {"name": "last_pivot_direction", "label": "最後の構成点の向き(シグナルの向きが決まる)", "default": "both", "type": "string_choice", "string_choices": _ACP_LAST_DIR_CHOICES, "width": "220px"},
+    {"name": "number_of_pivots", "label": "構成点の数(5または6)", "default": 5, "type": "int"},
+    {"name": "error_threshold", "label": "許容誤差(%、トレンドライン検証用)", "default": 20.0, "type": "float"},
+    {"name": "flat_threshold", "label": "水平判定しきい値(%、トレンドラインの傾きを上/下/水平に分ける)", "default": 20.0, "type": "float"},
+    {"name": "check_bar_ratio", "label": "バー間隔の比も確認する", "default": True, "type": "bool"},
+    {"name": "bar_ratio_limit", "label": "バー間隔比の下限(上限はこの逆数。上のONのときだけ有効)", "default": 0.382, "type": "float"},
+    {"name": "avoid_overlap", "label": "既存パターンと重なる場合は検出しない", "default": True, "type": "bool"},
+    {"name": "max_patterns", "label": "重複判定に使う直近パターン保持数", "default": 20, "type": "int"},
+    {"name": "use_zigzag1", "label": "ZigZag1を使う", "default": True, "type": "bool", "group": "acp_zigzags"},
+    {"name": "zigzag_length1", "label": "ZigZag1 期間", "default": 8, "type": "int", "group": "acp_zigzags"},
+    {"name": "depth1", "label": "ZigZag1 保持数", "default": 55, "type": "int", "group": "acp_zigzags"},
+    {"name": "use_zigzag2", "label": "ZigZag2を使う", "default": False, "type": "bool", "group": "acp_zigzags"},
+    {"name": "zigzag_length2", "label": "ZigZag2 期間", "default": 13, "type": "int", "group": "acp_zigzags"},
+    {"name": "depth2", "label": "ZigZag2 保持数", "default": 34, "type": "int", "group": "acp_zigzags"},
+    {"name": "use_zigzag3", "label": "ZigZag3を使う", "default": False, "type": "bool", "group": "acp_zigzags"},
+    {"name": "zigzag_length3", "label": "ZigZag3 期間", "default": 21, "type": "int", "group": "acp_zigzags"},
+    {"name": "depth3", "label": "ZigZag3 保持数", "default": 21, "type": "int", "group": "acp_zigzags"},
+    {"name": "use_zigzag4", "label": "ZigZag4を使う", "default": False, "type": "bool", "group": "acp_zigzags"},
+    {"name": "zigzag_length4", "label": "ZigZag4 期間", "default": 34, "type": "int", "group": "acp_zigzags"},
+    {"name": "depth4", "label": "ZigZag4 保持数", "default": 13, "type": "int", "group": "acp_zigzags"},
 ]
 # ダブルボトム(形状判定版)のパラメータ仕様 - ユーザーとの設計レビューを
 # そのまま反映(engine/chart_patterns.py::_double_top_bottom_shape_state
@@ -1317,17 +1483,17 @@ _DOUBLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "谷1・谷2・ネックの値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷1→ネック・ネック→谷2の本数", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
-    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→谷2の本数(谷1→ネックの本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "max_bars_between_tops", "label": "谷1→ネック・ネック→谷2の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→谷2の本数(谷1→ネックの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "谷2→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "谷2→ブレイクの本数上限(谷1→ネックの本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
     {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "谷1前→ネックの本数(ネック→ブレイクの本数に対する倍率)", "default_min": 0.67, "default_max": 1.5, "value_type": "float", "group": "breakout_bars"},
-    {"name": "top_tolerance_mult", "label": "谷1・谷2の水準許容誤差(谷1→ネックの値幅に対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
+    {"name": "top_tolerance_mult", "label": "谷1・谷2の水準許容誤差(谷1→ネックの値幅に対する倍率)", "default": 0.2, "type": "float", "group": "tolerance"},
     {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷の深さ(ATR倍率)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "谷2の探索窓を閉じる反発幅(谷2→ネックの価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
     {"name": "pivot_spike_window_ratio", "label": "谷1・谷2・ネックの孤立度チェック範囲(隣接区間の本数に対する倍率)", "default": 0.5, "type": "float", "group": "isolation"},
     {"name": "pivot_spike_excess_atr_max", "label": "谷1・谷2・ネックの突出幅上限(ATR倍率)", "default": 1.3, "type": "float", "group": "isolation"},
     {"name": "efficiency_ratio_min_context", "label": "谷1前→谷1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
@@ -1346,17 +1512,17 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
     {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
     {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
     {"name": "prominence_atr_mult", "label": "山1・山2・ネックの値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山1→ネック・ネック→山2の本数", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
-    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→山2の本数(山1→ネックの本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "max_bars_between_tops", "label": "山1→ネック・ネック→山2の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→山2の本数(山1→ネックの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "山2→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
     {"name": "breakout_deadline_ratio_max", "label": "山2→ブレイクの本数上限(山1→ネックの本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
     {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "山1前→ネックの本数(ネック→ブレイクの本数に対する倍率)", "default_min": 0.67, "default_max": 1.5, "value_type": "float", "group": "breakout_bars"},
-    {"name": "top_tolerance_mult", "label": "山1・山2の水準許容誤差(山1→ネックの値幅に対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
+    {"name": "top_tolerance_mult", "label": "山1・山2の水準許容誤差(山1→ネックの値幅に対する倍率)", "default": 0.2, "type": "float", "group": "tolerance"},
     {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷の深さ(ATR倍率)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "山2の探索窓を閉じる反発幅(山2→ネックの価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
     {"name": "pivot_spike_window_ratio", "label": "山1・山2・ネックの孤立度チェック範囲(隣接区間の本数に対する倍率)", "default": 0.5, "type": "float", "group": "isolation"},
     {"name": "pivot_spike_excess_atr_max", "label": "山1・山2・ネックの突出幅上限(ATR倍率)", "default": 1.3, "type": "float", "group": "isolation"},
     {"name": "efficiency_ratio_min_context", "label": "山1前→山1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
@@ -1367,66 +1533,225 @@ _DOUBLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "efficiency_ratio_floor", "label": "山1→ネック・ネック→山2のカウフマンER下限(個別)", "default": 0.07, "type": "float", "group": "core_legs"},
     {"name": "trendline_dev_pct", "label": "山1→ネック・ネック→山2の直線乖離上限", "default": 0.8, "type": "float", "group": "core_legs"},
 ]
-# トリプルボトム(形状判定版) - ダブルボトム(形状判定版)の「谷1→ネック→
-# 谷2」に「谷2→ネック2→谷3」をもう一段追加した拡張版(2026-08-01、
-# engine/chart_patterns.py::_triple_top_bottom_shape_stateのモジュール
-# 冒頭コメント参照)。パラメータのほとんどはダブルボトムと共用(interval1
-# 系の判定基準を2つのレッグ両方に適用する設計)で、neckline_tolerance_pct
-# だけ新規(ネック1・ネック2自体の水準が近いかの任意チェック)。
+# トリプルボトム(形状判定版) - ダブルボトムSTを土台に、谷1→ネック1→谷2→
+# ネック2→谷3の5点構成へ拡張したもの(docs/pattern_spec_triple_top_bottom_
+# shape.md参照)。新設はneck_tolerance_multの1個のみ。他は意味を各区間へ
+# 複製適用しつつ、査読で稀少化対策のため一部初期値をダブルより緩めている
+# (max_bars_between_tops/symmetry_ratio_max/top_tolerance_mult/
+# efficiency_ratio_min)。
 _TRIPLE_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
-    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷2→ネック2の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
-    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
-    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
-    {"name": "prominence_atr_mult", "label": "谷1・谷2・谷3・ネックの値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "谷→ネック・ネック→次の谷の本数(全レッグ共通)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
-    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→次の谷の本数(直前区間の本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "prominence_atr_mult", "label": "谷1・谷2・谷3・ネック1・ネック2の値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
+    {"name": "max_bars_between_tops", "label": "谷1→ネック1・ネック1→谷2・谷2→ネック2・ネック2→谷3の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→谷2・谷3の本数(直前のネックまでの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "谷3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
-    {"name": "breakout_deadline_ratio_max", "label": "谷3→ブレイクの本数上限(谷2→ネック2の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
-    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "谷1前→ネック1の本数(ネック2→ブレイクの本数に対する倍率)", "default_min": 0.67, "default_max": 1.5, "value_type": "float", "group": "breakout_bars"},
-    {"name": "top_tolerance_mult", "label": "谷1・谷2・谷3の水準許容誤差(3点全体の最大最小差、谷1→ネックの値幅に対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
-    {"name": "neckline_tolerance_mult", "label": "ネック1・ネック2の水準許容誤差(谷1→ネックの値幅に対する倍率)", "default": 0.3, "type": "float", "group": "tolerance"},
-    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷の深さ(ATR倍率、両レッグ共通)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
-    {"name": "pivot_spike_window_ratio", "label": "谷1・谷2・谷3・ネックの孤立度チェック範囲(隣接区間の本数に対する倍率)", "default": 0.5, "type": "float", "group": "isolation"},
-    {"name": "pivot_spike_excess_atr_max", "label": "谷1・谷2・谷3・ネックの突出幅上限(ATR倍率)", "default": 1.3, "type": "float", "group": "isolation"},
+    {"name": "breakout_deadline_ratio_max", "label": "谷3→ブレイクの本数上限(谷1→ネック1の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
+    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "谷1前→谷2の本数(谷2→ブレイクの本数に対する倍率)", "default_min": 0.5, "default_max": 2.0, "value_type": "float", "group": "breakout_bars"},
+    {"name": "top_tolerance_mult", "label": "谷1・谷2・谷3の水準許容誤差(谷1→ネック1の値幅に対する倍率)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"name": "neck_tolerance_mult", "label": "ネック1・ネック2の水準近接(谷1→ネック1の値幅に対する倍率、0=無制限は不可)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷1・谷2それぞれの深さ(ATR倍率、独立判定)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "谷3の探索窓を閉じる反発幅(谷3→ネック2の価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
+    {"name": "pivot_spike_window_ratio", "label": "谷1・谷3・ネック1・ネック2の孤立度チェック範囲(隣接区間の本数に対する倍率、谷2は対象外)", "default": 0.5, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "谷1・谷3・ネック1・ネック2の突出幅上限(ATR倍率、谷2は対象外)", "default": 1.3, "type": "float", "group": "isolation"},
     {"name": "efficiency_ratio_min_context", "label": "谷1前→谷1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
     {"name": "trendline_dev_pct_context", "label": "谷1前→谷1の直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
-    {"name": "efficiency_ratio_min_breakout", "label": "谷3→ブレイクのカウフマンER下限", "default": 0.25, "type": "float", "group": "context_breakout_legs"},
-    {"name": "trendline_dev_pct_breakout", "label": "谷3→ブレイクの直線乖離上限", "default": 0.8, "type": "float", "group": "context_breakout_legs"},
-    {"name": "efficiency_ratio_min", "label": "谷1→ネック1〜ネック2→谷3のカウフマンER下限(4区間平均)", "default": 0.25, "type": "float", "group": "core_legs"},
-    {"name": "efficiency_ratio_floor", "label": "谷1→ネック1〜ネック2→谷3のカウフマンER下限(個別)", "default": 0.07, "type": "float", "group": "core_legs"},
-    {"name": "trendline_dev_pct", "label": "谷1→ネック1〜ネック2→谷3の直線乖離上限", "default": 0.8, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_min_breakout", "label": "谷3→ブレイクのカウフマンER下限", "default": 0.15, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_breakout", "label": "谷3→ブレイクの直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min", "label": "谷1→ネック1・ネック1→谷2・谷2→ネック2・ネック2→谷3のカウフマンER下限(4区間平均)", "default": 0.1, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_floor", "label": "谷1→ネック1・ネック1→谷2・谷2→ネック2・ネック2→谷3のカウフマンER下限(個別)", "default": 0.05, "type": "float", "group": "core_legs"},
+    {"name": "trendline_dev_pct", "label": "谷1→ネック1・ネック1→谷2・谷2→ネック2・ネック2→谷3の直線乖離上限", "default": 0.9, "type": "float", "group": "core_legs"},
 ]
-# トリプルトップ(形状判定版) - 概念はトリプルボトム側と左右対称(ラベル
-# 文言だけ「山/谷」を手書きで入れ替え、ダブルトップ側の慣習に合わせて
-# 「谷」の深さ系の語はそのまま不変)。
+# トリプルトップ(形状判定版) - トリプルボトム側と左右対称、ラベル文言のみ
+# 「山」に対応させている(ダブル側の慣例と同じ)。
 _TRIPLE_TOP_SHAPE_PARAM_SPEC: list[dict] = [
     {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
     {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
-    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(山2→ネック2の深さに対する倍率)", "default": 0.075, "type": "float", "group": "break_settings"},
-    {"name": "retest_buffer_mult", "label": "リテスト判定余白(ブレイク判定余白に対する倍率)", "default": 1.5, "type": "float", "group": "break_settings"},
-    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 5, "type": "int", "group": "pivot_basic"},
-    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 5, "type": "int", "group": "pivot_basic"},
-    {"name": "prominence_atr_mult", "label": "山1・山2・山3・ネックの値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
-    {"type": "range", "name_min": "min_bars_between_tops", "name_max": "max_bars_between_tops", "label": "山→ネック・ネック→次の山の本数(全レッグ共通)", "default_min": 5, "default_max": 0, "value_type": "int", "group": "bars_between_tops"},
-    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→次の山の本数(直前区間の本数に対する倍率)", "default_min": 0.3, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(谷の深さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "prominence_atr_mult", "label": "山1・山2・山3・ネック1・ネック2の値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
+    {"name": "max_bars_between_tops", "label": "山1→ネック1・ネック1→山2・山2→ネック2・ネック2→山3の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→山2・山3の本数(直前のネックまでの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
     {"name": "breakout_deadline_min_bars", "label": "山3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
-    {"name": "breakout_deadline_ratio_max", "label": "山3→ブレイクの本数上限(山2→ネック2の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
-    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "山1前→ネック1の本数(ネック2→ブレイクの本数に対する倍率)", "default_min": 0.67, "default_max": 1.5, "value_type": "float", "group": "breakout_bars"},
-    {"name": "top_tolerance_mult", "label": "山1・山2・山3の水準許容誤差(3点全体の最大最小差、山1→ネックの値幅に対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
-    {"name": "neckline_tolerance_mult", "label": "ネック1・ネック2の水準許容誤差(山1→ネックの値幅に対する倍率)", "default": 0.3, "type": "float", "group": "tolerance"},
-    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷の深さ(ATR倍率、両レッグ共通)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
-    {"name": "pivot_spike_window_ratio", "label": "山1・山2・山3・ネックの孤立度チェック範囲(隣接区間の本数に対する倍率)", "default": 0.5, "type": "float", "group": "isolation"},
-    {"name": "pivot_spike_excess_atr_max", "label": "山1・山2・山3・ネックの突出幅上限(ATR倍率)", "default": 1.3, "type": "float", "group": "isolation"},
+    {"name": "breakout_deadline_ratio_max", "label": "山3→ブレイクの本数上限(山1→ネック1の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
+    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "山1前→山2の本数(山2→ブレイクの本数に対する倍率)", "default_min": 0.5, "default_max": 2.0, "value_type": "float", "group": "breakout_bars"},
+    {"name": "top_tolerance_mult", "label": "山1・山2・山3の水準許容誤差(山1→ネック1の値幅に対する倍率)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"name": "neck_tolerance_mult", "label": "ネック1・ネック2の水準近接(山1→ネック1の値幅に対する倍率、0=無制限は不可)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷1・谷2それぞれの深さ(ATR倍率、独立判定)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "山3の探索窓を閉じる反発幅(山3→ネック2の価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
+    {"name": "pivot_spike_window_ratio", "label": "山1・山3・ネック1・ネック2の孤立度チェック範囲(隣接区間の本数に対する倍率、山2は対象外)", "default": 0.5, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "山1・山3・ネック1・ネック2の突出幅上限(ATR倍率、山2は対象外)", "default": 1.3, "type": "float", "group": "isolation"},
     {"name": "efficiency_ratio_min_context", "label": "山1前→山1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
     {"name": "trendline_dev_pct_context", "label": "山1前→山1の直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
-    {"name": "efficiency_ratio_min_breakout", "label": "山3→ブレイクのカウフマンER下限", "default": 0.25, "type": "float", "group": "context_breakout_legs"},
-    {"name": "trendline_dev_pct_breakout", "label": "山3→ブレイクの直線乖離上限", "default": 0.8, "type": "float", "group": "context_breakout_legs"},
-    {"name": "efficiency_ratio_min", "label": "山1→ネック1〜ネック2→山3のカウフマンER下限(4区間平均)", "default": 0.25, "type": "float", "group": "core_legs"},
-    {"name": "efficiency_ratio_floor", "label": "山1→ネック1〜ネック2→山3のカウフマンER下限(個別)", "default": 0.07, "type": "float", "group": "core_legs"},
-    {"name": "trendline_dev_pct", "label": "山1→ネック1〜ネック2→山3の直線乖離上限", "default": 0.8, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_min_breakout", "label": "山3→ブレイクのカウフマンER下限", "default": 0.15, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_breakout", "label": "山3→ブレイクの直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min", "label": "山1→ネック1・ネック1→山2・山2→ネック2・ネック2→山3のカウフマンER下限(4区間平均)", "default": 0.1, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_floor", "label": "山1→ネック1・ネック1→山2・山2→ネック2・ネック2→山3のカウフマンER下限(個別)", "default": 0.05, "type": "float", "group": "core_legs"},
+    {"name": "trendline_dev_pct", "label": "山1→ネック1・ネック1→山2・山2→ネック2・ネック2→山3の直線乖離上限", "default": 0.9, "type": "float", "group": "core_legs"},
+]
+# 逆ヘッド・アンド・ショルダーズ(形状判定版、逆三尊) - トリプルボトムSTが
+# 土台。肩1/頭/肩3の3点構成、頭の水準判定とネックライン(傾き許容)の2点
+# だけが違う(docs/pattern_spec_head_and_shoulders_shape.md参照)。
+_HS_BOTTOM_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(ネックの深さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "prominence_atr_mult", "label": "肩1・頭・肩3・ネック1・ネック2の値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
+    {"name": "max_bars_between_tops", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→頭・肩3の本数(直前のネックまでの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "breakout_deadline_min_bars", "label": "肩3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
+    {"name": "breakout_deadline_ratio_max", "label": "肩3→ブレイクの本数上限(肩1→ネック1の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
+    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "肩1前→頭の本数(頭→ブレイクの本数に対する倍率)", "default_min": 0.5, "default_max": 2.0, "value_type": "float", "group": "breakout_bars"},
+    {"name": "top_tolerance_mult", "label": "肩1・肩3の水準許容誤差(肩1→ネック1の値幅に対する倍率、頭は対象外)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"name": "head_prominence_mult", "label": "頭の突出下限(肩1→ネック1の値幅に対する倍率、頭が肩より低くなければならない量)", "default": 0.5, "type": "float", "group": "tolerance"},
+    {"name": "neck_tolerance_mult", "label": "ネック1・ネック2の水準近接(肩1→ネック1の値幅に対する倍率、0=完全な同水準・無制限は不可)", "default": 0.4, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "ネック1・ネック2それぞれの深さ(ATR倍率、独立判定)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "肩3の探索窓を閉じる反発幅(肩3→ネック2の価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
+    {"name": "pivot_spike_window_ratio", "label": "肩1・肩3・ネック1・ネック2の孤立度チェック範囲(隣接区間の本数に対する倍率、頭は対象外)", "default": 0.5, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "肩1・肩3・ネック1・ネック2の突出幅上限(ATR倍率、頭は対象外)", "default": 1.3, "type": "float", "group": "isolation"},
+    {"name": "efficiency_ratio_min_context", "label": "肩1前→肩1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_context", "label": "肩1前→肩1の直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min_breakout", "label": "肩3→ブレイクのカウフマンER下限", "default": 0.15, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_breakout", "label": "肩3→ブレイクの直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3のカウフマンER下限(4区間平均)", "default": 0.1, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_floor", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3のカウフマンER下限(個別)", "default": 0.05, "type": "float", "group": "core_legs"},
+    {"name": "trendline_dev_pct", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3の直線乖離上限", "default": 0.9, "type": "float", "group": "core_legs"},
+]
+# ヘッド・アンド・ショルダーズ(形状判定版、三尊天井) - ボトム側と左右対称、
+# ラベル文言のみ「山」に対応させている。
+_HS_TOP_SHAPE_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(ネックの深さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "prominence_atr_mult", "label": "肩1・頭・肩3・ネック1・ネック2の値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
+    {"name": "max_bars_between_tops", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_tops"},
+    {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "ネック→頭・肩3の本数(直前のネックまでの本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_tops"},
+    {"name": "breakout_deadline_min_bars", "label": "肩3→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
+    {"name": "breakout_deadline_ratio_max", "label": "肩3→ブレイクの本数上限(肩1→ネック1の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
+    {"type": "range", "name_min": "interval_symmetry_ratio_min", "name_max": "interval_symmetry_ratio_max", "label": "肩1前→頭の本数(頭→ブレイクの本数に対する倍率)", "default_min": 0.5, "default_max": 2.0, "value_type": "float", "group": "breakout_bars"},
+    {"name": "top_tolerance_mult", "label": "肩1・肩3の水準許容誤差(肩1→ネック1の値幅に対する倍率、頭は対象外)", "default": 0.25, "type": "float", "group": "tolerance"},
+    {"name": "head_prominence_mult", "label": "頭の突出下限(肩1→ネック1の値幅に対する倍率、頭が肩より高くなければならない量)", "default": 0.5, "type": "float", "group": "tolerance"},
+    {"name": "neck_tolerance_mult", "label": "ネック1・ネック2の水準近接(肩1→ネック1の値幅に対する倍率、0=完全な同水準・無制限は不可)", "default": 0.4, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "ネック1・ネック2それぞれの深さ(ATR倍率、独立判定)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "terminal_bounce_close_mult", "label": "肩3の探索窓を閉じる反発幅(肩3→ネック2の価格差に対する倍率、0で無効)", "default": 0.7, "type": "float", "group": "tolerance"},
+    {"name": "pivot_spike_window_ratio", "label": "肩1・肩3・ネック1・ネック2の孤立度チェック範囲(隣接区間の本数に対する倍率、頭は対象外)", "default": 0.5, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "肩1・肩3・ネック1・ネック2の突出幅上限(ATR倍率、頭は対象外)", "default": 1.3, "type": "float", "group": "isolation"},
+    {"name": "efficiency_ratio_min_context", "label": "肩1前→肩1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_context", "label": "肩1前→肩1の直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min_breakout", "label": "肩3→ブレイクのカウフマンER下限", "default": 0.15, "type": "float", "group": "context_breakout_legs"},
+    {"name": "trendline_dev_pct_breakout", "label": "肩3→ブレイクの直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+    {"name": "efficiency_ratio_min", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3のカウフマンER下限(4区間平均)", "default": 0.1, "type": "float", "group": "core_legs"},
+    {"name": "efficiency_ratio_floor", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3のカウフマンER下限(個別)", "default": 0.05, "type": "float", "group": "core_legs"},
+    {"name": "trendline_dev_pct", "label": "肩1→ネック1・ネック1→頭・頭→ネック2・ネック2→肩3の直線乖離上限", "default": 0.9, "type": "float", "group": "core_legs"},
+]
+
+# チャネル系(形状判定版) - レクタングル/トライアングル/ウェッジ/ペナント/
+# フラッグ、10関数すべてが共通コア(_shape_state_core_channel)を共有する
+# ため(docs/pattern_spec_channel_patterns_shape.md)、ACP(13種)/FNP(4種)
+# と同じ「1つのspecを複数indicatorで使い回す」方式にする。構成点は
+# point1〜point4(古い順)で、フロント側の汎用形式(hasVariablePoints、
+# frontend/src/patternMarkers.ts)にそのまま乗る。
+def _channel_base_param_spec() -> list[dict]:
+    return [
+        {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+        {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+        {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(点1→点2の値幅に対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+        {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+        {"name": "pivot_right_bars", "label": "ピボット右本数", "default": 3, "type": "int", "group": "pivot_basic"},
+        {"name": "prominence_atr_mult", "label": "点1・点2・点3・点4の値幅下限(ATR倍率)", "default": 0.0, "type": "float", "group": "pivot_basic"},
+        {"name": "pole_lookback_ratio", "label": "点1前点の遡り本数(点1→点2の本数に対する倍率)", "default": 3.0, "type": "float", "group": "pivot_basic"},
+        {"name": "max_bars_between_points", "label": "点1→点2・点2→点3・点3→点4の本数上限(下限はピボット右本数)", "default": 0, "type": "int", "group": "bars_between_points"},
+        {"type": "range", "name_min": "symmetry_ratio_min", "name_max": "symmetry_ratio_max", "label": "点2→点3・点4の本数(直前区間の本数に対する倍率)", "default_min": 0.0, "default_max": 3.33, "value_type": "float", "group": "bars_between_points"},
+        {"name": "breakout_deadline_min_bars", "label": "点4→ブレイクの本数下限", "default": 3, "type": "int", "group": "breakout_bars"},
+        {"name": "breakout_deadline_ratio_max", "label": "点4→ブレイクの本数上限(点1→点2の本数に対する倍率)", "default": 3.33, "type": "float", "group": "breakout_bars"},
+        {"name": "pivot_spike_window_ratio", "label": "点1・点2・点3・点4の孤立度チェック範囲(隣接区間の本数に対する倍率)", "default": 0.5, "type": "float", "group": "isolation"},
+        {"name": "pivot_spike_excess_atr_max", "label": "点1・点2・点3・点4の突出幅上限(ATR倍率)", "default": 1.3, "type": "float", "group": "isolation"},
+        {"name": "efficiency_ratio_min_context", "label": "点1前→点1のカウフマンER下限", "default": 0.1, "type": "float", "group": "context_breakout_legs"},
+        {"name": "trendline_dev_pct_context", "label": "点1前→点1の直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+        {"name": "efficiency_ratio_min_breakout", "label": "点4→ブレイクのカウフマンER下限", "default": 0.15, "type": "float", "group": "context_breakout_legs"},
+        {"name": "trendline_dev_pct_breakout", "label": "点4→ブレイクの直線乖離上限", "default": 0.9, "type": "float", "group": "context_breakout_legs"},
+        {"name": "efficiency_ratio_min", "label": "点1→点2・点2→点3・点3→点4のカウフマンER下限(3区間平均)", "default": 0.1, "type": "float", "group": "core_legs"},
+        {"name": "efficiency_ratio_floor", "label": "点1→点2・点2→点3・点3→点4のカウフマンER下限(個別)", "default": 0.05, "type": "float", "group": "core_legs"},
+        {"name": "trendline_dev_pct", "label": "点1→点2・点2→点3・点3→点4の直線乖離上限", "default": 0.9, "type": "float", "group": "core_legs"},
+        {"name": "top_tolerance_mult", "label": "水平/上昇/下降の判定誤差(点1→点2の値幅に対する倍率)", "default": 0.25, "type": "float", "group": "tolerance"},
+        {"name": "converge_margin", "label": "収束判定の最低収縮率(始点の値幅から何割以上縮めば収束とみなすか、ウェッジ/ペナントのみ使用)", "default": 0.1, "type": "float", "group": "tolerance"},
+        {"name": "width_tol", "label": "平行判定の許容誤差(始点の値幅に対する倍率、フラッグのみ使用)", "default": 0.3, "type": "float", "group": "tolerance"},
+    ]
+
+
+# レクタングル/トライアングル/ウェッジ - 共通の基本パラメータのみ。
+_CHANNEL_PARAM_SPEC: list[dict] = _channel_base_param_spec()
+# ペナント/フラッグ - 上に旗竿の高さ下限(pole_height_min_mult)を追加。
+_CHANNEL_POLE_PARAM_SPEC: list[dict] = _channel_base_param_spec() + [
+    {"name": "pole_height_min_mult", "label": "旗竿の高さ下限(ATR倍率、0=無効)", "default": 3.0, "type": "float", "group": "tolerance"},
+]
+
+# 上昇ボックス(可変タッチ方式v2、2026-08-15全面書き換え) -
+# docs/pattern_spec_ascending_box_shape_v2.md。上の共通チャネルコアとは
+# 別実装・別パラメータ体系(タッチ回数が可変、水準は全採用点の極値で判定)。
+_ASC_BOX_V2_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(ボックス高さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数(山1・谷1・山2のみ使用)", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "min_touch_gap_bars", "label": "同方向タッチ同士(山→山・谷→谷)の最低間隔", "default": 5, "type": "int", "group": "pivot_basic"},
+    {"name": "level_tolerance_mult", "label": "山・谷の水準許容誤差(ボックス高さに対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_valley_depth_atr_mult", "name_max": "max_valley_depth_atr_mult", "label": "谷の深さ(ATR倍率)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "max_box_bars", "label": "山1からの最大本数(タイムアウト)", "default": 500, "type": "int", "group": "bars_between_tops"},
+]
+
+# 上昇/下降三角保ち合い(可変タッチ・回帰直線方式v2、2026-08-18全面書き換え) -
+# docs/pattern_spec_triangle_shape_v2.md。ボックスv2との違いは、下値(上昇
+# 三角保ち合いの場合)が3点固定の回帰直線になる点(水準ではなく直線からの
+# 許容誤差で採否判定)と、孤立度チェックを例外的に残している点。
+_ASC_TRIANGLE_V2_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed", "type": "string_choice", "string_choices": _SHAPE_PATTERN_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(高さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数(最小構成の点のみ使用)", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "min_touch_gap_bars", "label": "同方向タッチ同士の最低間隔", "default": 5, "type": "int", "group": "pivot_basic"},
+    {"name": "level_tolerance_mult", "label": "水平側の採用条件・回帰側の許容誤差(高さに対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_slope_rise_atr_mult", "name_max": "max_slope_rise_atr_mult", "label": "回帰直線の急さ(起点〜終点の値幅、ATR倍率)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "max_breakout_height_ratio", "label": "収束チェック(谷1〜上値抵抗線に対する、ブレイク時の回帰直線延長〜上値抵抗線の値幅の比率上限、0以下で無効)", "default": 0.0, "type": "float", "group": "tolerance"},
+    {"name": "max_box_bars", "label": "点1からの最大本数(タイムアウト)", "default": 500, "type": "int", "group": "bars_between_tops"},
+    {"name": "pivot_spike_window_ratio", "label": "孤立度チェックの窓(隣接区間の本数に対する倍率)", "default": 0.0, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェックの突出許容(ATR倍率、0以下で無効)", "default": 0.0, "type": "float", "group": "isolation"},
+]
+
+# 上昇ウェッジ(可変タッチ・両側回帰直線方式v2、2026-08-19全面書き換え) -
+# docs/pattern_spec_wedge_shape_v2.md。三角保ち合いv2との違いは上値抵抗線
+# も下値支持線と全く同じ回帰直線方式になる点(水平線が無い)。状態が
+# Candidate/Invalidatedに加えてConfirmedが2種類(confirmed_lower/
+# confirmed_upper)ある点も違う。
+_WEDGE_STATE_CHOICES = [
+    {"value": "candidate", "label": "Candidate(候補成立)"},
+    {"value": "confirmed_lower", "label": "Confirmed(下値支持線ブレイク)"},
+    {"value": "confirmed_upper", "label": "Confirmed(上値抵抗線ブレイク)"},
+    {"value": "invalidated", "label": "Invalidated(無効)"},
+]
+_WEDGE_V2_PARAM_SPEC: list[dict] = [
+    {"name": "state", "label": "状態", "default": "confirmed_lower", "type": "string_choice", "string_choices": _WEDGE_STATE_CHOICES, "width": "168px"},
+    {"name": "breakout_type", "label": "ブレイク判定基準", "default": "close", "type": "string_choice", "string_choices": _SHAPE_BREAKOUT_TYPE_CHOICES, "group": "break_settings", "width": "146px"},
+    {"name": "breakout_buffer_mult", "label": "ブレイク判定余白(高さに対する倍率)", "default": 0.05, "type": "float", "group": "break_settings"},
+    {"name": "pivot_left_bars", "label": "ピボット左本数", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "pivot_right_bars", "label": "ピボット右本数(最小構成の点のみ使用)", "default": 3, "type": "int", "group": "pivot_basic"},
+    {"name": "min_touch_gap_bars", "label": "同方向タッチ同士の最低間隔", "default": 5, "type": "int", "group": "pivot_basic"},
+    {"name": "level_tolerance_mult", "label": "下値支持線・上値抵抗線の許容誤差(高さに対する倍率)", "default": 0.15, "type": "float", "group": "tolerance"},
+    {"type": "range", "name_min": "min_slope_rise_atr_mult", "name_max": "max_slope_rise_atr_mult", "label": "両直線の急さ(起点〜終点の値幅、ATR倍率)", "default_min": 1.0, "default_max": 0.0, "value_type": "float", "group": "tolerance"},
+    {"name": "max_breakout_height_ratio", "label": "収束チェック(起点〜対辺の値幅に対する、ブレイク時の値幅の比率上限、0以下で無効)", "default": 0.0, "type": "float", "group": "tolerance"},
+    {"name": "max_box_bars", "label": "点1からの最大本数(タイムアウト)", "default": 500, "type": "int", "group": "bars_between_tops"},
+    {"name": "pivot_spike_window_ratio", "label": "孤立度チェックの窓(隣接区間の本数に対する倍率)", "default": 0.0, "type": "float", "group": "isolation"},
+    {"name": "pivot_spike_excess_atr_max", "label": "孤立度チェックの突出許容(ATR倍率、0以下で無効)", "default": 0.0, "type": "float", "group": "isolation"},
 ]
 
 INDICATOR_PARAM_SPECS: dict[str, list[dict]] = {
@@ -2013,80 +2338,54 @@ INDICATOR_PARAM_SPECS.update({
     "double_bottom_shape": list(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC),
     "triple_top_shape": list(_TRIPLE_TOP_SHAPE_PARAM_SPEC),
     "triple_bottom_shape": list(_TRIPLE_BOTTOM_SHAPE_PARAM_SPEC),
-    "triple_top_breakdown": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
-    ],
-    "triple_bottom_breakout": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance_atr_mult", "label": "水準一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75, 1.0]},
-    ],
-    "head_and_shoulders_breakdown": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "shoulder_tolerance_atr_mult", "label": "両肩水準一致許容度(ATR倍率)", "default": 0.75, "type": "choice", "choices": [0.5, 0.75, 1.0]},
-        {"name": "head_margin_atr_mult", "label": "頭の突出量(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.25, 0.5, 0.75]},
-    ],
-    "inverse_head_and_shoulders_breakout": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "shoulder_tolerance_atr_mult", "label": "両肩水準一致許容度(ATR倍率)", "default": 0.75, "type": "choice", "choices": [0.5, 0.75, 1.0]},
-        {"name": "head_margin_atr_mult", "label": "頭の突出量(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.25, 0.5, 0.75]},
-    ],
-    "ascending_triangle_breakout": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "flat_tolerance_atr_mult", "label": "水平抵抗の一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75]},
-    ],
-    "descending_triangle_breakdown": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "flat_tolerance_atr_mult", "label": "水平支持の一致許容度(ATR倍率)", "default": 0.5, "type": "choice", "choices": [0.3, 0.5, 0.75]},
-    ],
-    "symmetrical_triangle_breakout_bullish": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-    ],
-    "symmetrical_triangle_breakout_bearish": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-    ],
-    "rising_wedge_breakdown": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-    ],
-    "falling_wedge_breakout": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-    ],
-    "bull_flag_breakout": [
-        {"name": "impulse_lookback", "label": "急騰判定期間", "default": 10, "type": "int"},
-        {"name": "impulse_atr_mult", "label": "急騰の強さ(ATR倍率)", "default": 3.0, "type": "choice", "choices": [2.0, 2.5, 3.0, 3.5]},
-        {"name": "consolidation_window", "label": "もみ合い判定期間", "default": 10, "type": "int"},
-        {"name": "consolidation_atr_mult", "label": "もみ合いの狭さ(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
-    ],
-    "bear_flag_breakdown": [
-        {"name": "impulse_lookback", "label": "急落判定期間", "default": 10, "type": "int"},
-        {"name": "impulse_atr_mult", "label": "急落の強さ(ATR倍率)", "default": 3.0, "type": "choice", "choices": [2.0, 2.5, 3.0, 3.5]},
-        {"name": "consolidation_window", "label": "もみ合い判定期間", "default": 10, "type": "int"},
-        {"name": "consolidation_atr_mult", "label": "もみ合いの狭さ(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5]},
-    ],
-    "bullish_pennant_breakout": [
-        {"name": "impulse_lookback", "label": "急騰判定期間", "default": 10, "type": "int"},
-        {"name": "impulse_atr_mult", "label": "急騰の強さ(ATR倍率)", "default": 3.0, "type": "choice", "choices": [2.0, 2.5, 3.0, 3.5]},
-        {"name": "consolidation_window", "label": "収束判定期間", "default": 12, "type": "int"},
-        {"name": "consolidation_atr_mult", "label": "収束の狭さ(ATR倍率)", "default": 2.5, "type": "choice", "choices": [1.5, 2.0, 2.5]},
-    ],
-    "bearish_pennant_breakdown": [
-        {"name": "impulse_lookback", "label": "急落判定期間", "default": 10, "type": "int"},
-        {"name": "impulse_atr_mult", "label": "急落の強さ(ATR倍率)", "default": 3.0, "type": "choice", "choices": [2.0, 2.5, 3.0, 3.5]},
-        {"name": "consolidation_window", "label": "収束判定期間", "default": 12, "type": "int"},
-        {"name": "consolidation_atr_mult", "label": "収束の狭さ(ATR倍率)", "default": 2.5, "type": "choice", "choices": [1.5, 2.0, 2.5]},
-    ],
-    "in_range_box": [
-        {"name": "window", "label": "判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-    ],
-    "range_box_breakout_bullish": [
-        {"name": "window", "label": "判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-    ],
-    "range_box_breakdown_bearish": [
-        {"name": "window", "label": "判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-    ],
+    "head_and_shoulders_shape": list(_HS_TOP_SHAPE_PARAM_SPEC),
+    "inverse_head_and_shoulders_shape": list(_HS_BOTTOM_SHAPE_PARAM_SPEC),
+    "ascending_box_shape": list(_ASC_BOX_V2_PARAM_SPEC),
+    "descending_box_shape": list(_ASC_BOX_V2_PARAM_SPEC),
+    "ascending_box_shape_legacy": list(_CHANNEL_PARAM_SPEC),
+    "descending_box_shape_legacy": list(_CHANNEL_PARAM_SPEC),
+    "ascending_triangle_shape": list(_ASC_TRIANGLE_V2_PARAM_SPEC),
+    "descending_triangle_shape": list(_ASC_TRIANGLE_V2_PARAM_SPEC),
+    "ascending_triangle_shape_legacy": list(_CHANNEL_PARAM_SPEC),
+    "descending_triangle_shape_legacy": list(_CHANNEL_PARAM_SPEC),
+    "rising_wedge_shape": list(_WEDGE_V2_PARAM_SPEC),
+    "rising_wedge_shape_x": list(_WEDGE_V2_PARAM_SPEC),
+    "falling_wedge_shape": list(_CHANNEL_PARAM_SPEC),
+    "bullish_pennant_shape": list(_CHANNEL_POLE_PARAM_SPEC),
+    "bearish_pennant_shape": list(_CHANNEL_POLE_PARAM_SPEC),
+    "bullish_flag_shape": list(_CHANNEL_POLE_PARAM_SPEC),
+    "bearish_flag_shape": list(_CHANNEL_POLE_PARAM_SPEC),
+    "double_top_zigzag": list(_ZIGZAG_DTDB_PARAM_SPEC),
+    "double_bottom_zigzag": list(_ZIGZAG_DTDB_PARAM_SPEC),
+    "triple_top": list(_RRCP_PARAM_SPEC),
+    "triple_bottom": list(_RRCP_PARAM_SPEC),
+    "cup_and_handle": list(_RRCP_PARAM_SPEC),
+    "inverted_cup_and_handle": list(_RRCP_PARAM_SPEC),
+    "head_and_shoulders": list(_RRCP_PARAM_SPEC),
+    "inverse_head_and_shoulders": list(_RRCP_PARAM_SPEC),
+    "abcd_bullish": list(_ABCD_PARAM_SPEC),
+    "abcd_bearish": list(_ABCD_PARAM_SPEC),
+    "abc_bullish": list(_ABC_PARAM_SPEC),
+    "abc_bearish": list(_ABC_PARAM_SPEC),
+    "impulse_wave_bullish": list(_MOTIVE_WAVE_PARAM_SPEC),
+    "impulse_wave_bearish": list(_MOTIVE_WAVE_PARAM_SPEC),
+    "bullish_flag": list(_FNP_PARAM_SPEC),
+    "bearish_flag": list(_FNP_PARAM_SPEC),
+    "bullish_pennant": list(_FNP_PARAM_SPEC),
+    "bearish_pennant": list(_FNP_PARAM_SPEC),
+    "ascending_channel": list(_ACP_PARAM_SPEC),
+    "descending_channel": list(_ACP_PARAM_SPEC),
+    "ranging_channel": list(_ACP_PARAM_SPEC),
+    "rising_wedge_expanding": list(_ACP_PARAM_SPEC),
+    "falling_wedge_expanding": list(_ACP_PARAM_SPEC),
+    "diverging_triangle": list(_ACP_PARAM_SPEC),
+    "ascending_triangle_expanding": list(_ACP_PARAM_SPEC),
+    "descending_triangle_expanding": list(_ACP_PARAM_SPEC),
+    "rising_wedge_contracting": list(_ACP_PARAM_SPEC),
+    "falling_wedge_contracting": list(_ACP_PARAM_SPEC),
+    "converging_triangle": list(_ACP_PARAM_SPEC),
+    "descending_triangle_contracting": list(_ACP_PARAM_SPEC),
+    "ascending_triangle_contracting": list(_ACP_PARAM_SPEC),
 })
 
 # 2026-07-08追加(3巡目)
@@ -2189,78 +2488,10 @@ INDICATOR_PARAM_SPECS.update({
     "ha_strong_bearish": [
         {"name": "threshold", "label": "ヒゲ率上限", "default": 0.05, "type": "choice", "choices": [0.02, 0.05, 0.1]},
     ],
-    "gartley_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "gartley_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "bat_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "bat_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "butterfly_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "butterfly_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "crab_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
-    "crab_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.1, "type": "choice", "choices": [0.05, 0.1, 0.15]},
-    ],
 })
 
 # 2026-07-08追加(4巡目)
 INDICATOR_PARAM_SPECS.update({
-    "ab_cd_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.15, "type": "choice", "choices": [0.1, 0.15, 0.2]},
-    ],
-    "ab_cd_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.15, "type": "choice", "choices": [0.1, 0.15, 0.2]},
-    ],
-    "three_drives_bullish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.15, "type": "choice", "choices": [0.1, 0.15, 0.2]},
-    ],
-    "three_drives_bearish": [
-        {"name": "lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "tolerance", "label": "比率許容誤差", "default": 0.15, "type": "choice", "choices": [0.1, 0.15, 0.2]},
-    ],
-    "uptrend_line_break": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "downtrend_line_break": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "ascending_channel_break": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "slope_tolerance_atr_mult", "label": "傾き一致許容度(ATR倍率)", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.05]},
-    ],
-    "descending_channel_break": [
-        {"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"},
-        {"name": "slope_tolerance_atr_mult", "label": "傾き一致許容度(ATR倍率)", "default": 0.02, "type": "choice", "choices": [0.01, 0.02, 0.05]},
-    ],
-    "false_breakout_bullish_reversal": [
-        {"name": "window", "label": "レンジ判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-        {"name": "max_bars_outside", "label": "ブレイク後の戻り許容本数", "default": 3, "type": "int"},
-    ],
-    "false_breakout_bearish_reversal": [
-        {"name": "window", "label": "レンジ判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-        {"name": "max_bars_outside", "label": "ブレイク後の戻り許容本数", "default": 3, "type": "int"},
-    ],
     "nr4": [],
     "nr7": [],
     "volume_climax_bullish": [
@@ -2277,27 +2508,6 @@ INDICATOR_PARAM_SPECS.update({
 
 # 2026-07-08追加(5巡目、HFM記事の未実装分)
 INDICATOR_PARAM_SPECS.update({
-    "saucer_top": [{"name": "window", "label": "判定期間", "default": 30, "type": "int"}],
-    "saucer_bottom": [{"name": "window", "label": "判定期間", "default": 30, "type": "int"}],
-    "ascending_rectangle_breakout": [
-        {"name": "window", "label": "レンジ判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-        {"name": "trend_lookback", "label": "事前トレンド判定期間", "default": 30, "type": "int"},
-    ],
-    "descending_rectangle_breakdown": [
-        {"name": "window", "label": "レンジ判定期間", "default": 20, "type": "int"},
-        {"name": "box_atr_mult", "label": "ボックス幅上限(ATR倍率)", "default": 2.0, "type": "choice", "choices": [1.5, 2.0, 2.5, 3.0]},
-        {"name": "trend_lookback", "label": "事前トレンド判定期間", "default": 30, "type": "int"},
-    ],
-    "broadening_formation_breakout_bullish": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "broadening_formation_breakout_bearish": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "diamond_formation_breakout_bullish": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "diamond_formation_breakout_bearish": [{"name": "swing_lookback", "label": "スイング判定期間", "default": 5, "type": "int"}],
-    "cup_with_handle_breakout": [
-        {"name": "cup_window", "label": "カップ判定期間", "default": 40, "type": "int"},
-        {"name": "handle_window", "label": "ハンドル判定期間", "default": 10, "type": "int"},
-        {"name": "handle_atr_mult", "label": "ハンドル幅上限(ATR倍率)", "default": 1.5, "type": "choice", "choices": [1.0, 1.5, 2.0]},
-    ],
 })
 
 INDICATOR_PARAM_SPECS.update({
@@ -2623,7 +2833,7 @@ async def get_strategy_pine_script(strategy_id: str) -> dict:
     params = entry["params"]
     symbol = entry.get("symbol", "USDJPY")
     timeframe = entry.get("timeframe", "15m")
-    title = f"StrategyLab {entry['name']}"
+    title = f"StrategyX {entry['name']}"
 
     try:
         script = generate_pine_script(params, symbol=symbol, timeframe=timeframe, strategy_title=title)
@@ -2729,6 +2939,107 @@ _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
     "double_top_shape": (False, "top"),
     "double_bottom_shape": (True, "bottom"),
 }
+# トリプルトップ/ボトム(形状判定版) - 上と同じ仕組みだが構成点が5点
+# (山1/ネック1/山2/ネック2/山3)なので、_compute_pattern_markers側で専用の
+# 分岐を持つ(frontend/src/api.ts::PatternMarkerEventのtop3_time/neck1_time/
+# neck2_time参照)。
+_TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
+    "triple_top_shape": (False, "top"),
+    "triple_bottom_shape": (True, "bottom"),
+}
+# ヘッド・アンド・ショルダーズ(形状判定版) - トリプルと同じ5点構成
+# (肩1/ネック1/頭/ネック2/肩3、フロント側キー名はtop1/neck1/top2/neck2/top3
+# のまま流用)なので、_compute_pattern_markers側もトリプルの分岐をそのまま
+# 使い回す(_hs_shape_stateの返り値キー名がtriple側と同じため)。
+_HS_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
+    "head_and_shoulders_shape": (False, "top"),
+    "inverse_head_and_shoulders_shape": (True, "bottom"),
+}
+# チャネル系(形状判定版) - トリプル/H&Sと違い構成点が4点(point1〜point4)
+# なので専用のtop1/neck1/...形式は使わず、RRCP/推進波と同じ汎用形式
+# (point1_time/point1_price…+point_count、frontend側は変更不要)で返す。
+# タプルは_channel_family_stateへそのまま渡す
+# (start_is_low, want_upper_break, lower_kind, upper_kind,
+#  require_converging, require_parallel, kind)。
+_CHANNEL_STATE_MARKER_SOURCES: dict[str, tuple] = {
+    "ascending_box_shape_legacy": (False, True, "flat", "flat", False, False, "top"),
+    "descending_box_shape_legacy": (True, False, "flat", "flat", False, False, "bottom"),
+    "ascending_triangle_shape_legacy": (False, True, "rising", "flat", False, False, "top"),
+    "descending_triangle_shape_legacy": (True, False, "flat", "falling", False, False, "bottom"),
+    "falling_wedge_shape": (True, True, "falling", "falling", True, False, "bottom"),
+    "bullish_pennant_shape": (False, True, "any", "any", True, False, "top"),
+    "bearish_pennant_shape": (True, False, "any", "any", True, False, "bottom"),
+    "bullish_flag_shape": (False, True, "falling", "falling", False, True, "top"),
+    "bearish_flag_shape": (True, False, "rising", "rising", False, True, "bottom"),
+}
+# 上昇/下降ボックス(可変タッチ方式v2) - _box_shape_state_v2専用。
+# タッチ回数が可変(4点固定ではない)ため、上の_CHANNEL_STATE_MARKER_SOURCES
+# とも別扱いにする。値は(bullish, kind)。
+_ASC_BOX_V2_STATE_MARKER_INDICATORS: dict[str, tuple] = {
+    "ascending_box_shape": (True, "top"),
+    "descending_box_shape": (False, "bottom"),
+}
+# 上昇/下降三角保ち合い(可変タッチ・回帰直線方式v2) -
+# _triangle_shape_state_v2専用。ボックスv2と同じ理由で別扱い。
+_ASC_TRIANGLE_V2_STATE_MARKER_INDICATORS: dict[str, tuple] = {
+    "ascending_triangle_shape": (True, "top"),
+    "descending_triangle_shape": (False, "bottom"),
+}
+# 上昇ウェッジ(可変タッチ・両側回帰直線方式v2)。値は(kind, 使うコア関数)。
+# rising_wedge_shape_xは2026-08-19にrising_wedge_shapeをユーザー指示で
+# そのまま複製・保存した別家系(ロジックは複製時点で完全に同一、以降は
+# 独立に変更しうる) - falling_wedge_shapeは旧実装のまま別枠。
+_WEDGE_V2_STATE_MARKER_INDICATORS: dict[str, tuple] = {
+    "rising_wedge_shape": ("top", chart_patterns._wedge_shape_state_v2),
+    "rising_wedge_shape_x": ("top", chart_patterns._wedge_x_shape_state_v2),
+}
+# ZigZag方式(B方式実装)版 - 上と同じ仕組み。
+_ZIGZAG_DTDB_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
+    "double_top_zigzag": (False, "top"),
+    "double_bottom_zigzag": (True, "bottom"),
+}
+# 多段ZigZag方式(トリプル/カップ&ハンドル/H&S)。構成点が4点または6点と可変な
+# ので、上の2つのように山1/山2/ネックの3点固定では表せない。engine側が返す
+# events(1イベント1レコード)をそのまま使い、構成点を順に point1..pointN として
+# 返す。値は「印を山の上に出すか谷の下に出すか」のフロント側ヒント。
+_RRCP_STATE_MARKER_SOURCES: dict[str, str] = {
+    "triple_top": "top",
+    "triple_bottom": "bottom",
+    "cup_and_handle": "bottom",
+    "inverted_cup_and_handle": "top",
+    "head_and_shoulders": "top",
+    "inverse_head_and_shoulders": "bottom",
+}
+# エリオット推進波。構成点は常に6点(P0〜P5)。RRCPと違い engine 側の
+# point_bars が既に古い順なので、表示用の並べ替えは不要。
+_MOTIVE_WAVE_STATE_MARKER_SOURCES: dict[str, str] = {
+    "impulse_wave_bearish": "top",
+    "impulse_wave_bullish": "bottom",
+}
+# チャネル/ウェッジ/トライアングル13種。構成点は5点または6点で、古い順。
+# 印を山側・谷側どちらに出すかは最後の構成点の向きで変わるためイベント側で決める。
+_ACP_STATE_MARKER_SOURCES: dict[str, str] = {
+    "ascending_channel": "auto",
+    "descending_channel": "auto",
+    "ranging_channel": "auto",
+    "rising_wedge_expanding": "auto",
+    "falling_wedge_expanding": "auto",
+    "diverging_triangle": "auto",
+    "ascending_triangle_expanding": "auto",
+    "descending_triangle_expanding": "auto",
+    "rising_wedge_contracting": "auto",
+    "falling_wedge_contracting": "auto",
+    "converging_triangle": "auto",
+    "descending_triangle_contracting": "auto",
+    "ascending_triangle_contracting": "auto",
+}
+# フラッグ/ペナント。構成点は旗竿の起点+土台の5点=6点で、こちらも古い順。
+_FNP_STATE_MARKER_SOURCES: dict[str, str] = {
+    "bullish_flag": "bottom",
+    "bearish_flag": "top",
+    "bullish_pennant": "bottom",
+    "bearish_pennant": "top",
+}
 def _spec_defaults(spec_list: list[dict]) -> dict[str, Any]:
     """spec一覧から{パラメータ名: デフォルト値}を作る - type="range"(下限
     〜上限を1行にまとめた表示、単一のnameを持たずname_min/name_maxの2つを
@@ -2747,13 +3058,29 @@ def _spec_defaults(spec_list: list[dict]) -> dict[str, Any]:
 # 以外) - パターン判定を再実行する際のデフォルト値もここから作り、値を
 # 二重管理しない。
 _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = _spec_defaults(_DOUBLE_BOTTOM_SHAPE_PARAM_SPEC)
-# トリプルトップ/ボトム(形状判定版) - 上と同じ仕組みだが、根拠となる点が
-# 3つの山/谷+2つのネックになる(2026-08-01)。
-_TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES: dict[str, tuple[bool, str]] = {
-    "triple_top_shape": (False, "top"),
-    "triple_bottom_shape": (True, "bottom"),
-}
+# トリプルトップ/ボトム(形状判定版)のデフォルト値(state以外) - 上と同じ仕組み。
 _TRIPLE_TOP_BOTTOM_SHAPE_DEFAULTS: dict[str, Any] = _spec_defaults(_TRIPLE_BOTTOM_SHAPE_PARAM_SPEC)
+# ヘッド・アンド・ショルダーズ(形状判定版)のデフォルト値(state以外) - 上と同じ仕組み。
+_HS_SHAPE_DEFAULTS: dict[str, Any] = _spec_defaults(_HS_BOTTOM_SHAPE_PARAM_SPEC)
+# チャネル系(形状判定版)のデフォルト値(state以外) - 上と同じ仕組み。
+# ペナント/フラッグはpole_height_min_multを追加で持つため別辞書。
+_CHANNEL_DEFAULTS: dict[str, Any] = _spec_defaults(_CHANNEL_PARAM_SPEC)
+_CHANNEL_POLE_DEFAULTS: dict[str, Any] = _spec_defaults(_CHANNEL_POLE_PARAM_SPEC)
+_CHANNEL_POLE_FAMILY_NAMES = frozenset({
+    "bullish_pennant_shape", "bearish_pennant_shape", "bullish_flag_shape", "bearish_flag_shape",
+})
+# 上昇ボックス(可変タッチ方式v2)のデフォルト値(state以外)。
+_ASC_BOX_V2_DEFAULTS: dict[str, Any] = _spec_defaults(_ASC_BOX_V2_PARAM_SPEC)
+# 上昇三角保ち合い(可変タッチ・回帰直線方式v2)のデフォルト値(state以外)。
+_ASC_TRIANGLE_V2_DEFAULTS: dict[str, Any] = _spec_defaults(_ASC_TRIANGLE_V2_PARAM_SPEC)
+# 上昇ウェッジ(可変タッチ・両側回帰直線方式v2)のデフォルト値(state以外)。
+_WEDGE_V2_DEFAULTS: dict[str, Any] = _spec_defaults(_WEDGE_V2_PARAM_SPEC)
+# ZigZag方式(B方式実装)のデフォルト値(state以外) - 上と同じ仕組み。
+_ZIGZAG_DTDB_DEFAULTS: dict[str, Any] = _spec_defaults(_ZIGZAG_DTDB_PARAM_SPEC)
+_RRCP_DEFAULTS: dict[str, Any] = _spec_defaults(_RRCP_PARAM_SPEC)
+_MOTIVE_WAVE_DEFAULTS: dict[str, Any] = _spec_defaults(_MOTIVE_WAVE_PARAM_SPEC)
+_FNP_DEFAULTS: dict[str, Any] = _spec_defaults(_FNP_PARAM_SPEC)
+_ACP_DEFAULTS: dict[str, Any] = _spec_defaults(_ACP_PARAM_SPEC)
 
 
 def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) -> None:
@@ -2770,6 +3097,16 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
     is_pattern_indicator = (
         indicator in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
         or indicator in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+        or indicator in _HS_STATE_MARKER_SOURCES
+        or indicator in _CHANNEL_STATE_MARKER_SOURCES
+        or indicator in _ASC_BOX_V2_STATE_MARKER_INDICATORS
+        or indicator in _ASC_TRIANGLE_V2_STATE_MARKER_INDICATORS
+        or indicator in _WEDGE_V2_STATE_MARKER_INDICATORS
+        or indicator in _ZIGZAG_DTDB_STATE_MARKER_SOURCES
+        or indicator in _RRCP_STATE_MARKER_SOURCES
+        or indicator in _MOTIVE_WAVE_STATE_MARKER_SOURCES
+        or indicator in _FNP_STATE_MARKER_SOURCES
+        or indicator in _ACP_STATE_MARKER_SOURCES
     )
     if is_pattern_indicator and not node.get("timeframe"):
         params = node.get("params") or {}
@@ -2778,7 +3115,18 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
 
     value = node.get("value")
     is_pattern_value = isinstance(value, str) and (
-        value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES or value in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+        value in _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+        or value in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
+        or value in _HS_STATE_MARKER_SOURCES
+        or value in _CHANNEL_STATE_MARKER_SOURCES
+        or value in _ASC_BOX_V2_STATE_MARKER_INDICATORS
+        or value in _ASC_TRIANGLE_V2_STATE_MARKER_INDICATORS
+        or value in _WEDGE_V2_STATE_MARKER_INDICATORS
+        or value in _ZIGZAG_DTDB_STATE_MARKER_SOURCES
+        or value in _RRCP_STATE_MARKER_SOURCES
+        or value in _MOTIVE_WAVE_STATE_MARKER_SOURCES
+        or value in _FNP_STATE_MARKER_SOURCES
+        or value in _ACP_STATE_MARKER_SOURCES
     )
     if is_pattern_value and not node.get("value_timeframe"):
         value_params = node.get("value_params") or {}
@@ -2787,9 +3135,9 @@ def _collect_pattern_marker_specs(node: dict | None, out: dict[tuple, tuple]) ->
 
 
 def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list[dict]:
-    """条件ツリーに含まれるダブル/トリプルトップ・ボトム系indicatorそれぞれ
-    について、実際にresolve/failed(existsは区間の開始バー)が成立した回だけ、
-    その根拠となった山/谷・ネックラインの時刻・価格を返す。"""
+    """条件ツリーに含まれるダブルトップ/ボトム系indicatorそれぞれについて、
+    実際にresolve/failed(existsは区間の開始バー)が成立した回だけ、その
+    根拠となった山/谷・ネックラインの時刻・価格を返す。"""
     collected: dict[tuple, tuple] = {}
     for tree in trees:
         _collect_pattern_marker_specs(tree, collected)
@@ -2798,28 +3146,542 @@ def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list
 
     times = df["datetime"]
     events: list[dict] = []
+    n_bars = len(df)
     for indicator, params in collected.values():
-        is_triple = indicator in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES
         # 見る状態(output_key)はnode自身のparams["state"]で決まる(既定は
         # confirmed)。
-        if is_triple:
-            bullish, kind = _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+        if indicator in _RRCP_STATE_MARKER_SOURCES:
+            # 多段ZigZag方式。構成点が4点/6点と可変なので、engine側の
+            # events(1イベント1レコード)をそのまま point1..pointN の形へ移す。
+            kind = _RRCP_STATE_MARKER_SOURCES[indicator]
             output_key = params.get("state", "confirmed")
-            shape_kwargs = {
+            rrcp_kwargs = {
+                name: params.get(name, default) for name, default in _RRCP_DEFAULTS.items()
+            }
+            rr = chart_patterns._rrcp_state(df["high"], df["low"], df["close"], **rrcp_kwargs)
+            for ev in rr["events"]:
+                if ev["pattern_type"] != indicator or ev["status"] != output_key:
+                    continue
+                if not (0 <= ev["event_bar"] < n_bars):
+                    continue
+                if not all(0 <= b < n_bars for b in ev["point_bars"]):
+                    continue
+                marker = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[ev["event_bar"]].isoformat(),
+                    "pattern_id": ev["pattern_id"],
+                    "level": ev["level"],
+                    "neckline_price": ev["neckline_price"],
+                }
+                # 構成点は新しい順に入っているので、表示用に古い順へ直す。
+                pts = list(zip(ev["point_bars"], ev["point_prices"]))[::-1]
+                for pi, (bar, price) in enumerate(pts, start=1):
+                    marker[f"point{pi}_time"] = times.iloc[bar].isoformat()
+                    marker[f"point{pi}_price"] = float(price)
+                marker["point_count"] = len(pts)
+                events.append(marker)
+            continue
+
+        if indicator in _ACP_STATE_MARKER_SOURCES:
+            # チャネル/ウェッジ/トライアングル13種。構成点は5点または6点。
+            output_key = params.get("state", "confirmed")
+            acp_kwargs = {
+                name: params.get(name, default) for name, default in _ACP_DEFAULTS.items()
+            }
+            acp = chart_patterns._acp_state(
+                df["open"], df["high"], df["low"], df["close"], **acp_kwargs
+            )
+            for ev in acp["events"]:
+                if ev["pattern_type"] != indicator or ev["status"] != output_key:
+                    continue
+                if not (0 <= ev["event_bar"] < n_bars):
+                    continue
+                if not all(0 <= b < n_bars for b in ev["point_bars"]):
+                    continue
+                marker = {
+                    "indicator": indicator,
+                    # 最後の構成点が高値ならパターンの上、安値なら下に印を出す。
+                    "kind": "top" if ev["last_pivot_direction"] > 0 else "bottom",
+                    "event_time": times.iloc[ev["event_bar"]].isoformat(),
+                    "pattern_id": ev["pattern_id"],
+                    "level": ev["level"],
+                    "neckline_price": ev["neckline_price"],
+                }
+                for pi, (bar, price) in enumerate(
+                    zip(ev["point_bars"], ev["point_prices"]), start=1
+                ):
+                    marker[f"point{pi}_time"] = times.iloc[bar].isoformat()
+                    marker[f"point{pi}_price"] = float(price)
+                marker["point_count"] = len(ev["point_bars"])
+                events.append(marker)
+            continue
+
+        if indicator in _FNP_STATE_MARKER_SOURCES:
+            # フラッグ/ペナント。構成点は旗竿の起点+土台の5点で、engine側が
+            # 既に古い順に並べているので並べ替えは不要。
+            kind = _FNP_STATE_MARKER_SOURCES[indicator]
+            output_key = params.get("state", "confirmed")
+            fnp_kwargs = {
+                name: params.get(name, default) for name, default in _FNP_DEFAULTS.items()
+            }
+            fnp = chart_patterns._fnp_state(
+                df["open"], df["high"], df["low"], df["close"], **fnp_kwargs
+            )
+            for ev in fnp["events"]:
+                if ev["pattern_type"] != indicator or ev["status"] != output_key:
+                    continue
+                if not (0 <= ev["event_bar"] < n_bars):
+                    continue
+                if not all(0 <= b < n_bars for b in ev["point_bars"]):
+                    continue
+                marker = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[ev["event_bar"]].isoformat(),
+                    "pattern_id": ev["pattern_id"],
+                    "level": ev["level"],
+                    "neckline_price": ev["neckline_price"],
+                }
+                for pi, (bar, price) in enumerate(
+                    zip(ev["point_bars"], ev["point_prices"]), start=1
+                ):
+                    marker[f"point{pi}_time"] = times.iloc[bar].isoformat()
+                    marker[f"point{pi}_price"] = float(price)
+                marker["point_count"] = len(ev["point_bars"])
+                events.append(marker)
+            continue
+
+        if indicator in _MOTIVE_WAVE_STATE_MARKER_SOURCES:
+            # エリオット推進波。構成点は6点固定だが、扱いは多段ZigZag方式と
+            # 同じく point1..point6 で返す。
+            kind = _MOTIVE_WAVE_STATE_MARKER_SOURCES[indicator]
+            output_key = params.get("state", "confirmed")
+            mw_kwargs = {
+                name: params.get(name, default) for name, default in _MOTIVE_WAVE_DEFAULTS.items()
+            }
+            mw = chart_patterns._mw_state(df["high"], df["low"], df["close"], **mw_kwargs)
+            for ev in mw["events"]:
+                if ev["pattern_type"] != indicator or ev["status"] != output_key:
+                    continue
+                if not (0 <= ev["event_bar"] < n_bars):
+                    continue
+                if not all(0 <= b < n_bars for b in ev["point_bars"]):
+                    continue
+                marker = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[ev["event_bar"]].isoformat(),
+                    "pattern_id": ev["pattern_id"],
+                    "level": ev["level"],
+                    "neckline_price": ev["neckline_price"],
+                }
+                for pi, (bar, price) in enumerate(
+                    zip(ev["point_bars"], ev["point_prices"]), start=1
+                ):
+                    marker[f"point{pi}_time"] = times.iloc[bar].isoformat()
+                    marker[f"point{pi}_price"] = float(price)
+                marker["point_count"] = len(ev["point_bars"])
+                events.append(marker)
+            continue
+
+        if indicator in _ZIGZAG_DTDB_STATE_MARKER_SOURCES:
+            # ZigZag方式(B方式実装)は、engine側が「1イベント1レコード」の
+            # events配列を返すので、そちらをそのまま使う。Boolean系列+バー
+            # ごとのスナップショットから組み立てると、同一バーで複数の
+            # パターンが決着した場合に1件しか描けない(2026-08-12、ユーザー
+            # 指摘)。この経路なら重なり合ったパターンも全て描ける。
+            _, kind = _ZIGZAG_DTDB_STATE_MARKER_SOURCES[indicator]
+            pattern_type = "double_bottom" if kind == "bottom" else "double_top"
+            output_key = params.get("state", "confirmed")
+            zigzag_kwargs = {
+                name: params.get(name, default) for name, default in _ZIGZAG_DTDB_DEFAULTS.items()
+            }
+            zz = chart_patterns._zigzag_dtdb_state(
+                df["high"], df["low"], df["close"], **zigzag_kwargs
+            )
+            for ev in zz["events"]:
+                if ev["pattern_type"] != pattern_type or ev["status"] != output_key:
+                    continue
+                bars = (ev["p1_bar"], ev["p3_bar"], ev["p2_bar"])  # top1 / top2 / neckline
+                prices = (ev["p1_price"], ev["p3_price"], ev["p2_price"])
+                if not (0 <= ev["event_bar"] < n_bars) or not all(0 <= b < n_bars for b in bars):
+                    continue
+                marker = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[ev["event_bar"]].isoformat(),
+                    "pattern_id": ev["pattern_id"],
+                }
+                for key, bar, price in zip(("top1", "top2", "neckline"), bars, prices):
+                    marker[f"{key}_time"] = times.iloc[bar].isoformat()
+                    marker[f"{key}_price"] = float(price)
+                events.append(marker)
+            continue
+
+        if indicator in _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES:
+            # トリプルトップ/ボトム(形状判定版)。ダブル版と同じ仕組みだが
+            # 構成点が5点(山1/ネック1/山2/ネック2/山3)なので専用の分岐に
+            # している(frontend/src/patternMarkers.tsのtop3_time/neck1_time/
+            # neck2_time形式)。
+            bullish, kind = _TRIPLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+            raw_state = params.get("state", "confirmed")
+            output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+            triple_kwargs = {
                 name: params.get(name, default) for name, default in _TRIPLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
             }
-            state = chart_patterns._triple_top_bottom_shape_state(
-                df["high"], df["low"], df["close"], bullish, **shape_kwargs
+            tstate = chart_patterns._triple_top_bottom_shape_state(
+                df["high"], df["low"], df["close"], bullish, **triple_kwargs
             )
-        else:
-            bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
-            output_key = params.get("state", "confirmed")
-            shape_kwargs = {
-                name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+            flag = tstate[output_key]
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = tstate["formed_bar"]
+            point_bars = (
+                tstate["top1_bar"], tstate["neck1_bar"], tstate["top2_bar"],
+                tstate["neck2_bar"], tstate["top3_bar"],
+            )
+            point_prices = (
+                tstate["top1_price"], tstate["neck1_price"], tstate["top2_price"],
+                tstate["neck2_price"], tstate["top3_price"],
+            )
+            point_keys = ("top1", "neck1", "top2", "neck2", "top3")
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                raw_bars = [b.iloc[f] for b in point_bars]
+                if any(pd.isna(b) for b in raw_bars):
+                    continue
+                bars = [int(b) for b in raw_bars]
+                if not all(0 <= b < len(df) for b in bars):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for key, bar, price in zip(point_keys, bars, point_prices):
+                    event[f"{key}_time"] = times.iloc[bar].isoformat()
+                    event[f"{key}_price"] = float(price.iloc[f])
+                events.append(event)
+            continue
+
+        if indicator in _HS_STATE_MARKER_SOURCES:
+            # ヘッド・アンド・ショルダーズ(形状判定版)。トリプルと同じ5点
+            # (肩1/ネック1/頭/ネック2/肩3)構成・同じ返り値キー名なので、
+            # 分岐の中身はトリプルの処理をそのままコピーし、呼び出す関数と
+            # デフォルト辞書だけ差し替える。
+            bullish, kind = _HS_STATE_MARKER_SOURCES[indicator]
+            raw_state = params.get("state", "confirmed")
+            output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+            hs_kwargs = {
+                name: params.get(name, default) for name, default in _HS_SHAPE_DEFAULTS.items()
             }
-            state = chart_patterns._double_top_bottom_shape_state(
-                df["high"], df["low"], df["close"], bullish, **shape_kwargs
+            hstate = chart_patterns._hs_shape_state(
+                df["high"], df["low"], df["close"], bullish, **hs_kwargs
             )
+            flag = hstate[output_key]
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = hstate["formed_bar"]
+            point_bars = (
+                hstate["top1_bar"], hstate["neck1_bar"], hstate["top2_bar"],
+                hstate["neck2_bar"], hstate["top3_bar"],
+            )
+            point_prices = (
+                hstate["top1_price"], hstate["neck1_price"], hstate["top2_price"],
+                hstate["neck2_price"], hstate["top3_price"],
+            )
+            point_keys = ("top1", "neck1", "top2", "neck2", "top3")
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                raw_bars = [b.iloc[f] for b in point_bars]
+                if any(pd.isna(b) for b in raw_bars):
+                    continue
+                bars = [int(b) for b in raw_bars]
+                if not all(0 <= b < len(df) for b in bars):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for key, bar, price in zip(point_keys, bars, point_prices):
+                    event[f"{key}_time"] = times.iloc[bar].isoformat()
+                    event[f"{key}_price"] = float(price.iloc[f])
+                events.append(event)
+            continue
+
+        if indicator in _CHANNEL_STATE_MARKER_SOURCES:
+            # チャネル系(形状判定版)。構成点が4点なのでRRCP/推進波と同じ
+            # 汎用point1..point4形式(point_count=4)で返す - フロント側
+            # (frontend/src/patternMarkers.ts::hasVariablePoints)は既に
+            # この形式へ対応済みなので変更不要。
+            (
+                start_is_low, want_upper, lower_kind, upper_kind,
+                require_converging, require_parallel, kind,
+            ) = _CHANNEL_STATE_MARKER_SOURCES[indicator]
+            raw_state = params.get("state", "confirmed")
+            output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+            defaults = _CHANNEL_POLE_DEFAULTS if indicator in _CHANNEL_POLE_FAMILY_NAMES else _CHANNEL_DEFAULTS
+            channel_kwargs = {name: params.get(name, default) for name, default in defaults.items()}
+            top_tolerance_mult = channel_kwargs.pop("top_tolerance_mult")
+            converge_margin = channel_kwargs.pop("converge_margin")
+            width_tol = channel_kwargs.pop("width_tol")
+            cstate = chart_patterns._channel_family_state(
+                df["high"], df["low"], df["close"],
+                start_is_low, want_upper, lower_kind, upper_kind,
+                require_converging, require_parallel,
+                top_tolerance_mult, converge_margin, width_tol,
+                **channel_kwargs,
+            )
+            flag = cstate[output_key]
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = cstate["formed_bar"]
+            point_bars = (cstate["p1_bar"], cstate["p2_bar"], cstate["p3_bar"], cstate["p4_bar"])
+            point_prices = (cstate["p1_price"], cstate["p2_price"], cstate["p3_price"], cstate["p4_price"])
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                raw_bars = [b.iloc[f] for b in point_bars]
+                if any(pd.isna(b) for b in raw_bars):
+                    continue
+                bars = [int(b) for b in raw_bars]
+                if not all(0 <= b < len(df) for b in bars):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for pi, (bar, price) in enumerate(zip(bars, point_prices), start=1):
+                    event[f"point{pi}_time"] = times.iloc[bar].isoformat()
+                    event[f"point{pi}_price"] = float(price.iloc[f])
+                event["point_count"] = len(bars)
+                events.append(event)
+            continue
+
+        if indicator in _ASC_BOX_V2_STATE_MARKER_INDICATORS:
+            # 上昇/下降ボックス(可変タッチ方式v2)。構成点が可変本数なので、
+            # RRCP/推進波と同じ汎用point1..pointN形式(point_countも可変)
+            # で返す - フロント側は変更不要。_box_shape_state_v2の
+            # point_bar/point_price/point_countはSeriesではなくnumpy配列
+            # (第0軸=タッチ順、第1軸=バー位置)なので、pandasの.iloc経由で
+            # なく直接インデックスする。
+            bullish, kind = _ASC_BOX_V2_STATE_MARKER_INDICATORS[indicator]
+            raw_state = params.get("state", "confirmed")
+            output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+            box_kwargs = {name: params.get(name, default) for name, default in _ASC_BOX_V2_DEFAULTS.items()}
+            bstate = chart_patterns._box_shape_state_v2(
+                df["high"], df["low"], df["close"], bullish, **box_kwargs,
+            )
+            flag = bstate[output_key]
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = bstate["formed_bar"]
+            point_count_arr = bstate["point_count"]
+            point_bar_arr = bstate["point_bar"]
+            point_price_arr = bstate["point_price"]
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                pc = int(point_count_arr[f])
+                if pc <= 0:
+                    continue
+                raw_bars = point_bar_arr[:pc, f]
+                if np.any(np.isnan(raw_bars)):
+                    continue
+                bars = raw_bars.astype(int)
+                if not np.all((bars >= 0) & (bars < len(df))):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for pi in range(pc):
+                    b = int(bars[pi])
+                    event[f"point{pi + 1}_time"] = times.iloc[b].isoformat()
+                    event[f"point{pi + 1}_price"] = float(point_price_arr[pi, f])
+                event["point_count"] = pc
+                events.append(event)
+            continue
+
+        if indicator in _ASC_TRIANGLE_V2_STATE_MARKER_INDICATORS:
+            # 上昇/下降三角保ち合い(可変タッチ・回帰直線方式v2)。
+            # ボックスv2と全く同じ汎用point1..pointN形式の描画。
+            bullish, kind = _ASC_TRIANGLE_V2_STATE_MARKER_INDICATORS[indicator]
+            raw_state = params.get("state", "confirmed")
+            output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+            tri_kwargs = {name: params.get(name, default) for name, default in _ASC_TRIANGLE_V2_DEFAULTS.items()}
+            tstate = chart_patterns._triangle_shape_state_v2(
+                df["high"], df["low"], df["close"], bullish, **tri_kwargs,
+            )
+            flag = tstate[output_key]
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = tstate["formed_bar"]
+            point_count_arr = tstate["point_count"]
+            point_bar_arr = tstate["point_bar"]
+            point_price_arr = tstate["point_price"]
+            reg_slope_arr = tstate["reg_slope"]
+            reg_intercept_arr = tstate["reg_intercept"]
+            flat_level_arr = tstate["flat_level"]
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                pc = int(point_count_arr[f])
+                if pc <= 0:
+                    continue
+                raw_bars = point_bar_arr[:pc, f]
+                if np.any(np.isnan(raw_bars)):
+                    continue
+                bars = raw_bars.astype(int)
+                if not np.all((bars >= 0) & (bars < len(df))):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for pi in range(pc):
+                    b = int(bars[pi])
+                    event[f"point{pi + 1}_time"] = times.iloc[b].isoformat()
+                    event[f"point{pi + 1}_price"] = float(point_price_arr[pi, f])
+                event["point_count"] = pc
+                # 判定に実際使った回帰直線(起点+2点だけで決まる)と水準線を
+                # そのまま返す(2026-08-19、ユーザー報告「下値支持線が
+                # 許容誤差から外れて見える」対応)。フロント側が構成点だけ
+                # から線を引き直すと判定に使った直線とズレるため。
+                slope = float(reg_slope_arr[f])
+                intercept = float(reg_intercept_arr[f])
+                first_bar = int(bars[0])
+                # 終点は最後の構成点のバーではなく、実際にこのイベントが
+                # 成立したバー(i、event_time)まで延ばす(2026-08-19、
+                # ユーザー報告「上値抵抗線を上抜けてないのにロングして
+                # いる」対応 - 構成点の最後のバーまでしか線を引いていない
+                # と、実際のブレイクがそれより後のバーで起きていても
+                # チャート上では線が届いておらず、ブレイクしたように
+                # 見えなくなってしまっていた)。
+                last_bar = i
+                event["reg_line_start_price"] = slope * first_bar + intercept
+                event["reg_line_end_price"] = slope * last_bar + intercept
+                event["flat_level_price"] = float(flat_level_arr[f])
+                events.append(event)
+            continue
+
+        if indicator in _WEDGE_V2_STATE_MARKER_INDICATORS:
+            # 上昇ウェッジ(可変タッチ・両側回帰直線方式v2)。三角保ち合いv2と
+            # 同じ汎用point1..pointN形式だが、状態がconfirmed_lower/
+            # confirmed_upperの2種類に分かれ、水準線(flat_level)が無く
+            # 上値側も回帰直線(up_slope/up_intercept)になる点が違う。
+            kind, wedge_state_fn = _WEDGE_V2_STATE_MARKER_INDICATORS[indicator]
+            output_key = params.get("state", "confirmed_lower")
+            wedge_kwargs = {name: params.get(name, default) for name, default in _WEDGE_V2_DEFAULTS.items()}
+            wstate = wedge_state_fn(
+                df["high"], df["low"], df["close"], **wedge_kwargs,
+            )
+            flag = wstate.get(output_key)
+            if flag is None:
+                continue
+            if output_key == "exists":
+                flag = flag & ~flag.shift(1).fillna(False)
+
+            formed_bar = wstate["formed_bar"]
+            point_count_arr = wstate["point_count"]
+            point_bar_arr = wstate["point_bar"]
+            point_price_arr = wstate["point_price"]
+            lo_slope_arr = wstate["lo_slope"]
+            lo_intercept_arr = wstate["lo_intercept"]
+            up_slope_arr = wstate["up_slope"]
+            up_intercept_arr = wstate["up_intercept"]
+
+            for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
+                f = formed_bar.iloc[i]
+                if pd.isna(f):
+                    continue
+                f = int(f)
+                if not (0 <= f < len(df)):
+                    continue
+                pc = int(point_count_arr[f])
+                if pc <= 0:
+                    continue
+                raw_bars = point_bar_arr[:pc, f]
+                if np.any(np.isnan(raw_bars)):
+                    continue
+                bars = raw_bars.astype(int)
+                if not np.all((bars >= 0) & (bars < len(df))):
+                    continue
+                event = {
+                    "indicator": indicator,
+                    "kind": kind,
+                    "event_time": times.iloc[i].isoformat(),
+                }
+                for pi in range(pc):
+                    b = int(bars[pi])
+                    event[f"point{pi + 1}_time"] = times.iloc[b].isoformat()
+                    event[f"point{pi + 1}_price"] = float(point_price_arr[pi, f])
+                event["point_count"] = pc
+                lo_slope = float(lo_slope_arr[f])
+                lo_intercept = float(lo_intercept_arr[f])
+                up_slope = float(up_slope_arr[f])
+                up_intercept = float(up_intercept_arr[f])
+                first_bar = int(bars[0])
+                # 終点は構成点の最後のバーではなく、実際にイベントが成立
+                # したバー(i、event_time)まで延ばす(三角保ち合いの同種
+                # 修正と同じ理由)。
+                last_bar = i
+                event["lower_line_start_price"] = lo_slope * first_bar + lo_intercept
+                event["lower_line_end_price"] = lo_slope * last_bar + lo_intercept
+                event["upper_line_start_price"] = up_slope * first_bar + up_intercept
+                event["upper_line_end_price"] = up_slope * last_bar + up_intercept
+                events.append(event)
+            continue
+
+        bullish, kind = _DOUBLE_TOP_BOTTOM_STATE_MARKER_SOURCES[indicator]
+        # 旧6状態名(detected/rejected/failed_*/expired)で保存された戦略でも
+        # 動くよう、engine側のエイリアス表で新3状態名へ翻訳してから引く
+        # (2026-08-13、6→3状態統合)。
+        raw_state = params.get("state", "confirmed")
+        output_key = chart_patterns._SHAPE_STATE_KEYS.get(raw_state, raw_state)
+        shape_kwargs = {
+            name: params.get(name, default) for name, default in _DOUBLE_TOP_BOTTOM_SHAPE_DEFAULTS.items()
+        }
+        state = chart_patterns._double_top_bottom_shape_state(
+            df["high"], df["low"], df["close"], bullish, **shape_kwargs
+        )
         flag = state[output_key]
         if output_key == "exists":
             # existsはパターン形成中ずっとTrueの区間なので、区間の最初の
@@ -2831,14 +3693,9 @@ def _compute_pattern_markers(df: pd.DataFrame, trees: list[dict | None]) -> list
         # ショットで固定して読む - formed後にネックラインの元になる安値/
         # 高値が更に更新され得るため(既存ロジックの正しい挙動)、決着バーの
         # 時点で読むと時系列が矛盾した表示になり得る(実際に発生を確認)。
-        if is_triple:
-            point_bars = (state["top1_bar"], state["top2_bar"], state["top3_bar"], state["neck1_bar"], state["neck2_bar"])
-            point_prices = (state["top1_price"], state["top2_price"], state["top3_price"], state["neck1_price"], state["neck2_price"])
-            point_keys = ("top1", "top2", "top3", "neck1", "neck2")
-        else:
-            point_bars = (state["top1_bar"], state["top2_bar"], state["neckline_bar"])
-            point_prices = (state["top1_price"], state["top2_price"], state["neckline_price"])
-            point_keys = ("top1", "top2", "neckline")
+        point_bars = (state["top1_bar"], state["top2_bar"], state["neckline_bar"])
+        point_prices = (state["top1_price"], state["top2_price"], state["neckline_price"])
+        point_keys = ("top1", "top2", "neckline")
 
         for i in np.flatnonzero(flag.to_numpy(dtype=bool)):
             f = formed_bar.iloc[i]
@@ -3122,7 +3979,7 @@ async def get_report_pdf(job_id: str) -> FileResponse:
         stability_df=_read_csv_df(output_dir / "stability_analysis.csv"),
         monte_carlo_summary=_read_csv_df(output_dir / "monte_carlo_summary.csv"),
     )
-    return FileResponse(pdf_path, media_type="application/pdf", filename="strategy_lab_report.pdf")
+    return FileResponse(pdf_path, media_type="application/pdf", filename="strategyx_report.pdf")
 
 
 def _build_strategy_config_from_params(params: dict, prefix: str) -> Path:

@@ -1,13 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createChart,
   CandlestickSeries,
   LineSeries,
   createSeriesMarkers,
+  CrosshairMode,
   type IChartApi,
   type UTCTimestamp,
+  type BarData,
+  type MouseEventParams,
 } from 'lightweight-charts'
 import type { ChartIndicatorSeries, PatternMarkerEvent } from '../api'
+import {
+  buildNecklineSegments,
+  buildPatternPointMarkers,
+  buildPatternReferenceLines,
+  PATTERN_INSTANCE_COLORS,
+  patternInstanceIdPrefix,
+} from '../patternMarkers'
 import { indicatorLabel, paramsLabel } from '../conditionTreeUtils'
 import type { IndicatorInfo, PriceBar, TradeRow } from '../types'
 
@@ -61,6 +71,32 @@ function priceFormatFor(symbol: string | undefined) {
   return isJpyPair
     ? { type: 'price' as const, precision: 3, minMove: 0.001 }
     : { type: 'price' as const, precision: 5, minMove: 0.00001 }
+}
+
+// 価格軸の桁数(priceFormatFor)と同じ桁で数値を文字列にする - クリックした
+// ローソクのOHLCボックスと軸の表示がずれないようにするため。
+function formatPrice(value: number, symbol: string | undefined) {
+  return value.toFixed(priceFormatFor(symbol).precision)
+}
+
+// toChartTimeの逆変換。toChartTimeが「文字列の数字をそのままUTCとして扱う」
+// ので、戻すときもUTCのgetterで読む(閲覧者のOS設定に影響されない)。
+function formatChartTime(t: UTCTimestamp): string {
+  const d = new Date((t as number) * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+  )
+}
+
+// OHLCボックスに出すローソク1本の内容。
+interface BoxBar {
+  time: UTCTimestamp
+  open: number
+  high: number
+  low: number
+  close: number
 }
 
 function computeEMA(closes: number[], length: number): (number | null)[] {
@@ -163,6 +199,13 @@ export default function ChartPanel({
   const [pivotLeft, setPivotLeft] = useState(25)
   const [pivotRight, setPivotRight] = useState(25)
   const [showPatternMarkers, setShowPatternMarkers] = useState(true)
+  // カーソルが合っている足のOHLC。チャートの外に出たらnullになり、その場合は
+  // 最新足を出す(TradingViewの凡例と同じ挙動)。
+  const [hoveredBar, setHoveredBar] = useState<BoxBar | null>(null)
+  const [showOhlcBox, setShowOhlcBox] = useState(true)
+  // 十字線の移動はマウスを動かすたびに何度も飛んでくるので、足が変わった時
+  // だけstateを更新して無駄な再描画を避ける。
+  const hoveredTimeRef = useRef<number | null>(null)
   // ピボット表示等のチェックボックスを切り替えるだけでもこのeffect全体が
   // 再実行され、チャートを作り直す(=fitContent()で最新足まで表示し直す)
   // ため、ユーザーが見ていたスクロール/ズーム位置が毎回失われていた
@@ -180,6 +223,25 @@ export default function ChartPanel({
   // する。
   const savedRangeRef = useRef<{ from: number; to: number } | null>(initialVisibleRange ?? null)
   const isFirstMountRef = useRef(true)
+  // クリックしたパターンの上値水準線・下値回帰直線(点線)を描くための
+  // シリーズ - クリックのたびに前回分を消して引き直す(2026-08-19追加、
+  // ユーザー要望「点をクリックしたら上値の水準線と下値の回帰直線が
+  // 点線で表示されるように」)。
+  const referenceLineSeriesRef = useRef<ReturnType<IChartApi['addSeries']>[]>([])
+
+  // カーソルがチャートの外にある時に出す足(=最新足)。
+  const lastBar = useMemo<BoxBar | null>(() => {
+    const b = bars[bars.length - 1]
+    if (!b) return null
+    return {
+      time: toChartTime(b.datetime),
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    }
+  }, [bars])
+  const boxBar = hoveredBar ?? lastBar
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -187,12 +249,28 @@ export default function ChartPanel({
     const barsChanged = prevBarsRef.current !== bars
     prevBarsRef.current = bars
     const isFirstMount = isFirstMountRef.current
-    isFirstMountRef.current = false
+    // データがまだ0本のうちは「初回マウント」を消費しない。チャートタブを
+    // 開いた直後はpriceQueryが未解決でbarsが空配列なので、そこで消費して
+    // しまうと、実データが届いた回には isFirstMount=false / barsChanged=true
+    // となって fitContent() に落ち、遡って見ていた位置が毎回リセットされる
+    // (ユーザー報告2026-08-13:「違うタブへ移動して戻ったら最新のチャートが
+    // 表示されてしまう」)。実データが入った最初の回で初めて消費する。
+    const hasBars = bars.length > 0
+    if (hasBars) isFirstMountRef.current = false
 
     const chart = createChart(containerRef.current, {
       layout: { background: { color: 'transparent' }, textColor: '#d1d5db' },
       grid: { vertLines: { color: 'rgba(255,255,255,0.06)' }, horzLines: { color: 'rgba(255,255,255,0.06)' } },
       timeScale: { timeVisible: true, secondsVisible: false },
+      // 既定のMagnetモードは十字線の横線を終値に吸着させるため、価格軸には
+      // 「カーソルの位置の価格」ではなく終値が出てしまう。Normalにして
+      // カーソルの高さそのものの価格を価格軸(右)に表示する。
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        horzLine: { labelVisible: true, labelBackgroundColor: '#334155' },
+        vertLine: { labelVisible: true, labelBackgroundColor: '#334155' },
+      },
+      rightPriceScale: { visible: true },
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight || 400,
     })
@@ -344,34 +422,25 @@ export default function ChartPanel({
         }))
       : []
 
+    // 構成点の印の組み立ては patternMarkers.ts(純粋関数・テスト済み)に
+    // 任せる - ここに直接書いていた頃、想定外の形式のイベントで例外が飛び、
+    // 画面全体が落ちたことがあるため。
     const patternMarkerPoints =
       showPatternMarkers && patternMarkers
-        ? patternMarkers.flatMap((e) => {
-            const extremeLabel = (n: number) => (e.kind === 'top' ? `山${n}` : `谷${n}`)
-            const extremePos = (e.kind === 'top' ? 'aboveBar' : 'belowBar') as const
-            const neckPos = (e.kind === 'top' ? 'belowBar' : 'aboveBar') as const
-            // triple_top_shape/triple_bottom_shapeは山/谷が3つ・ネックが2つ
-            // (2026-08-01) - top3_timeの有無で判定する。
-            const isTriple = e.top3_time !== undefined && e.neck1_time !== undefined && e.neck2_time !== undefined
-            if (isTriple) {
-              return [
-                { time: toChartTime(e.top1_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(1) },
-                { time: toChartTime(e.neck1_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック1' },
-                { time: toChartTime(e.top2_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(2) },
-                { time: toChartTime(e.neck2_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック2' },
-                { time: toChartTime(e.top3_time!), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(3) },
-              ]
-            }
-            return [
-              { time: toChartTime(e.top1_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(1) },
-              { time: toChartTime(e.top2_time), position: extremePos, color: '#ff17d1', shape: 'circle' as const, text: extremeLabel(2) },
-              // ネックライン(2つの山/谷の間の谷/山) - 山側パターンなら谷なので
-              // belowBar、谷側パターンなら山なのでaboveBar(山/谷マーカーとは
-              // 逆側)。ユーザー指摘:「ネックラインは谷がないとわからない
-              // よね?谷も条件に必要でしょ」への対応。
-              { time: toChartTime(e.neckline_time!), position: neckPos, color: '#f59e0b', shape: 'circle' as const, text: 'ネック' },
-            ]
-          })
+        ? patternMarkers.flatMap((e, idx) =>
+            buildPatternPointMarkers(
+              e,
+              PATTERN_INSTANCE_COLORS[idx % PATTERN_INSTANCE_COLORS.length],
+              patternInstanceIdPrefix(idx),
+            ).map((p) => ({
+              time: toChartTime(p.time),
+              position: p.position,
+              color: p.color,
+              shape: p.shape,
+              text: p.text,
+              id: p.id,
+            })),
+          )
         : []
 
     // 山/谷とネックラインの関係を一目で追えるよう、ネックラインの実際の
@@ -398,12 +467,8 @@ export default function ChartPanel({
         ])
       }
       for (const e of patternMarkers) {
-        const isTriple = e.top3_time !== undefined && e.neck1_time !== undefined && e.neck2_time !== undefined
-        if (isTriple) {
-          drawNeckline(e.neck1_time!, e.neck2_time!, e.neck1_price!)
-          drawNeckline(e.neck2_time!, e.event_time, e.neck2_price!)
-        } else {
-          drawNeckline(e.neckline_time!, e.event_time, e.neckline_price!)
+        for (const seg of buildNecklineSegments(e)) {
+          drawNeckline(seg.start, seg.end, seg.price)
         }
       }
     }
@@ -413,22 +478,116 @@ export default function ChartPanel({
     )
     if (markers.length > 0) createSeriesMarkers(candleSeries, markers)
 
+    // パターンの構成点をクリックしたら、そのパターンの上値水準線・下値
+    // 回帰直線を点線で表示する(2026-08-19追加)。前回描いた分は毎回消して
+    // から引き直す。
+    const clearReferenceLines = () => {
+      for (const s of referenceLineSeriesRef.current) {
+        chart.removeSeries(s)
+      }
+      referenceLineSeriesRef.current = []
+    }
+    const addReferenceLine = (
+      line: ReturnType<typeof buildPatternReferenceLines>['upper'],
+      color: string,
+    ) => {
+      if (!line) return
+      const series = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      series.setData([
+        { time: toChartTime(line.start.time), value: line.start.price },
+        { time: toChartTime(line.end.time), value: line.end.price },
+      ])
+      referenceLineSeriesRef.current.push(series)
+    }
+    const handlePatternClick = (param: MouseEventParams) => {
+      const hovered = param.hoveredInfo
+      if (hovered?.objectKind !== 'series-marker' || typeof hovered.objectId !== 'string' || !patternMarkers) {
+        return
+      }
+      const id = hovered.objectId
+      clearReferenceLines()
+      const e = patternMarkers.find((_, idx) => patternInstanceIdPrefix(idx) === id)
+      if (!e) return
+      const { upper, lower } = buildPatternReferenceLines(e)
+      addReferenceLine(upper, '#f472b6')
+      addReferenceLine(lower, '#60a5fa')
+    }
+    chart.subscribeClick(handlePatternClick)
+
+    // ローソクをクリックしたら、その足のOHLCをボックスに出す。
+    // param.seriesDataはクリックした時刻のデータを持つので、縦位置は問わず
+    // 「その足の列をクリックした」で拾える。
+    const handleCrosshairMove = (param: MouseEventParams) => {
+      const bar =
+        param.time === undefined
+          ? undefined
+          : (param.seriesData.get(candleSeries) as BarData | undefined)
+      if (!bar || bar.open === undefined) {
+        // チャートの外へ出た。呼び出し元で最新足にフォールバックする。
+        if (hoveredTimeRef.current !== null) {
+          hoveredTimeRef.current = null
+          setHoveredBar(null)
+        }
+        return
+      }
+      const t = bar.time as UTCTimestamp
+      if (hoveredTimeRef.current === (t as number)) return
+      hoveredTimeRef.current = t as number
+      setHoveredBar({ time: t, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
+    }
+    chart.subscribeCrosshairMove(handleCrosshairMove)
+
+    if (barsChanged) {
+      hoveredTimeRef.current = null
+      setHoveredBar(null)
+    }
+
+    let restoreRange: { from: number; to: number } | null = null
     if (isFirstMount && savedRangeRef.current) {
       // 再マウント直後の1回目 - barsChangedは常にtrueになるが無視して
       // 前回の表示範囲(initialVisibleRange)を復元する。
-      chart.timeScale().setVisibleLogicalRange(savedRangeRef.current)
+      restoreRange = savedRangeRef.current
     } else if (barsChanged || !savedRangeRef.current) {
       chart.timeScale().fitContent()
     } else {
-      chart.timeScale().setVisibleLogicalRange(savedRangeRef.current)
+      restoreRange = savedRangeRef.current
+    }
+    const ts = chart.timeScale()
+    // setVisibleLogicalRange は「次の描画で反映する目標値」を置くだけで、
+    // 呼んだ直後に getVisibleLogicalRange() で読み戻してもまだ古い値が返る
+    // (実測で確認)。チャートは指標やマーカーのデータが遅れて届くたびに
+    // 作り直されるため、反映前にcleanupが走って古い範囲で記憶を上書きし、
+    // 次に開いたときは最新位置に戻ってしまっていた
+    // (ユーザー報告2026-08-13)。反映されたかを読み戻しで確かめ、
+    // まだなら「出したかった範囲」の方を覚えておく。
+    const isApplied = (want: { from: number; to: number }) => {
+      const got = ts.getVisibleLogicalRange()
+      return !!got && Math.abs(got.from - want.from) < 0.5 && Math.abs(got.to - want.to) < 0.5
+    }
+    let pendingRestore: { from: number; to: number } | null = null
+    if (restoreRange) {
+      ts.setVisibleLogicalRange(restoreRange)
+      if (!isApplied(restoreRange)) pendingRestore = restoreRange
     }
 
+    // チャートの幅が変わると表示できる本数が変わるため、復元した表示範囲が
+    // 初回のリサイズで上書きされてしまうことがある。最初のリサイズの直後に
+    // 一度だけ復元し直す(2回目以降はユーザーの操作を邪魔しないよう何もしない)。
     const resizeObserver = new ResizeObserver(() => {
-      if (containerRef.current) {
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        })
+      if (!containerRef.current) return
+      chart.applyOptions({
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
+      })
+      if (pendingRestore) {
+        ts.setVisibleLogicalRange(pendingRestore)
+        if (isApplied(pendingRestore)) pendingRestore = null
       }
     })
     resizeObserver.observe(containerRef.current)
@@ -439,11 +598,19 @@ export default function ChartPanel({
       // 代わりに復元する)。onVisibleRangeChangeで呼び出し元(App.tsx)にも
       // 伝え、このコンポーネント自体がアンマウントされても(=savedRangeRef
       // ごと消えても)復元できるようにする。
-      const range = chart.timeScale().getVisibleLogicalRange()
-      if (range) {
-        savedRangeRef.current = range
-        onVisibleRangeChange?.(range)
+      // 空チャートの表示範囲は保存しない(上と同じ理由 - 中身の無い範囲で
+      // 覚えている位置を上書きしてしまう)。
+      const current = hasBars ? ts.getVisibleLogicalRange() : null
+      // 復元がまだ反映されていないなら、読み戻した古い値ではなく
+      // 出したかった範囲の方を残す(上のコメント参照)。
+      const keep = pendingRestore && !isApplied(pendingRestore) ? pendingRestore : current
+      if (keep) {
+        savedRangeRef.current = keep
+        onVisibleRangeChange?.(keep)
       }
+      chart.unsubscribeCrosshairMove(handleCrosshairMove)
+      chart.unsubscribeClick(handlePatternClick)
+      referenceLineSeriesRef.current = []
       resizeObserver.disconnect()
       chart.remove()
     }
@@ -476,6 +643,10 @@ export default function ChartPanel({
           </label>
         )}
         <label className="flex items-center gap-1">
+          <input type="checkbox" checked={showOhlcBox} onChange={(e) => setShowOhlcBox(e.target.checked)} />
+          4本値ボックスを表示
+        </label>
+        <label className="flex items-center gap-1">
           <input type="checkbox" checked={showPivots} onChange={(e) => setShowPivots(e.target.checked)} />
           山/谷ピボット全表示(デバッグ用)
         </label>
@@ -506,7 +677,41 @@ export default function ChartPanel({
           </>
         )}
       </div>
-      <div ref={containerRef} className="min-h-0 w-full flex-1" />
+      <div className="relative min-h-0 w-full flex-1">
+        <div ref={containerRef} className="h-full w-full" />
+        {showOhlcBox && boxBar && (
+          // backdrop-blur(背景ぼかし)は使わない - Canvasの上に重ねると
+          // 環境によってはチャート領域全体が真っ黒になる(ユーザー報告:
+          // 「ストラテジー詳細からチャートを見ると画面がブラックアウトした」)。
+          // 不透明に近い単色の背景で代用する。
+          <div className="pointer-events-none absolute left-2 top-2 z-10 rounded border border-white/15 bg-gray-900/95 px-2.5 py-1.5 text-xs text-gray-200">
+            <div className="mb-1 flex items-baseline gap-2">
+              <span className="font-medium text-gray-300">{formatChartTime(boxBar.time)}</span>
+              {!hoveredBar && <span className="text-[10px] text-gray-500">最新足</span>}
+            </div>
+            <div className="flex items-baseline gap-3 tabular-nums">
+              <span>
+                <span className="mr-1 text-gray-400">始</span>
+                {formatPrice(boxBar.open, symbol)}
+              </span>
+              <span>
+                <span className="mr-1 text-gray-400">高</span>
+                <span className="text-emerald-300">{formatPrice(boxBar.high, symbol)}</span>
+              </span>
+              <span>
+                <span className="mr-1 text-gray-400">安</span>
+                <span className="text-rose-300">{formatPrice(boxBar.low, symbol)}</span>
+              </span>
+              <span>
+                <span className="mr-1 text-gray-400">終</span>
+                <span className={boxBar.close >= boxBar.open ? 'text-emerald-400' : 'text-rose-400'}>
+                  {formatPrice(boxBar.close, symbol)}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

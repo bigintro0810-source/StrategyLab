@@ -1,10 +1,10 @@
 # CLAUDE_HANDOVER.md
 
-# Strategy Lab 引き継ぎ資料
+# StrategyX 引き継ぎ資料
 
 ## プロジェクト概要
 
-Strategy Lab は Python 製のFXストラテジー研究・開発ツールです。
+StrategyX は Python 製のFXストラテジー研究・開発ツールです。
 
 目的は
 
@@ -22,9 +22,9 @@ Strategy Lab は Python 製のFXストラテジー研究・開発ツールです
 
 # 完成形の設計思想（2026-07-05、プロジェクト仕様書より）
 
-ユーザーから「Strategy Lab プロジェクト仕様（Claudeへの引き継ぎ）」という完成形の設計指針が提示された。
+ユーザーから「StrategyX プロジェクト仕様（Claudeへの引き継ぎ）」という完成形の設計指針が提示された。
 以後のあらゆる実装判断はこれを基準にする。
-原本: リポジトリ直下の `【重要】Strategy Lab プロジェクト仕様.pdf`
+原本: リポジトリ直下の `【重要】StrategyX プロジェクト仕様.pdf`
 
 **作りたいものの一文定義（絶対に忘れないこと）:**
 
@@ -79,7 +79,7 @@ V2.0-1（複数時間足対応）/ V2.0-3（Equity・Drawdownグラフ入りHTML
 - GUI化：完了。`gui_app.py`（`streamlit run gui_app.py`）。
 - PDF出力：完了（2026-07-03）。`engine/pdf_report.py`（`fpdf2`使用、`output/report.pdf`自動出力、GUIにもダウンロードボタン追加）。HTMLをそのまま変換する方式(weasyprint等)はWindowsでシステム依存関係のインストールが不安定になるリスクがあるため避け、サマリー・Equity/Drawdownチャート・ランキング表を独自に再構成する方式。日本語は游ゴシック(Windows同梱フォント)を埋め込み。Excel出力は未着手（CSVダウンロードで代替可能なため優先度低）。
 
-**個人/小規模販売向けパッケージ化：完了（2026-07-03）**。`build_package.ps1`実行で`dist/StrategyLab/`にダブルクリック起動可能な配布物を生成(Python embeddable package同梱、`run.bat`起動)。PyInstallerではなくPython同梱方式を採用した理由: `gui_app.py`は`sys.executable`経由でmain.pyをサブプロセス起動する設計(Streamlit+ProcessPoolExecutorのWindows spawn方式対策、V4.0 GUI化時に導入)。PyInstallerで凍結するとsys.executableが凍結exe自身を指してこの呼び出しが壊れるため、埋め込み型Pythonでコード変更を回避。同梱Python環境での動作を実際に検証済み(main.py単体実行、Streamlit GUI起動、`subprocess.run([sys.executable, "main.py", ...])`パターン全て確認)。埋め込みPythonの`._pth`ファイルはデフォルトでスクリプト自身のディレクトリをsys.pathに含めない(サイト制限モード)ため、ビルドスクリプトで`..\app`を明示的に追加する対応が必要だった。ライセンス/課金の仕組みは未着手（後日検討、ユーザー確認済み）。免責事項は`gui_app.py`サイドバーと`packaging/README_usage.txt`に記載。`data/raw/`のヒストリカルデータはリポジトリに一度もコミットされておらず(`.gitignore`)、配布物にも同梱しない(ユーザー自身のデータを使う設計)。
+**個人/小規模販売向けパッケージ化：完了（2026-07-03）**。`build_package.ps1`実行で`dist/StrategyX/`にダブルクリック起動可能な配布物を生成(Python embeddable package同梱、`run.bat`起動)。PyInstallerではなくPython同梱方式を採用した理由: `gui_app.py`は`sys.executable`経由でmain.pyをサブプロセス起動する設計(Streamlit+ProcessPoolExecutorのWindows spawn方式対策、V4.0 GUI化時に導入)。PyInstallerで凍結するとsys.executableが凍結exe自身を指してこの呼び出しが壊れるため、埋め込み型Pythonでコード変更を回避。同梱Python環境での動作を実際に検証済み(main.py単体実行、Streamlit GUI起動、`subprocess.run([sys.executable, "main.py", ...])`パターン全て確認)。埋め込みPythonの`._pth`ファイルはデフォルトでスクリプト自身のディレクトリをsys.pathに含めない(サイト制限モード)ため、ビルドスクリプトで`..\app`を明示的に追加する対応が必要だった。ライセンス/課金の仕組みは未着手（後日検討、ユーザー確認済み）。免責事項は`gui_app.py`サイドバーと`packaging/README_usage.txt`に記載。`data/raw/`のヒストリカルデータはリポジトリに一度もコミットされておらず(`.gitignore`)、配布物にも同梱しない(ユーザー自身のデータを使う設計)。
 
 Git Tag
 
@@ -381,7 +381,7 @@ GUI化（Streamlit等） → 完了（2026-07-02）。`gui_app.py`（`streamlit 
 
 # Version5.0（2026-07-05、ユーザー指示によりスコープ確定・実装完了）
 
-**Pine Script自動生成のみ。完了。** Strategy Labのバックテスト結果(トリガー/フィルター設定)をTradingView用のPine Script v5に変換する。`engine/pine_generator.py`(生成ロジック)+`generate_pinescript.py`(CLI、`--strategy-id`または`--ranking-csv --rank`で入力元を指定)。
+**Pine Script自動生成のみ。完了。** StrategyXのバックテスト結果(トリガー/フィルター設定)をTradingView用のPine Script v5に変換する。`engine/pine_generator.py`(生成ロジック)+`generate_pinescript.py`(CLI、`--strategy-id`または`--ranking-csv --rank`で入力元を指定)。
 
 全16トリガー・全22フィルターに対応。EMA/RSI(Wilder)/Donchian/Bollinger/MACD/Ichimoku/Stochastic/SuperTrend/ADXは`ta.ema`/`ta.rma`/`ta.highest`/`ta.lowest`/`ta.sma`/`ta.stdev`など最も基本的なPine関数のみで手動実装(`ta.macd()`/`ta.stoch()`/`ta.supertrend()`/`ta.dmi()`のような高レベル組み込み関数は、符号規約(例:SuperTrendのdirectionの向き)をPine実行環境なしに検証できないため意図的に不使用)。エントリー/エグジットの多足ステートマシン(シグナル足のhigh/lowを記録→lookahead_bars以内にclose<signal_lowでエントリー→SL=signal_high固定/TP=RRベース)も`engine/backtest_engine.py::run_backtest()`を忠実に翻訳。全パラメータを`input.*()`で公開し、TradingView上で調整可能(生成時点のバックテスト値がデフォルト)。
 
@@ -464,7 +464,7 @@ Version管理を重視。
 
 # 最終目標
 
-Strategy Labを
+StrategyXを
 
 個人レベルではなく
 

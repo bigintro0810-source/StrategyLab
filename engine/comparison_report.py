@@ -47,11 +47,11 @@ def build_comparison_html(entries: list[dict]) -> str:
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>Strategy Lab 戦略比較レポート</title>
+<title>StrategyX 戦略比較レポート</title>
 <style>{REPORT_CSS}</style>
 </head>
 <body>
-<h1>Strategy Lab 戦略比較レポート</h1>
+<h1>StrategyX 戦略比較レポート</h1>
 <p>比較対象: {len(entries)}件</p>
 
 <h2>指標比較</h2>

@@ -46,7 +46,10 @@ class IndicatorSpec:
     # rng.randint() - for knobs like Fibonacci's ratio where only specific
     # conventional values (0.236/0.382/0.618/...) are meaningful, unlike a
     # continuous "length"-style range.
-    param_choices: dict[str, list[float]] = field(default_factory=dict)
+    # 数値だけでなく文字列の選択肢も入る(例: last_pivot_direction の
+    # 'both'/'up'/'down')。structure_generator は random.Random.choice で
+    # そのまま選ぶので、型を問わずJSONへ保存できる。
+    param_choices: dict[str, list] = field(default_factory=dict)
     allow_indicator_pair: bool = False
     # 指標同士の比較で「比較先」候補として出す時の絞り込み単位 - 未設定
     # (None)ならkindをそのまま使う(今まで通り)。kindは「固定値と比較して
@@ -903,6 +906,9 @@ INDICATOR_POOL.extend([
         param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
         param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
+    # トリプルトップ/ボトム(形状判定版) - ダブルトップ/ボトムSTを土台に
+    # 5点(山1→ネック1→山2→ネック2→山3)へ拡張したもの
+    # (docs/pattern_spec_triple_top_bottom_shape.md)。
     IndicatorSpec(
         "triple_top_shape", "boolean_signal", literal_choices=[1.0],
         param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
@@ -913,80 +919,226 @@ INDICATOR_POOL.extend([
         param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
         param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
+    # ヘッド・アンド・ショルダーズ(形状判定版) - トリプルSTを土台に、頭が
+    # 肩より突出する・ネックラインが傾くことを許容したもの
+    # (docs/pattern_spec_head_and_shoulders_shape.md)。
     IndicatorSpec(
-        "triple_top_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.3, 0.5, 0.75, 1.0]},
+        "head_and_shoulders_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
     ),
     IndicatorSpec(
-        "triple_bottom_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"tolerance_atr_mult": [0.3, 0.5, 0.75, 1.0]},
+        "inverse_head_and_shoulders_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_atr_mult": [0.5, 0.75, 1.0, 1.5]},
+    ),
+    # チャネル系(形状判定版) - レクタングル/トライアングル/ウェッジ/
+    # ペナント/フラッグ、共通コア(_shape_state_core_channel)を10関数で
+    # 共有する(docs/pattern_spec_channel_patterns_shape.md)。
+    # 上昇ボックス(可変タッチ方式v2、2026-08-15全面書き換え) -
+    # docs/pattern_spec_ascending_box_shape_v2.md。他5家系
+    # (下降ボックス/トライアングル/ウェッジ/ペナント/フラッグ)とは別実装。
+    IndicatorSpec(
+        "ascending_box_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
     ),
     IndicatorSpec(
-        "head_and_shoulders_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-        param_choices={"shoulder_tolerance_atr_mult": [0.5, 0.75, 1.0], "head_margin_atr_mult": [0.25, 0.5, 0.75]},
+        "descending_box_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
+    ),
+    # 旧版(4点固定・共通チャネルコア方式、比較用に温存)。
+    IndicatorSpec(
+        "ascending_box_shape_legacy", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_mult": [0.15, 0.25, 0.35]},
     ),
     IndicatorSpec(
-        "inverse_head_and_shoulders_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-        param_choices={"shoulder_tolerance_atr_mult": [0.5, 0.75, 1.0], "head_margin_atr_mult": [0.25, 0.5, 0.75]},
+        "descending_box_shape_legacy", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_mult": [0.15, 0.25, 0.35]},
+    ),
+    # 上昇/下降三角保ち合い(可変タッチ・回帰直線方式v2、2026-08-18全面
+    # 書き換え) - docs/pattern_spec_triangle_shape_v2.md。
+    IndicatorSpec(
+        "ascending_triangle_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
     ),
     IndicatorSpec(
-        "ascending_triangle_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"flat_tolerance_atr_mult": [0.3, 0.5, 0.75]},
+        "descending_triangle_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
+    ),
+    # 旧版(4点固定・共通チャネルコア方式、比較用に温存)。
+    IndicatorSpec(
+        "ascending_triangle_shape_legacy", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_mult": [0.15, 0.25, 0.35]},
     ),
     IndicatorSpec(
-        "descending_triangle_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"flat_tolerance_atr_mult": [0.3, 0.5, 0.75]},
+        "descending_triangle_shape_legacy", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"top_tolerance_mult": [0.15, 0.25, 0.35]},
+    ),
+    # 上昇ウェッジ(可変タッチ・両側回帰直線方式v2、2026-08-19全面書き換え) -
+    # docs/pattern_spec_wedge_shape_v2.md。三角保ち合いv2と同じ考え方。
+    IndicatorSpec(
+        "rising_wedge_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
+    ),
+    # 上昇ウェッジX(2026-08-19、rising_wedge_shapeをこの時点でそのまま
+    # 複製・保存した別家系 - ユーザー指示)。
+    IndicatorSpec(
+        "rising_wedge_shape_x", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"level_tolerance_mult": [0.15, 0.25, 0.35]},
     ),
     IndicatorSpec(
-        "symmetrical_triangle_breakout_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
+        "falling_wedge_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"converge_margin": [0.05, 0.1, 0.2]},
     ),
     IndicatorSpec(
-        "symmetrical_triangle_breakout_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
+        "bullish_pennant_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"pole_height_min_mult": [1.5, 2.0, 3.0, 4.0]},
     ),
     IndicatorSpec(
-        "rising_wedge_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
+        "bearish_pennant_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"pole_height_min_mult": [1.5, 2.0, 3.0, 4.0]},
     ),
     IndicatorSpec(
-        "falling_wedge_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
+        "bullish_flag_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"pole_height_min_mult": [1.5, 2.0, 3.0, 4.0]},
     ),
     IndicatorSpec(
-        "bull_flag_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"impulse_lookback": (5, 20), "consolidation_window": (5, 20)},
-        param_choices={"impulse_atr_mult": [2.0, 2.5, 3.0, 3.5], "consolidation_atr_mult": [1.5, 2.0, 2.5]},
+        "bearish_flag_shape", "boolean_signal", literal_choices=[1.0],
+        param_ranges={"pivot_left_bars": (15, 35), "pivot_right_bars": (15, 35)},
+        param_choices={"pole_height_min_mult": [1.5, 2.0, 3.0, 4.0]},
+    ),
+    # ダブルトップ/ボトム(ZigZag方式、B方式実装) - 参考元由来の公開
+    # パラメータはlength(ZigZagのlookback本数)とmax_risk_ratio(P1/P3の
+    # 水準許容誤差、%)の2つだけ。参考元のmin/max/stepに合わせ、lengthは
+    # 5刻み・下限5、max_risk_ratioは5刻み・5〜100の範囲から選ぶ
+    # (docs/pattern_spec_double_top_bottom_zigzag.md 2章)。
+    IndicatorSpec(
+        "double_top_zigzag", "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "length": [5.0, 10.0, 15.0, 20.0, 25.0, 30.0],
+            "max_risk_ratio": [10.0, 20.0, 30.0, 40.0, 50.0],
+        },
     ),
     IndicatorSpec(
-        "bear_flag_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"impulse_lookback": (5, 20), "consolidation_window": (5, 20)},
-        param_choices={"impulse_atr_mult": [2.0, 2.5, 3.0, 3.5], "consolidation_atr_mult": [1.5, 2.0, 2.5]},
+        "double_bottom_zigzag", "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "length": [5.0, 10.0, 15.0, 20.0, 25.0, 30.0],
+            "max_risk_ratio": [10.0, 20.0, 30.0, 40.0, 50.0],
+        },
     ),
+] + [
+    # トリプルトップ/ボトム・カップ&ハンドル・ヘッド&ショルダーズ(多段ZigZag
+    # 方式、B方式実装)。6種類とも同じパラメータを共有するのでループで生成する。
+    # 候補値は参考元のmin/max/stepに合わせてある(仕様書1章)。
     IndicatorSpec(
-        "bullish_pennant_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"impulse_lookback": (5, 20), "consolidation_window": (5, 20)},
-        param_choices={"impulse_atr_mult": [2.0, 2.5, 3.0, 3.5], "consolidation_atr_mult": [1.5, 2.0, 2.5]},
-    ),
+        _rrcp_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "zigzag_length": [3.0, 8.0, 13.0, 18.0, 23.0],
+            "error_percent": [3.0, 8.0, 13.0, 18.0, 23.0],
+            "shoulder_start": [0.1, 0.15, 0.2, 0.25],
+            "shoulder_end": [0.5, 0.55, 0.6, 0.7],
+        },
+    )
+    for _rrcp_name in (
+        "triple_top", "triple_bottom",
+        "cup_and_handle", "inverted_cup_and_handle",
+        "head_and_shoulders", "inverse_head_and_shoulders",
+    )
+] + [
+    # ABCDパターン(投影型、B方式実装)。候補値は参考元のmin/max/stepに合わせる
+    # (docs/pattern_spec_abcd_projection.md 1章)。
     IndicatorSpec(
-        "bearish_pennant_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"impulse_lookback": (5, 20), "consolidation_window": (5, 20)},
-        param_choices={"impulse_atr_mult": [2.0, 2.5, 3.0, 3.5], "consolidation_atr_mult": [1.5, 2.0, 2.5]},
-    ),
+        _abcd_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "zigzag_length": [3.0, 8.0, 13.0, 18.0, 23.0],
+            "min_abc_ratio": [0.382, 0.5, 0.6, 0.7],
+            "max_abc_ratio": [0.8, 0.9, 1.0],
+        },
+    )
+    for _abcd_name in ("abcd_bullish", "abcd_bearish")
+] + [
+    # ABCパターン(多段ZigZag、B方式実装)。候補値は参考元のmin/max/stepに合わせる
+    # (docs/pattern_spec_abc_recursive.md 1章)。
     IndicatorSpec(
-        "in_range_box", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40)}, param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
+        _abc_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "zigzag_length": [3.0, 8.0, 13.0, 18.0, 23.0],
+            "entry_ratio": [0.1, 0.2, 0.3, 0.5],
+            "target_ratio": [0.618, 1.0, 1.618],
+            "stop_ratio": [-0.3, -0.1, 0.0],
+        },
+    )
+    for _abc_name in ("abc_bullish", "abc_bearish")
+] + [
+    # エリオット推進波(多段ZigZag、B方式実装)。候補値は参考元のmin/max/stepに
+    # 合わせる(docs/pattern_spec_motive_wave.md 1章)。depthは大きいほど重く
+    # (500だと58万本で40秒前後)、探索の候補には軽い側も混ぜてある。
     IndicatorSpec(
-        "range_box_breakout_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40)}, param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
+        _mw_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "zigzag_length": [3.0, 5.0, 10.0, 15.0],
+            "depth": [50.0, 100.0, 200.0],
+            "zigzag_level": [1.0, 2.0, 3.0],
+        },
+    )
+    for _mw_name in ("impulse_wave_bullish", "impulse_wave_bearish")
+] + [
+    # フラッグ/ペナント(4本のZigZag、B方式実装)。候補値は参考元のmin/max/step
+    # に合わせる(docs/pattern_spec_flags_pennants.md 1章)。4本のZigZagの
+    # 長さ/保持数まで探索対象にすると組み合わせが爆発するので、参考元の初期値
+    # (3/144, 5/89, 8/55, 13/34)は固定し、判定側の閾値だけを振る。
     IndicatorSpec(
-        "range_box_breakdown_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40)}, param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
+        _fnp_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "error_threshold": [10.0, 20.0, 30.0],
+            "flat_threshold": [10.0, 20.0, 30.0],
+            "flag_ratio": [0.382, 0.5, 0.618, 0.786],
+        },
+    )
+    for _fnp_name in ("bullish_flag", "bearish_flag", "bullish_pennant", "bearish_pennant")
+] + [
+    # チャネル/ウェッジ/トライアングル13種(B方式実装)。候補値は参考元の
+    # min/max/stepに合わせる(docs/pattern_spec_auto_chart_patterns.md 1章)。
+    # last_pivot_direction は既定の'both'だと上下が混ざるので、探索では
+    # 向きを固定した2つも候補に入れる。
+    IndicatorSpec(
+        _acp_name, "boolean_signal", literal_choices=[1.0],
+        param_choices={
+            "zigzag_length1": [5.0, 8.0, 13.0, 21.0],
+            "error_threshold": [10.0, 20.0, 30.0],
+            "flat_threshold": [10.0, 20.0, 30.0],
+            "last_pivot_direction": ["both", "up", "down"],
+        },
+    )
+    for _acp_name in (
+        "ascending_channel",
+        "descending_channel",
+        "ranging_channel",
+        "rising_wedge_expanding",
+        "falling_wedge_expanding",
+        "diverging_triangle",
+        "ascending_triangle_expanding",
+        "descending_triangle_expanding",
+        "rising_wedge_contracting",
+        "falling_wedge_contracting",
+        "converging_triangle",
+        "descending_triangle_contracting",
+        "ascending_triangle_contracting",
+    )
 ])
 
 
@@ -1127,38 +1279,6 @@ INDICATOR_POOL.extend([
         "ha_strong_bearish", "boolean_signal", literal_choices=[1.0],
         param_choices={"threshold": [0.02, 0.05, 0.1]},
     ),
-    IndicatorSpec(
-        "gartley_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "gartley_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "bat_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "bat_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "butterfly_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "butterfly_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "crab_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
-    IndicatorSpec(
-        "crab_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.05, 0.1, 0.15]},
-    ),
 ])
 
 # ---------------------------------------------------------------------------
@@ -1167,30 +1287,6 @@ INDICATOR_POOL.extend([
 # スリードライブ - 14 new indicators.
 # ---------------------------------------------------------------------------
 INDICATOR_POOL.extend([
-    IndicatorSpec(
-        "uptrend_line_break", "boolean_signal", literal_choices=[1.0], param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "downtrend_line_break", "boolean_signal", literal_choices=[1.0], param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "ascending_channel_break", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"slope_tolerance_atr_mult": [0.01, 0.02, 0.05]},
-    ),
-    IndicatorSpec(
-        "descending_channel_break", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)}, param_choices={"slope_tolerance_atr_mult": [0.01, 0.02, 0.05]},
-    ),
-    IndicatorSpec(
-        "false_breakout_bullish_reversal", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40), "max_bars_outside": (1, 5)},
-        param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
-    IndicatorSpec(
-        "false_breakout_bearish_reversal", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40), "max_bars_outside": (1, 5)},
-        param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
     IndicatorSpec("nr4", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec("nr7", "boolean_signal", literal_choices=[1.0]),
     IndicatorSpec(
@@ -1201,22 +1297,6 @@ INDICATOR_POOL.extend([
         "volume_climax_bearish", "boolean_signal", literal_choices=[1.0],
         param_ranges={"lookback": (10, 40)}, param_choices={"body_mult": [1.5, 2.0, 2.5, 3.0], "volume_mult": [1.5, 2.0, 2.5, 3.0]},
     ),
-    IndicatorSpec(
-        "ab_cd_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.1, 0.15, 0.2]},
-    ),
-    IndicatorSpec(
-        "ab_cd_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.1, 0.15, 0.2]},
-    ),
-    IndicatorSpec(
-        "three_drives_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.1, 0.15, 0.2]},
-    ),
-    IndicatorSpec(
-        "three_drives_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"lookback": (3, 10)}, param_choices={"tolerance": [0.1, 0.15, 0.2]},
-    ),
 ])
 
 
@@ -1226,39 +1306,6 @@ INDICATOR_POOL.extend([
 # カップウィズハンドル - 9 new indicators.
 # ---------------------------------------------------------------------------
 INDICATOR_POOL.extend([
-    IndicatorSpec("saucer_top", "boolean_signal", literal_choices=[1.0], param_ranges={"window": (20, 50)}),
-    IndicatorSpec("saucer_bottom", "boolean_signal", literal_choices=[1.0], param_ranges={"window": (20, 50)}),
-    IndicatorSpec(
-        "ascending_rectangle_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40), "trend_lookback": (15, 50)},
-        param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
-    IndicatorSpec(
-        "descending_rectangle_breakdown", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"window": (10, 40), "trend_lookback": (15, 50)},
-        param_choices={"box_atr_mult": [1.5, 2.0, 2.5, 3.0]},
-    ),
-    IndicatorSpec(
-        "broadening_formation_breakout_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "broadening_formation_breakout_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "diamond_formation_breakout_bullish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "diamond_formation_breakout_bearish", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"swing_lookback": (3, 10)},
-    ),
-    IndicatorSpec(
-        "cup_with_handle_breakout", "boolean_signal", literal_choices=[1.0],
-        param_ranges={"cup_window": (25, 60), "handle_window": (5, 20)},
-        param_choices={"handle_atr_mult": [1.0, 1.5, 2.0]},
-    ),
 ])
 
 
@@ -1297,19 +1344,40 @@ _ICT_EXACT = {
 # Multi-swing chart patterns and harmonic patterns - all boolean_signal,
 # name-prefix-matchable since every variant follows a `{pattern}_{bullish|
 # bearish|breakout|breakdown}` naming convention.
+# 2026-08-07、ユーザー判断でダブルトップ/ボトム以外のチャートパターンを
+# 全て削除したため、それらのprefixもここから外した(engine/chart_patterns.py
+# のモジュール冒頭コメント参照)。今後B方式で新しいパターンを追加する際は、
+# ここにもprefixを足すこと - 足し忘れるとcategoryが"indicator"になり、
+# 自動探索UIのジャンル分けから漏れる。
 _CHART_PATTERN_PREFIXES = (
-    "double_top", "double_bottom", "triple_top", "triple_bottom",
-    "head_and_shoulders", "inverse_head_and_shoulders",
-    "ascending_triangle", "descending_triangle", "symmetrical_triangle",
+    "double_top", "double_bottom",
+    "triple_top", "triple_bottom",
+    "ascending_box", "descending_box",
+    "ascending_triangle", "descending_triangle",
     "rising_wedge", "falling_wedge",
-    "bull_flag", "bear_flag", "bullish_pennant", "bearish_pennant",
-    "in_range_box", "range_box_",
-    "uptrend_line_break", "downtrend_line_break",
-    "ascending_channel_break", "descending_channel_break",
-    "false_breakout_",
-    "saucer_", "ascending_rectangle", "descending_rectangle",
-    "broadening_formation", "diamond_formation", "cup_with_handle",
-    "gartley_", "bat_", "butterfly_", "crab_", "ab_cd_", "three_drives_",
+    "cup_and_handle", "inverted_cup_and_handle",
+    "head_and_shoulders", "inverse_head_and_shoulders",
+    "abcd_bullish", "abcd_bearish",
+    "abc_bullish", "abc_bearish",
+    "impulse_wave_bullish", "impulse_wave_bearish",
+    "bullish_flag", "bearish_flag",
+    "bullish_pennant", "bearish_pennant",
+    "ascending_channel",
+    "descending_channel",
+    "ranging_channel",
+    "rising_wedge_expanding",
+    "falling_wedge_expanding",
+    "diverging_triangle",
+    "ascending_triangle_expanding",
+    "descending_triangle_expanding",
+    "rising_wedge_contracting",
+    "falling_wedge_contracting",
+    "converging_triangle",
+    "descending_triangle_contracting",
+    "ascending_triangle_contracting",
+    # ユーザーがパターン作成画面で作ったもの(engine/custom_patterns.py)。
+    # 指標名は必ず custom_ 始まりに正規化されるので、これ1本で全部拾える。
+    "custom_",
 )
 
 _TIME_FILTER_PREFIXES = ("killzone_", "minutes_since_")
@@ -1626,3 +1694,57 @@ def build_filtered_pool(
         names = set(allowed_names)
         pool = [spec for spec in pool if spec.name in names]
     return pool
+
+
+# ---------------------------------------------------------------------------
+# ユーザーが作ったカスタムパターン(engine/custom_patterns.py)を候補プールへ
+# 追加する。
+#
+# 注意点が3つある:
+#   1. INDICATOR_POOL は再代入せず extend で足す。pool_by_kind() が def 時に
+#      このリストを既定引数として束縛しているため、別リストに差し替えると
+#      そちらには反映されない。
+#   2. 追加分にも _apply_categories / _apply_value_presets /
+#      _apply_literal_hard_bounds を掛け直す。これらは上で INDICATOR_POOL に
+#      対して1度実行済みで、後から足した分には掛かっていない。掛け忘れると
+#      category が空のままになり、自動探索のカテゴリ絞り込みと
+#      /api/exploration-categories から消える。
+#   3. LEVEL_PRESETS["advanced"] は上で確定済みのリストなので、こちらにも
+#      明示的に足す。足さないと探索レベル"advanced"で無視される。
+# ---------------------------------------------------------------------------
+def _append_custom_patterns() -> None:
+    try:
+        from engine import custom_patterns as _custom
+    except Exception as exc:  # pragma: no cover - 保険
+        import sys
+
+        print(f"[custom_patterns] プールへの追加に失敗しました: {exc}", file=sys.stderr)
+        return
+
+    new_specs: list[IndicatorSpec] = []
+    for pattern in _custom.load_all():
+        if pattern.broken:
+            # 壊れているものは候補に出さない(自動探索が必ず失敗する条件を
+            # 引いてしまうため)。条件ビルダーには出て、使うと理由が出る。
+            continue
+        new_specs.append(
+            IndicatorSpec(
+                pattern.name,
+                pattern.kind,
+                literal_choices=list(pattern.literal_choices),
+                param_choices=dict(pattern.param_choices),
+            )
+        )
+        if pattern.include_in_exploration:
+            LEVEL_PRESETS["advanced"].append(pattern.name)
+
+    if not new_specs:
+        return
+
+    INDICATOR_POOL.extend(new_specs)
+    _apply_categories(new_specs)
+    _apply_value_presets(new_specs)
+    _apply_literal_hard_bounds(new_specs)
+
+
+_append_custom_patterns()

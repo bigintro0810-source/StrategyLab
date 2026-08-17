@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "custom_breakout_three_soldiers",
+  "label_ja": "サンプル: 3連続陽線+高値ブレイク",
+  "kind": "boolean_signal",
+  "category": "chart_pattern",
+  "literal_choices": [
+    1.0
+  ],
+  "params": [
+    {
+      "name": "lookback",
+      "label": "高値を見る本数",
+      "default": 20,
+      "type": "int"
+    }
+  ],
+  "param_choices": {
+    "lookback": [
+      10.0,
+      20.0,
+      40.0
+    ]
+  },
+  "include_in_exploration": true,
+  "enabled": true,
+  "prompt_ja": "(手動作成のサンプル)",
+  "model": null,
+  "code_sha256": "5c2103792e083b09afb94ad0791211990aa85560d11408cb0e635e4abe16ff34"
+}

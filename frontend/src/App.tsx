@@ -1997,7 +1997,7 @@ export default function App() {
     <div className="min-h-screen text-gray-200">
       <nav className="glass-nav sticky top-0 z-10 text-sm">
         <div className="flex items-center gap-5 px-4 py-3">
-          <span className="brand-text text-base font-bold tracking-wide">Strategy Lab</span>
+          <span className="brand-text text-base font-bold tracking-wide">StrategyX</span>
           {MAIN_TABS.map((tab) => (
             <button
               key={tab.id}

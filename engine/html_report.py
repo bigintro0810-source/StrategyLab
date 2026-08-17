@@ -294,11 +294,11 @@ def build_html_report(
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>Strategy Lab レポート</title>
+<title>StrategyX レポート</title>
 <style>{REPORT_CSS}</style>
 </head>
 <body>
-<h1>Strategy Lab レポート</h1>
+<h1>StrategyX レポート</h1>
 <p>モード: {mode} / 時間足: {timeframe}</p>
 
 <h2>サマリー</h2>

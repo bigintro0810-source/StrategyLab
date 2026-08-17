@@ -1,0 +1,78 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "構文ガード",
+      "passed": true,
+      "detail": "許可された範囲のコードです"
+    },
+    {
+      "name": "読み込み",
+      "passed": true,
+      "detail": "detect() が見つかりました"
+    },
+    {
+      "name": "戻り値の形式",
+      "passed": true,
+      "detail": "1次元・長さ一致・0.0/1.0のみ"
+    },
+    {
+      "name": "再現性",
+      "passed": true,
+      "detail": "2回実行してビット一致"
+    },
+    {
+      "name": "先読みしていないか",
+      "passed": true,
+      "detail": "末尾(1, 5, 50, 200)本を足しても過去の出力は不変"
+    },
+    {
+      "name": "異常データ耐性",
+      "passed": true,
+      "detail": "短いデータ(50本):OK / 値動きゼロ:OK / NaN欠損あり:OK"
+    },
+    {
+      "name": "検出件数",
+      "passed": true,
+      "detail": "合計3974件"
+    },
+    {
+      "name": "速度",
+      "passed": true,
+      "detail": "10万本あたり 72ms"
+    }
+  ],
+  "warnings": [],
+  "report": {
+    "per_dataset": [
+      {
+        "dataset": "USDJPY 15分足",
+        "bars": 40000,
+        "detections": 1389,
+        "ratio_pct": 3.4725,
+        "first": "2024-12-09 17:00:00",
+        "last": "2026-07-18 01:00:00",
+        "median_gap_bars": 8
+      },
+      {
+        "dataset": "EURUSD 15分足",
+        "bars": 40000,
+        "detections": 1188,
+        "ratio_pct": 2.97,
+        "first": "2024-11-25 22:00:00",
+        "last": "2026-07-02 17:00:00",
+        "median_gap_bars": 11
+      },
+      {
+        "dataset": "GBPJPY 15分足",
+        "bars": 40000,
+        "detections": 1397,
+        "ratio_pct": 3.4925,
+        "first": "2024-11-26 15:45:00",
+        "last": "2026-07-02 11:00:00",
+        "median_gap_bars": 8
+      }
+    ],
+    "speed_ms_per_100k": 71.9
+  }
+}

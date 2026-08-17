@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StrategyX — 戦略は、人ではなくエンジンが探す。</title>
+<meta name="description" content="TradingViewとEA Studioを融合し、それらを超える自由度を持つストラテジー研究プラットフォーム。条件を自動生成し、大量にバックテストし、堅牢性を検証する。" />
+<style>
+  :root {
+    --bg: #0b0f14;
+    --hero-bg: #070a0d;
+    --surface: #121821;
+    --surface-2: #1a2129;
+    --border: rgba(232, 237, 242, 0.09);
+    --border-strong: rgba(232, 237, 242, 0.16);
+    --text: #e8edf2;
+    --muted: #8b98a5;
+    --muted-2: #5c6773;
+    --accent: #ffb454;
+    --accent-dim: #a8783b;
+    --accent2: #4fd1c5;
+    --accent2-dim: #2f8079;
+    --radius: 10px;
+    --font-ui: -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  img, svg, canvas { max-width: 100%; display: block; }
+  a { color: inherit; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  p { margin: 0; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); }
+
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 5vw, 64px);
+  }
+
+  /* ---------- Nav ---------- */
+  .nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px clamp(20px, 5vw, 64px);
+    backdrop-filter: blur(10px);
+    background: linear-gradient(to bottom, rgba(7,10,13,0.75), rgba(7,10,13,0));
+  }
+  .nav.scrolled { background: rgba(7,10,13,0.86); border-bottom: 1px solid var(--border); }
+  .nav-logo {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-decoration: none;
+  }
+  .nav-logo .lab { color: var(--accent); }
+  .nav-links {
+    display: none;
+    gap: 32px;
+    list-style: none;
+    margin: 0; padding: 0;
+  }
+  .nav-links a {
+    font-size: 12.5px;
+    color: var(--muted);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    transition: color 0.2s ease;
+  }
+  .nav-links a:hover, .nav-links a:focus-visible { color: var(--text); }
+  .nav-cta {
+    display: none;
+    font-family: inherit;
+    font-size: 11.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 10px 20px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.2s ease, transform 0.1s ease;
+  }
+  .nav-cta:hover { background: #222b35; }
+  .nav-cta:active { transform: scale(0.97); }
+  @media (min-width: 760px) {
+    .nav-links { display: flex; }
+    .nav-cta { display: inline-flex; }
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    position: relative;
+    min-height: 100svh;
+    display: flex;
+    align-items: flex-end;
+    background: var(--hero-bg);
+    overflow: hidden;
+  }
+  .hero-canvas-holder {
+    position: absolute;
+    inset: 0;
+  }
+  #heroCanvas { width: 100%; height: 100%; display: block; }
+  .hero-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 90% 60% at 15% 100%, rgba(7,10,13,0.55), transparent 60%),
+      linear-gradient(to top, rgba(7,10,13,0.92) 0%, rgba(7,10,13,0.55) 38%, rgba(7,10,13,0.15) 66%, rgba(7,10,13,0.35) 100%);
+  }
+  .hero-content {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    max-width: 760px;
+    padding: 140px clamp(20px, 5vw, 64px) 88px;
+  }
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: var(--accent2);
+    margin-bottom: 18px;
+    opacity: 0;
+  }
+  .hero-eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent2);
+    box-shadow: 0 0 0 3px rgba(79,209,197,0.18);
+  }
+  .hero h1 {
+    font-size: clamp(2.6rem, 7vw, 5rem);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    opacity: 0;
+  }
+  .hero h1 .lab { color: var(--accent); }
+  .hero-sub {
+    font-size: clamp(1.05rem, 2vw, 1.4rem);
+    font-weight: 400;
+    color: rgba(232,237,242,0.86);
+    margin-bottom: 16px;
+    opacity: 0;
+  }
+  .hero-desc {
+    font-size: clamp(0.92rem, 1.3vw, 1.05rem);
+    color: var(--muted);
+    max-width: 56ch;
+    margin-bottom: 32px;
+    opacity: 0;
+  }
+  .hero-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 28px;
+    opacity: 0;
+  }
+  .btn {
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 13px 24px;
+    border-radius: 7px;
+    text-decoration: none;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: filter 0.15s ease, transform 0.1s ease, background 0.15s ease;
+    display: inline-block;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent2); color: #06201d; }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-secondary { background: transparent; color: var(--text); border-color: var(--border-strong); }
+  .btn-secondary:hover { background: rgba(232,237,242,0.06); }
+  .hero-trust {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted-2);
+    opacity: 0;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .hero-eyebrow, .hero h1, .hero-sub, .hero-desc, .hero-ctas, .hero-trust {
+    animation: fadeUp 0.8s cubic-bezier(0.16,1,0.3,1) forwards;
+  }
+  .hero-eyebrow { animation-delay: 0.1s; }
+  .hero h1 { animation-delay: 0.22s; }
+  .hero-sub { animation-delay: 0.38s; }
+  .hero-desc { animation-delay: 0.52s; }
+  .hero-ctas { animation-delay: 0.66s; }
+  .hero-trust { animation-delay: 0.78s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-eyebrow, .hero h1, .hero-sub, .hero-desc, .hero-ctas, .hero-trust {
+      animation: none; opacity: 1;
+    }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ---------- Sections ---------- */
+  section.panel { padding: 96px 0; border-top: 1px solid var(--border); scroll-margin-top: 72px; }
+  .section-head { max-width: 640px; margin-bottom: 56px; }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent2);
+    margin-bottom: 14px;
+    display: block;
+  }
+  .section-head h2 {
+    font-size: clamp(1.5rem, 3vw, 2.1rem);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+  }
+  .section-head p { color: var(--muted); font-size: 1rem; }
+
+  .reveal { opacity: 0; transform: translateY(16px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.in { opacity: 1; transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  /* Pipeline */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .pipe-step {
+    background: var(--surface);
+    padding: 28px 24px;
+    position: relative;
+  }
+  .pipe-num {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .pipe-step h3 { font-size: 1rem; font-weight: 600; margin-bottom: 10px; }
+  .pipe-step p { font-size: 0.875rem; color: var(--muted); }
+  .pipe-arrow {
+    display: none;
+    position: absolute;
+    right: -1px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted-2);
+    font-size: 14px;
+    z-index: 2;
+  }
+  @media (min-width: 900px) {
+    .pipe-step:not(:last-child) .pipe-arrow { display: block; }
+  }
+
+  /* Feature grid */
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px;
+  }
+  .card .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--accent2-dim);
+    background: rgba(79,209,197,0.08);
+    border: 1px solid rgba(79,209,197,0.2);
+    border-radius: 5px;
+    padding: 3px 8px;
+    display: inline-block;
+    margin-bottom: 14px;
+  }
+  .card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 10px; }
+  .card p { font-size: 0.9rem; color: var(--muted); }
+  .card .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 7px;
+  }
+
+  /* Validation strip */
+  .valid-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .valid-item { border-left: 2px solid var(--accent-dim); padding-left: 18px; }
+  .valid-item h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 8px; }
+  .valid-item p { font-size: 0.875rem; color: var(--muted); }
+
+  /* Pine section */
+  .pine-block {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 40px;
+    align-items: center;
+  }
+  @media (max-width: 800px) { .pine-block { grid-template-columns: 1fr; } }
+  .pine-code {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--muted);
+    overflow-x: auto;
+    line-height: 1.85;
+  }
+  .pine-code .k { color: var(--accent2); }
+  .pine-code .c { color: var(--muted-2); }
+  .pine-code .s { color: var(--accent); }
+
+  /* Status */
+  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .status-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+  }
+  .status-item .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin-bottom: 8px;
+  }
+  .status-item .value { font-size: 0.95rem; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 100px;
+  }
+  .pill-live { background: rgba(79,209,197,0.1); color: var(--accent2); border: 1px solid rgba(79,209,197,0.25); }
+  .pill-todo { background: rgba(139,152,165,0.1); color: var(--muted); border: 1px solid var(--border-strong); }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 40px 0 56px;
+    color: var(--muted-2);
+    font-size: 0.82rem;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  footer .mono { color: var(--muted-2); }
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <a href="#top" class="nav-logo">STRATEGY<span class="lab">LAB</span></a>
+  <ul class="nav-links">
+    <li><a href="#pipeline">パイプライン</a></li>
+    <li><a href="#engine">エンジン</a></li>
+    <li><a href="#validation">検証</a></li>
+    <li><a href="#pine">Pine Script</a></li>
+    <li><a href="#status">状況</a></li>
+  </ul>
+  <a href="#status" class="nav-cta">開発状況を見る</a>
+</nav>
+
+<header class="hero" id="top">
+  <div class="hero-canvas-holder"><canvas id="heroCanvas"></canvas></div>
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <span class="hero-eyebrow"><span class="dot"></span>AUTOMATED STRATEGY RESEARCH ENGINE</span>
+    <h1>STRATEGY<span class="lab"> LAB</span></h1>
+    <p class="hero-sub">TradingViewとEA Studioを融合し、それらを超える自由度を。</p>
+    <p class="hero-desc">
+      条件は人が組むのではなく、エンジンが自動生成する。何百〜何万通りの売買ルールを生成し、
+      バックテストで篩にかけ、生き残った戦略だけをWalk Forward・Out-of-Sample・モンテカルロで検証する。
+    </p>
+    <div class="hero-ctas">
+      <a href="#pipeline" class="btn btn-primary">パイプラインを見る</a>
+      <a href="#validation" class="btn btn-secondary">検証手法を見る</a>
+    </div>
+    <p class="hero-trust tabular mono">開発中 — ローカルWindows版 / 全機能検証済み / 7通貨ペア対応</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="panel" id="pipeline">
+    <div class="section-head reveal">
+      <span class="eyebrow">Pipeline</span>
+      <h2>戦略は、人ではなくエンジンが探す。</h2>
+      <p>手で1つずつ組み立てるのではなく、条件の「部品」を渡せば、あとはエンジンが構造そのものを探索する。</p>
+    </div>
+    <div class="pipeline reveal">
+      <div class="pipe-step">
+        <div class="pipe-num">01</div>
+        <h3>条件プールを定義</h3>
+        <p>EMA・RSI・ATR・一目均衡表・ICT/SMC・ローソク足パターンなど、100種を超える指標/条件をあらかじめ用意。</p>
+        <span class="pipe-arrow">→</span>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">02</div>
+        <h3>構造を自動生成</h3>
+        <p>AND/OR/NOTで組み合わせた条件ツリーを、ランダム生成または遺伝的アルゴリズムでエンジン自身が組み立てる。</p>
+        <span class="pipe-arrow">→</span>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">03</div>
+        <h3>大量にバックテスト</h3>
+        <p>生成した候補を並列実行。スプレッド・スリッページ・手数料まで含めた実行条件を再現して検証する。</p>
+        <span class="pipe-arrow">→</span>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">04</div>
+        <h3>指標でランキング</h3>
+        <p>Profit Factor・最大DD・シャープレシオ・リカバリーファクターなど複数指標で自動評価・順位付け。</p>
+        <span class="pipe-arrow">→</span>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">05</div>
+        <h3>生存者だけを堅牢性検証</h3>
+        <p>上位候補のみ、Walk Forward・Out-of-Sample・モンテカルロ・パラメータ安定性で仕上げの検証をかける。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="engine">
+    <div class="section-head reveal">
+      <span class="eyebrow">Engine</span>
+      <h2>手動でも、自動でも。両方使えるビルダー。</h2>
+      <p>条件を自分で組みたい日も、エンジンに任せたい日も、同じプラットフォームの上でどちらも動く。</p>
+    </div>
+    <div class="grid-2 reveal">
+      <div class="card">
+        <span class="tag">MANUAL</span>
+        <h3>手動探索</h3>
+        <p>条件ツリーエディタでAND/OR/NOTを自在に組み合わせ、ロング・ショート・両方を自由に切り替えて1つの戦略をじっくり作り込む。</p>
+      </div>
+      <div class="card">
+        <span class="tag">AUTO</span>
+        <h3>自動探索</h3>
+        <p>ランダム生成と遺伝的アルゴリズムの2モードを搭載。世代を重ねるごとに、より良い成績の条件構造へと進化していく。</p>
+      </div>
+      <div class="card">
+        <span class="tag">100+ INDICATORS</span>
+        <h3>指標・パターンの厚み</h3>
+        <p>EMA/RSI/MACD/ATR/ADX/ボリンジャー/一目均衡表/フィボナッチ/VWAP/ドンチアン/ピボット、ICT・SMC(FVG・オーダーブロック・BOS/CHoCH・リクイディティスイープ・キルゾーン)、ローソク足パターン42種まで。</p>
+        <div class="chips">
+          <span class="chip">FVG</span><span class="chip">Order Block</span><span class="chip">BOS/CHoCH</span>
+          <span class="chip">Kill Zone</span><span class="chip">Ichimoku</span><span class="chip">Fibonacci</span>
+        </div>
+      </div>
+      <div class="card">
+        <span class="tag">EXECUTION</span>
+        <h3>実行条件まで再現</h3>
+        <p>ATRトレーリング・部分利確・建値移動・最大DDストップ・連敗ストップ・ポジションサイジング(リスク%/固定ロット/複利)まで、実運用に近い形で検証できる。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="validation">
+    <div class="section-head reveal">
+      <span class="eyebrow">Validation</span>
+      <h2>「勝てそう」で終わらせない。</h2>
+      <p>ランキング上位というだけでは、たまたま良い結果が出ただけかもしれない。4つの角度から頑健性を確かめる。</p>
+    </div>
+    <div class="valid-list reveal">
+      <div class="valid-item">
+        <h3>Out-of-Sample</h3>
+        <p>学習期間と検証期間を分離し、見せていないデータでも成績が再現するかを確認する。</p>
+      </div>
+      <div class="valid-item">
+        <h3>Walk Forward</h3>
+        <p>検証期間を少しずつずらしながら繰り返し評価し、特定の相場環境への過剰適合を検出する。</p>
+      </div>
+      <div class="valid-item">
+        <h3>モンテカルロ</h3>
+        <p>取引の並び順をシャッフルして多数回試行し、結果が偶然の順序に依存していないかを統計的に検証する。</p>
+      </div>
+      <div class="valid-item">
+        <h3>パラメータ安定性</h3>
+        <p>数値を少し動かしただけで成績が崖から落ちるように悪化しないか、周辺パラメータでの安定度を確認する。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="pine">
+    <div class="pine-block reveal">
+      <div>
+        <span class="eyebrow">Export</span>
+        <h2 style="font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight:700; letter-spacing:-0.01em; margin-bottom:14px;">
+          見つけた戦略を、そのままTradingViewへ。
+        </h2>
+        <p style="color: var(--muted); font-size: 1rem;">
+          採用した条件ツリーをPine Scriptへ自動変換。エントリー・決済・トレーリングまで再現したストラテジースクリプトとして書き出し、
+          使い慣れたTradingViewのチャート上でそのまま確認できる。
+        </p>
+      </div>
+      <pre class="pine-code"><span class="c">// StrategyX が自動生成</span>
+<span class="k">strategy</span>(<span class="s">"SL_20260728_auto"</span>, overlay=<span class="k">true</span>)
+
+ema200 = ta.ema(close, 200)
+rsi14  = ta.rsi(close, 14)
+
+longCond = close > ema200 <span class="k">and</span> rsi14 < 35
+<span class="k">if</span> (longCond)
+    strategy.entry(<span class="s">"Long"</span>, strategy.long)</pre>
+    </div>
+  </section>
+
+  <section class="panel" id="status">
+    <div class="section-head reveal">
+      <span class="eyebrow">Status</span>
+      <h2>現在の状況</h2>
+      <p>開発中のプロジェクトです。誇張のない、いまの状態をそのまま書いています。</p>
+    </div>
+    <div class="status-grid reveal">
+      <div class="status-item">
+        <div class="label">動作環境</div>
+        <div class="value"><span class="pill pill-live">検証済み</span>&nbsp; Windowsローカル版</div>
+      </div>
+      <div class="status-item">
+        <div class="label">対応通貨ペア</div>
+        <div class="value tabular"><span class="pill pill-live">7ペア</span>&nbsp; 対応データ拡大予定</div>
+      </div>
+      <div class="status-item">
+        <div class="label">配布・提供形態</div>
+        <div class="value"><span class="pill pill-todo">検討中</span>&nbsp; 価格・時期は未定</div>
+      </div>
+      <div class="status-item">
+        <div class="label">次の展望</div>
+        <div class="value"><span class="pill pill-todo">計画中</span>&nbsp; マルチアセット・ニュースフィルター</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  <span>StrategyX — 開発中のプロジェクトです。</span>
+  <span class="mono">© 2026</span>
+</footer>
+
+<script>
+  // Nav background on scroll
+  (function () {
+    var nav = document.getElementById('nav');
+    var onScroll = function () {
+      if (window.scrollY > 40) nav.classList.add('scrolled');
+      else nav.classList.remove('scrolled');
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  })();
+
+  // Scroll-reveal
+  (function () {
+    var items = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) {
+      items.forEach(function (el) { el.classList.add('in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+    items.forEach(function (el) { io.observe(el); });
+  })();
+
+  // Hero canvas: a drifting equity curve behind a faint auto-generated
+  // condition tree — the two things this product actually produces.
+  (function () {
+    var canvas = document.getElementById('heroCanvas');
+    var ctx = canvas.getContext('2d');
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w, h, t = 0;
+
+    function resize() {
+      w = canvas.clientWidth = canvas.parentElement.clientWidth;
+      h = canvas.clientHeight = canvas.parentElement.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    // A same-tick resize() can read clientWidth/clientHeight as 0 before the
+    // browser has finished its first layout pass - re-measure next frame so
+    // w/h self-correct even if the very first reading was wrong. draw()'s
+    // own rAF loop below picks up the corrected w/h automatically.
+    requestAnimationFrame(resize);
+
+    // Deterministic pseudo-random walk for the equity curve (seeded, so
+    // reloads look intentional rather than jittery/random each time).
+    function seededRand(seed) {
+      var s = seed;
+      return function () {
+        s = (s * 1103515245 + 12345) & 0x7fffffff;
+        return s / 0x7fffffff;
+      };
+    }
+    var rand = seededRand(42);
+    var N = 140;
+    var curve = [0];
+    for (var i = 1; i < N; i++) {
+      var drift = 0.62 + (i / N) * 0.9;
+      curve.push(curve[i - 1] + (rand() - 0.44) * 3.1 + drift * 0.05);
+    }
+    var maxV = Math.max.apply(null, curve);
+    var minV = Math.min.apply(null, curve);
+
+    // Faint condition-tree nodes, positioned once (fractions of viewport).
+    var tree = [
+      { x: 0.62, y: 0.30, r: 3.4 },
+      { x: 0.74, y: 0.22, r: 2.6 },
+      { x: 0.74, y: 0.40, r: 2.6 },
+      { x: 0.86, y: 0.16, r: 2.1 },
+      { x: 0.86, y: 0.28, r: 2.1 },
+      { x: 0.86, y: 0.36, r: 2.1 },
+      { x: 0.86, y: 0.48, r: 2.1 },
+    ];
+    var edges = [[0,1],[0,2],[1,3],[1,4],[2,5],[2,6]];
+
+    function draw() {
+      t += 1;
+      ctx.clearRect(0, 0, w, h);
+
+      // grid
+      ctx.strokeStyle = 'rgba(232,237,242,0.045)';
+      ctx.lineWidth = 1;
+      var gap = 64;
+      for (var gx = (t * 0.06) % gap; gx < w; gx += gap) {
+        ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke();
+      }
+      for (var gy = 0; gy < h; gy += gap) {
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+      }
+
+      // equity curve, mapped into the right two-thirds of the canvas
+      var padL = w * 0.32, padR = w * 0.06;
+      var plotW = w - padL - padR;
+      var topY = h * 0.14, botY = h * 0.62;
+      ctx.beginPath();
+      for (var i2 = 0; i2 < N; i2++) {
+        var px = padL + (i2 / (N - 1)) * plotW;
+        var norm = (curve[i2] - minV) / (maxV - minV);
+        var py = botY - norm * (botY - topY);
+        if (i2 === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      var grad = ctx.createLinearGradient(0, topY, 0, botY);
+      grad.addColorStop(0, 'rgba(79,209,197,0.9)');
+      grad.addColorStop(1, 'rgba(79,209,197,0.25)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // faded fill under the curve
+      ctx.lineTo(padL + plotW, botY + 40);
+      ctx.lineTo(padL, botY + 40);
+      ctx.closePath();
+      var fillGrad = ctx.createLinearGradient(0, topY, 0, botY + 40);
+      fillGrad.addColorStop(0, 'rgba(79,209,197,0.14)');
+      fillGrad.addColorStop(1, 'rgba(79,209,197,0)');
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
+
+      // condition-tree diagram, upper right
+      var tx = w * 1.0, ty = h * 1.0;
+      ctx.strokeStyle = 'rgba(255,180,84,0.28)';
+      ctx.lineWidth = 1;
+      edges.forEach(function (e) {
+        var a = tree[e[0]], b = tree[e[1]];
+        ctx.beginPath();
+        ctx.moveTo(a.x * tx, a.y * ty);
+        ctx.lineTo(b.x * tx, b.y * ty);
+        ctx.stroke();
+      });
+      tree.forEach(function (n, idx) {
+        var pulse = reduceMotion ? 0 : Math.sin(t * 0.02 + idx) * 0.5 + 0.5;
+        ctx.beginPath();
+        ctx.arc(n.x * tx, n.y * ty, n.r + pulse * 1.2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,180,84,' + (0.35 + pulse * 0.35) + ')';
+        ctx.fill();
+      });
+
+      if (!reduceMotion) requestAnimationFrame(draw);
+    }
+    draw();
+  })();
+</script>
+</body>
+</html>

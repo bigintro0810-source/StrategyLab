@@ -148,7 +148,7 @@ def build_pdf_report(
     pdf = ReportPDF()
     pdf.add_page()
 
-    pdf.h1("Strategy Lab レポート")
+    pdf.h1("StrategyX レポート")
     pdf.body(f"通貨ペア: {symbol}  /  モード: {mode}  /  時間足: {timeframe}")
 
     best_row = ranking_total.iloc[0] if not ranking_total.empty else None

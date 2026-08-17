@@ -5,7 +5,7 @@ Version: 1.0
 
 # 目的
 
-Strategy Lab のバックテストエンジンで、TradingView Pine Script の `strategy()` に近い注文処理を再現する。
+StrategyX のバックテストエンジンで、TradingView Pine Script の `strategy()` に近い注文処理を再現する。
 
 この文書は「戦略条件」ではなく、注文・約定・決済のルールだけを定義する。
 
@@ -32,7 +32,7 @@ Engine は以下だけを担当する。
 
 Pine Script の `strategy.entry()` は、通常設定では条件成立バーの次バー始値で約定する。
 
-Strategy Lab では以下のように扱う。
+StrategyX では以下のように扱う。
 
 ```text
 Bar N
@@ -60,7 +60,7 @@ entry_price = open[N+1]
 
 Pine Script の `strategy.exit()` は、ポジション保有中に stop / limit 注文を管理する。
 
-Strategy Lab では、ポジション約定後に以下を設定する。
+StrategyX では、ポジション約定後に以下を設定する。
 
 ```text
 stop_price

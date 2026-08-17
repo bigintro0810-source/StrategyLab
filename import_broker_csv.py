@@ -1,5 +1,5 @@
 """ブローカー提供のEET(東欧時間)タイムスタンプ付きCSVを、
-Strategy Labのエンジンが前提とするJST・列名形式に変換する。
+StrategyXのエンジンが前提とするJST・列名形式に変換する。
 
 想定入力形式:
     Time (EET),Open,High,Low,Close,Volume

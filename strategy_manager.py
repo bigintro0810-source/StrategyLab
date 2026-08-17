@@ -75,7 +75,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Strategy Lab 保存済み戦略の管理")
+    parser = argparse.ArgumentParser(description="StrategyX 保存済み戦略の管理")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help="保存済み戦略の一覧表示")

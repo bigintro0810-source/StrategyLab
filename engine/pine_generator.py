@@ -1,4 +1,4 @@
-"""Generates a TradingView Pine Script v5 strategy from a Strategy Lab
+"""Generates a TradingView Pine Script v5 strategy from a StrategyX
 params dict (V5.0 Pine Script自動生成 - the only V5.0+ item in scope; see
 CLAUDE_HANDOVER.md's Version5.0 section).
 
@@ -92,13 +92,24 @@ generated script's header comment too):
    approximated (weekend/daily exit is evaluated and closed first if due;
    otherwise SL/TP stand) rather than an exact single-engine tie-break.
 
-Coverage: as of this module's last update, every one of the 377
-indicators/patterns in engine/conditions.py's INDICATOR_REGISTRY has a
-Pine translation registered in SUPPORTED_CONDITION_INDICATORS (see the
-_b_* builder functions below, grouped by category: time_filter,
-indicator, price_action, chart_pattern, ict) - condition-tree-based
-strategies (the only kind the manual builder/auto-exploration produce)
-can always be converted, modulo the approximations documented above.
+Coverage: 331 of the 333 indicators/patterns in engine/conditions.py's
+INDICATOR_REGISTRY have a Pine translation registered in
+SUPPORTED_CONDITION_INDICATORS (see the _b_* builder functions below,
+grouped by category: time_filter, indicator, price_action, chart_pattern,
+ict) - condition-tree-based strategies (the only kind the manual builder/
+auto-exploration produce) can be converted, modulo the approximations
+documented above.
+
+未対応の2件は double_top_shape / double_bottom_shape(形状判定版のダブル
+トップ/ボトム)。これらはこのモジュールが書かれた時点で存在しなかったため
+最初からPine変換が無い(2026-08-07に他のチャートパターンを全削除した際の
+巻き添えではない - 削除前のコミットでも未対応だったことを確認済み)。
+条件ツリーにこの2つが含まれる場合、Pine変換は「未対応の指標がある」として
+弾かれる。
+
+2026-08-07、ユーザー判断でダブルトップ/ボトム以外のチャートパターンを全て
+削除したのに伴い、それらのPine変換(44エントリ+専用ビルダー24関数)もここ
+から撤去した - engine/chart_patterns.pyのモジュール冒頭コメント参照。
 """
 
 from __future__ import annotations
@@ -2648,98 +2659,6 @@ def _b_ha_strong(bullish: bool):
     return _builder
 
 
-# ---------------------------------------------------------------------------
-# 以下、chart_patternカテゴリ(46件)のPine変換用builder群 - engine/
-# chart_patterns.py・engine/harmonic_patterns.pyの各実装を移植したもの。
-# スイング高値/安値の追跡はPineの ta.pivothigh/ta.pivotlow(確定に
-# lookback本の遅延が入る点も含め、engine/smc_indicators.pyの中央窓
-# +確定遅延と同じ考え方)を使い、直近3つ分をvarで保持して再利用する
-# 共有ヘルパー(_b_swing_state_full)を各パターンが個別に呼び出す
-# (パターンごとに独立したsuffix付き変数になるため、重複計算はあるが
-# 相互干渉なし - engine/pine_generator.py全体で既に採用されている
-# 「シンプルさ優先、重複は許容」方針と同じ)。
-# ---------------------------------------------------------------------------
-
-
-def _b_swing_state_asym(suffix: str, params: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
-    """_b_swing_state_fullの非対称版(左右のバー数を別々に指定できる) -
-    ダブルトップ/ボトムの厳密仕様(ユーザー提供仕様書の"Pivot Left Bars"/
-    "Pivot Right Bars")向け。Pineのta.pivothigh/ta.pivotlowはもともと
-    leftbars/rightbarsを別々に取れるので、engine/chart_patterns.py::
-    _detect_pivot_highs/_detect_pivot_lowsのような自前のベクトル化実装を
-    Pine側で再現する必要はない(単に引数を分けて渡すだけでよい)。"""
-    left = int(params.get("pivot_left_bars", 25))
-    right = int(params.get("pivot_right_bars", 25))
-    atr_v = f"csAtr{suffix}"
-    hraw = f"csHRaw{suffix}"
-    lraw = f"csLRaw{suffix}"
-    h0, h1 = f"csH0{suffix}", f"csH1{suffix}"
-    hb0, hb1 = f"csHB0{suffix}", f"csHB1{suffix}"
-    l0, l1 = f"csL0{suffix}", f"csL1{suffix}"
-    lb0, lb1 = f"csLB0{suffix}", f"csLB1{suffix}"
-    lines = [
-        f"{atr_v} = ta.rma(ta.tr(true), 14)",
-        f"{hraw} = ta.pivothigh(high, {left}, {right})",
-        f"{lraw} = ta.pivotlow(low, {left}, {right})",
-        f"var float {h0} = na", f"var float {h1} = na",
-        f"var int {hb0} = na", f"var int {hb1} = na",
-        f"var float {l0} = na", f"var float {l1} = na",
-        f"var int {lb0} = na", f"var int {lb1} = na",
-        f"if not na({hraw})",
-        f"    {h1} := {h0}",
-        f"    {h0} := {hraw}",
-        f"    {hb1} := {hb0}",
-        f"    {hb0} := bar_index - {right}",
-        f"if not na({lraw})",
-        f"    {l1} := {l0}",
-        f"    {l0} := {lraw}",
-        f"    {lb1} := {lb0}",
-        f"    {lb0} := bar_index - {right}",
-    ]
-    names = {
-        "atr": atr_v, "hraw": hraw, "lraw": lraw,
-        "h0": h0, "h1": h1, "hb0": hb0, "hb1": hb1,
-        "l0": l0, "l1": l1, "lb0": lb0, "lb1": lb1,
-    }
-    return lines, names
-
-
-def _pine_threshold_expr(reference_expr: str, atr_expr: str, kind: str, amount: float) -> str:
-    """engine/chart_patterns.py::_threshold_seriesのPine版 - ATR倍率/Pips/
-    価格に対する%のどれで許容誤差・最低深さを指定しても、価格の生単位の
-    式に揃える。"""
-    if kind == "pips":
-        return f"({_pine_num(amount)} * pipSize)"
-    if kind == "percent":
-        return f"(math.abs({reference_expr}) * {_pine_num(amount / 100.0)})"
-    return f"({atr_expr} * {_pine_num(amount)})"
-
-
-def _b_first_occurrence_after_within_lines(
-    suffix: str, formed_expr: str, trigger_expr: str, bars_since_formed_expr: str, max_bars: int
-) -> tuple[list[str], str]:
-    """_b_first_occurrence_after_linesと同じだが、formedからmax_bars本以内に
-    triggerが来なければ待機状態を打ち切る(engine/chart_patterns.py::
-    _first_occurrence_after_within、ユーザー提供仕様書の"Maximum Bars After
-    Second Top")。max_bars<=0なら無制限(_b_first_occurrence_after_linesと
-    同じ)。"""
-    if max_bars <= 0:
-        return _b_first_occurrence_after_lines(suffix, formed_expr, trigger_expr)
-    flag = f"foaWaiting{suffix}"
-    var = f"foa{suffix}"
-    lines = [
-        f"var bool {flag} = false",
-        f"if {formed_expr}",
-        f"    {flag} := true",
-        f"if {flag} and ({bars_since_formed_expr} > {max_bars})",
-        f"    {flag} := false",
-        f"{var} = {flag} and (not ({formed_expr})) and ({trigger_expr})",
-        f"if {var}",
-        f"    {flag} := false",
-    ]
-    return lines, var
-
-
 def _b_swing_state_full(suffix: str, params: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     lookback = int(params.get("swing_lookback", 5))
     atr_v = f"csAtr{suffix}"
@@ -2792,562 +2711,6 @@ def _b_first_occurrence_after_lines(suffix: str, formed_expr: str, trigger_expr:
         f"    {flag} := false",
     ]
     return lines, var
-
-
-
-
-def _b_triple_top_bottom(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        tolerance_atr_mult = float(params.get("tolerance_atr_mult", 0.5))
-        lines, sw = _b_swing_state_full(suffix, params)
-        if bullish:
-            formed = (
-                f"(not na({sw['lraw']})) and (math.abs({sw['l0']} - {sw['l1']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)}) "
-                f"and (math.abs({sw['l1']} - {sw['l2']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)})"
-            )
-            trigger = f"close > {sw['h0']}"
-        else:
-            formed = (
-                f"(not na({sw['hraw']})) and (math.abs({sw['h0']} - {sw['h1']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)}) "
-                f"and (math.abs({sw['h1']} - {sw['h2']}) <= {sw['atr']} * {_pine_num(tolerance_atr_mult)})"
-            )
-            trigger = f"close < {sw['l0']}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_head_shoulders(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        shoulder_tol = float(params.get("shoulder_tolerance_atr_mult", 0.75))
-        head_margin_mult = float(params.get("head_margin_atr_mult", 0.5))
-        lines, sw = _b_swing_state_full(suffix, params)
-        if bullish:
-            rs, head, ls, raw = sw["l0"], sw["l1"], sw["l2"], sw["lraw"]
-            margin = f"({sw['atr']} * {_pine_num(head_margin_mult)})"
-            head_extreme = f"({head} < {rs} - {margin}) and ({head} < {ls} - {margin})"
-            trigger = f"close > {sw['h0']}"
-        else:
-            rs, head, ls, raw = sw["h0"], sw["h1"], sw["h2"], sw["hraw"]
-            margin = f"({sw['atr']} * {_pine_num(head_margin_mult)})"
-            head_extreme = f"({head} > {rs} + {margin}) and ({head} > {ls} + {margin})"
-            trigger = f"close < {sw['l0']}"
-        shoulders_similar = f"(math.abs({rs} - {ls}) <= {sw['atr']} * {_pine_num(shoulder_tol)})"
-        formed = f"(not na({raw})) and ({head_extreme}) and ({shoulders_similar})"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_ascending_triangle(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-    tol = float(params.get("flat_tolerance_atr_mult", 0.5))
-    lines, sw = _b_swing_state_full(suffix, params)
-    state = f"triAscState{suffix}"
-    lines = lines + [f"{state} = (math.abs({sw['h0']} - {sw['h1']}) <= {sw['atr']} * {_pine_num(tol)}) and ({sw['l0']} > {sw['l1']})"]
-    formed = f"({state}) and (not {state}[1])"
-    trigger = f"close > {sw['h0']}"
-    foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-    return lines + foa_lines, var
-
-
-def _b_descending_triangle(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-    tol = float(params.get("flat_tolerance_atr_mult", 0.5))
-    lines, sw = _b_swing_state_full(suffix, params)
-    state = f"triDescState{suffix}"
-    lines = lines + [f"{state} = (math.abs({sw['l0']} - {sw['l1']}) <= {sw['atr']} * {_pine_num(tol)}) and ({sw['h0']} < {sw['h1']})"]
-    formed = f"({state}) and (not {state}[1])"
-    trigger = f"close < {sw['l0']}"
-    foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-    return lines + foa_lines, var
-
-
-def _b_symmetrical_triangle(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        lines, sw = _b_swing_state_full(suffix, params)
-        state = f"symTriState{suffix}"
-        lines = lines + [f"{state} = ({sw['h0']} < {sw['h1']}) and ({sw['l0']} > {sw['l1']})"]
-        formed = f"({state}) and (not {state}[1])"
-        trigger = f"close > {sw['h0']}" if bullish else f"close < {sw['l0']}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_wedge(rising: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        lines, sw = _b_swing_state_full(suffix, params)
-        state = f"wedgeState{suffix}"
-        if rising:
-            dir_cond = f"({sw['h0']} > {sw['h1']}) and ({sw['l0']} > {sw['l1']})"
-            trigger = f"close < {sw['l0']}"
-        else:
-            dir_cond = f"({sw['h0']} < {sw['h1']}) and ({sw['l0']} < {sw['l1']})"
-            trigger = f"close > {sw['h0']}"
-        narrowing = f"math.abs({sw['h0']} - {sw['l0']}) < math.abs({sw['h1']} - {sw['l1']})"
-        lines = lines + [f"{state} = ({dir_cond}) and ({narrowing})"]
-        formed = f"({state}) and (not {state}[1])"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_broadening(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        lines, sw = _b_swing_state_full(suffix, params)
-        state = f"broadState{suffix}"
-        lines = lines + [f"{state} = ({sw['h0']} > {sw['h1']}) and ({sw['l0']} < {sw['l1']})"]
-        formed = f"({state}) and (not {state}[1])"
-        trigger = f"close > {sw['h0']}" if bullish else f"close < {sw['l0']}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_diamond(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        lines, sw = _b_swing_state_full(suffix, params)
-        state = f"diaState{suffix}"
-        earlier = f"({sw['h1']} > {sw['h2']}) and ({sw['l1']} < {sw['l2']})"
-        later = f"({sw['h0']} < {sw['h1']}) and ({sw['l0']} > {sw['l1']})"
-        lines = lines + [f"{state} = ({earlier}) and ({later})"]
-        formed = f"({state}) and (not {state}[1])"
-        trigger = f"close > {sw['h0']}" if bullish else f"close < {sw['l0']}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_flag_pennant(bullish: bool, require_narrowing: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        impulse_lookback = int(params.get("impulse_lookback", 10))
-        impulse_atr_mult = float(params.get("impulse_atr_mult", 3.0))
-        default_window = 12 if require_narrowing else 10
-        default_atr_mult = 2.5 if require_narrowing else 2.0
-        consolidation_window = int(params.get("consolidation_window", default_window))
-        consolidation_atr_mult = float(params.get("consolidation_atr_mult", default_atr_mult))
-        atr_v = f"fpAtr{suffix}"
-        impulse_flag = f"fpImpulseFlag{suffix}"
-        impulse_recently = f"fpImpulseRecently{suffix}"
-        cons_high = f"fpConsHigh{suffix}"
-        cons_low = f"fpConsLow{suffix}"
-        cons_range = f"fpConsRange{suffix}"
-        state = f"fpState{suffix}"
-        if bullish:
-            impulse_cond = f"(close - close[{impulse_lookback}]) / {atr_v} >= {_pine_num(impulse_atr_mult)}"
-        else:
-            impulse_cond = f"(close - close[{impulse_lookback}]) / {atr_v} <= -{_pine_num(impulse_atr_mult)}"
-        lines = [
-            f"{atr_v} = ta.rma(ta.tr(true), 14)",
-            f"{impulse_flag} = ({impulse_cond}) ? 1.0 : 0.0",
-            f"{impulse_recently} = ta.highest({impulse_flag}[1], {consolidation_window}) > 0",
-            f"{cons_high} = ta.highest(high, {consolidation_window})",
-            f"{cons_low} = ta.lowest(low, {consolidation_window})",
-            f"{cons_range} = {cons_high} - {cons_low}",
-        ]
-        is_narrow_expr = f"{cons_range} <= {atr_v} * {_pine_num(consolidation_atr_mult)}"
-        if require_narrowing:
-            half = max(consolidation_window // 2, 1)
-            first_half = f"fpFirstHalf{suffix}"
-            second_half = f"fpSecondHalf{suffix}"
-            lines += [
-                f"{first_half} = (ta.highest(high, {half}) - ta.lowest(low, {half}))[{half}]",
-                f"{second_half} = ta.highest(high, {half}) - ta.lowest(low, {half})",
-            ]
-            is_narrow_expr = f"({is_narrow_expr}) and ({second_half} < {first_half})"
-        lines.append(f"{state} = {impulse_recently} and ({is_narrow_expr})")
-        formed = f"({state}) and (not {state}[1])"
-        trigger = f"close > {cons_high}[1]" if bullish else f"close < {cons_low}[1]"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_in_range_box(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-    window = int(params.get("window", 20))
-    box_atr_mult = float(params.get("box_atr_mult", 2.0))
-    atr_v = f"irbAtr{suffix}"
-    rng = f"irbRange{suffix}"
-    var = f"irb{suffix}"
-    return [
-        f"{atr_v} = ta.rma(ta.tr(true), 14)",
-        f"{rng} = ta.highest(high, {window}) - ta.lowest(low, {window})",
-        f"{var} = {rng} <= {atr_v} * {_pine_num(box_atr_mult)}",
-    ], var
-
-
-def _b_range_box_breakout(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        window = int(params.get("window", 20))
-        box_atr_mult = float(params.get("box_atr_mult", 2.0))
-        atr_v = f"rbbAtr{suffix}"
-        rng = f"rbbRange{suffix}"
-        boxed = f"rbbBoxed{suffix}"
-        extreme = f"rbbExtreme{suffix}"
-        lines = [
-            f"{atr_v} = ta.rma(ta.tr(true), 14)",
-            f"{rng} = ta.highest(high, {window}) - ta.lowest(low, {window})",
-            f"{boxed} = {rng} <= {atr_v} * {_pine_num(box_atr_mult)}",
-            f"var float {extreme} = na",
-        ]
-        if bullish:
-            lines += [f"if {boxed}", f"    {extreme} := ta.highest(high, {window})"]
-        else:
-            lines += [f"if {boxed}", f"    {extreme} := ta.lowest(low, {window})"]
-        box_ended = f"(not {boxed}) and {boxed}[1]"
-        trigger = f"close > {extreme}" if bullish else f"close < {extreme}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, box_ended, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_trendline_break(uptrend: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        lines, sw = _b_swing_state_full(suffix, params)
-        if uptrend:
-            v0, v1, b0, b1 = sw["l0"], sw["l1"], sw["lb0"], sw["lb1"]
-            valid = f"({v0} > {v1}) and ({b0} > {b1})"
-        else:
-            v0, v1, b0, b1 = sw["h0"], sw["h1"], sw["hb0"], sw["hb1"]
-            valid = f"({v0} < {v1}) and ({b0} > {b1})"
-        valid_var = f"tlValid{suffix}"
-        slope_var = f"tlSlope{suffix}"
-        line_var = f"tlLine{suffix}"
-        lines = lines + [
-            f"{valid_var} = {valid}",
-            f"{slope_var} = ({v0} - {v1}) / ({b0} - {b1})",
-            f"{line_var} = {v0} + {slope_var} * (bar_index - {b0})",
-        ]
-        formed = f"({valid_var}) and (not {valid_var}[1])"
-        trigger = f"close < {line_var}" if uptrend else f"close > {line_var}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_channel_break(ascending: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        slope_tol = float(params.get("slope_tolerance_atr_mult", 0.02))
-        lines, sw = _b_swing_state_full(suffix, params)
-        support_slope = f"chSupportSlope{suffix}"
-        resistance_slope = f"chResistSlope{suffix}"
-        state = f"chState{suffix}"
-        lines = lines + [
-            f"{support_slope} = ({sw['l0']} - {sw['l1']}) / ({sw['lb0']} - {sw['lb1']})",
-            f"{resistance_slope} = ({sw['h0']} - {sw['h1']}) / ({sw['hb0']} - {sw['hb1']})",
-        ]
-        if ascending:
-            both = f"({sw['l0']} > {sw['l1']}) and ({sw['h0']} > {sw['h1']})"
-        else:
-            both = f"({sw['l0']} < {sw['l1']}) and ({sw['h0']} < {sw['h1']})"
-        parallel = f"math.abs({support_slope} - {resistance_slope}) <= {sw['atr']} * {_pine_num(slope_tol)}"
-        lines.append(f"{state} = ({both}) and ({parallel})")
-        formed = f"({state}) and (not {state}[1])"
-        if ascending:
-            support_value = f"chSupportVal{suffix}"
-            lines.append(f"{support_value} = {sw['l0']} + {support_slope} * (bar_index - {sw['lb0']})")
-            trigger = f"close < {support_value}"
-        else:
-            resistance_value = f"chResistVal{suffix}"
-            lines.append(f"{resistance_value} = {sw['h0']} + {resistance_slope} * (bar_index - {sw['hb0']})")
-            trigger = f"close > {resistance_value}"
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_false_breakout(bullish_reversal: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        window = int(params.get("window", 20))
-        box_atr_mult = float(params.get("box_atr_mult", 2.0))
-        max_bars_outside = int(params.get("max_bars_outside", 3))
-        atr_v = f"fbAtr{suffix}"
-        rng = f"fbRange{suffix}"
-        boxed = f"fbBoxed{suffix}"
-        box_high = f"fbBoxHigh{suffix}"
-        box_low = f"fbBoxLow{suffix}"
-        box_ended = f"fbBoxEnded{suffix}"
-        broke_out = f"fbBrokeOut{suffix}"
-        bars_since = f"fbBarsSince{suffix}"
-        already_fired = f"fbAlreadyFired{suffix}"
-        back_inside = f"fbBackInside{suffix}"
-        var = f"fb{suffix}"
-        lines = [
-            f"{atr_v} = ta.rma(ta.tr(true), 14)",
-            f"{rng} = ta.highest(high, {window}) - ta.lowest(low, {window})",
-            f"{boxed} = {rng} <= {atr_v} * {_pine_num(box_atr_mult)}",
-            f"var float {box_high} = na",
-            f"var float {box_low} = na",
-            f"if {boxed}",
-            f"    {box_high} := ta.highest(high, {window})",
-            f"    {box_low} := ta.lowest(low, {window})",
-            f"{box_ended} = (not {boxed}) and {boxed}[1]",
-            f"{broke_out} = " + (f"close < {box_low}" if bullish_reversal else f"close > {box_high}"),
-            f"var int {bars_since} = 999999",
-            f"var bool {already_fired} = false",
-            f"if {box_ended}",
-            f"    {already_fired} := false",
-            f"    {bars_since} := 999999",
-            f"if {broke_out} and not {box_ended}",
-            f"    {bars_since} := 0",
-            f"else",
-            f"    {bars_since} := {bars_since} + 1",
-            f"{back_inside} = (close >= {box_low}) and (close <= {box_high})",
-            f"{var} = {back_inside} and ({bars_since} <= {max_bars_outside}) and (not {already_fired})",
-            f"if {var}",
-            f"    {already_fired} := true",
-        ]
-        return lines, var
-
-    return _builder
-
-
-def _b_saucer(is_top: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        window = int(params.get("window", 30))
-        extreme_fn = "highestbars" if is_top else "lowestbars"
-        extreme_val_fn = "ta.highest" if is_top else "ta.lowest"
-        pos_var = f"sauPos{suffix}"
-        frac_var = f"sauFrac{suffix}"
-        extreme_var = f"sauExtreme{suffix}"
-        endpoint_avg = f"sauEndAvg{suffix}"
-        var = f"sau{suffix}"
-        lines = [
-            f"{pos_var} = ta.{extreme_fn}(close, {window})",
-            f"{frac_var} = ({pos_var} + {window - 1}) / {window - 1}.0",
-            f"{extreme_var} = {extreme_val_fn}(close, {window})",
-            f"{endpoint_avg} = (close + close[{window - 1}]) / 2",
-        ]
-        centered = f"({frac_var} >= 0.3) and ({frac_var} <= 0.7)"
-        concave = f"{extreme_var} > {endpoint_avg}" if is_top else f"{extreme_var} < {endpoint_avg}"
-        lines.append(f"{var} = ({concave}) and ({centered})")
-        return lines, var
-
-    return _builder
-
-
-def _b_rectangle(ascending: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        window = int(params.get("window", 20))
-        box_atr_mult = float(params.get("box_atr_mult", 2.0))
-        trend_lookback = int(params.get("trend_lookback", 30))
-        atr_v = f"rectAtr{suffix}"
-        rng = f"rectRange{suffix}"
-        boxed = f"rectBoxed{suffix}"
-        extreme = f"rectExtreme{suffix}"
-        box_ended = f"rectBoxEnded{suffix}"
-        prior_trend = f"rectPriorTrend{suffix}"
-        formed_var = f"rectFormed{suffix}"
-        lines = [
-            f"{atr_v} = ta.rma(ta.tr(true), 14)",
-            f"{rng} = ta.highest(high, {window}) - ta.lowest(low, {window})",
-            f"{boxed} = {rng} <= {atr_v} * {_pine_num(box_atr_mult)}",
-            f"var float {extreme} = na",
-        ]
-        if ascending:
-            lines += [f"if {boxed}", f"    {extreme} := ta.highest(high, {window})"]
-            lines.append(f"{prior_trend} = close[{window}] > close[{window + trend_lookback}]")
-            trigger = f"close > {extreme}"
-        else:
-            lines += [f"if {boxed}", f"    {extreme} := ta.lowest(low, {window})"]
-            lines.append(f"{prior_trend} = close[{window}] < close[{window + trend_lookback}]")
-            trigger = f"close < {extreme}"
-        lines.append(f"{box_ended} = (not {boxed}) and {boxed}[1]")
-        lines.append(f"{formed_var} = {box_ended} and {prior_trend}")
-        foa_lines, var = _b_first_occurrence_after_lines(suffix, formed_var, trigger)
-        return lines + foa_lines, var
-
-    return _builder
-
-
-def _b_cup_with_handle(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-    cup_window = int(params.get("cup_window", 40))
-    handle_window = int(params.get("handle_window", 10))
-    handle_atr_mult = float(params.get("handle_atr_mult", 1.5))
-    atr_v = f"cwhAtr{suffix}"
-    pos_var = f"cwhPos{suffix}"
-    frac_var = f"cwhFrac{suffix}"
-    extreme_var = f"cwhExtreme{suffix}"
-    endpoint_avg = f"cwhEndAvg{suffix}"
-    cup_state = f"cwhCupState{suffix}"
-    cup_recent = f"cwhCupRecent{suffix}"
-    handle_range = f"cwhHandleRange{suffix}"
-    is_handle = f"cwhIsHandle{suffix}"
-    state = f"cwhState{suffix}"
-    handle_high = f"cwhHandleHigh{suffix}"
-    lines = [
-        f"{atr_v} = ta.rma(ta.tr(true), 14)",
-        f"{pos_var} = ta.lowestbars(close, {cup_window})",
-        f"{frac_var} = ({pos_var} + {cup_window - 1}) / {cup_window - 1}.0",
-        f"{extreme_var} = ta.lowest(close, {cup_window})",
-        f"{endpoint_avg} = (close + close[{cup_window - 1}]) / 2",
-        f"{cup_state} = ({extreme_var} < {endpoint_avg}) and ({frac_var} >= 0.3) and ({frac_var} <= 0.7)",
-        f"{cup_recent} = ta.highest(({cup_state} ? 1.0 : 0.0)[{handle_window}], {cup_window}) > 0",
-        f"{handle_range} = ta.highest(high, {handle_window}) - ta.lowest(low, {handle_window})",
-        f"{is_handle} = {handle_range} <= {atr_v} * {_pine_num(handle_atr_mult)}",
-        f"{state} = {cup_recent} and {is_handle}",
-        f"var float {handle_high} = na",
-        f"if {is_handle}",
-        f"    {handle_high} := ta.highest(high, {handle_window})",
-    ]
-    formed = f"({state}) and (not {state}[1])"
-    trigger = f"close > {handle_high}"
-    foa_lines, var = _b_first_occurrence_after_lines(suffix, formed, trigger)
-    return lines + foa_lines, var
-
-
-def _b_harmonic_state(suffix: str, params: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
-    """engine/harmonic_patterns.py::_merged_swing_events()と同じ「高値/安値
-    どちらの確定スイングも時系列順にマージした直近6点」をPineのvar状態機械
-    で再現する(p0=最新...p5=6つ前)。"""
-    lookback = int(params.get("lookback", 5))
-    hraw = f"hmSHRaw{suffix}"
-    lraw = f"hmSLRaw{suffix}"
-    levels = [f"hmP{i}{suffix}" for i in range(6)]
-    ishigh = [f"hmP{i}H{suffix}" for i in range(6)]
-    lines = [
-        f"{hraw} = ta.pivothigh(high, {lookback}, {lookback})",
-        f"{lraw} = ta.pivotlow(low, {lookback}, {lookback})",
-    ]
-    for lv in levels:
-        lines.append(f"var float {lv} = na")
-    for ih in ishigh:
-        lines.append(f"var bool {ih} = na")
-
-    def push_block(raw_var: str, is_high_literal: str) -> list[str]:
-        block = []
-        for i in range(5, 0, -1):
-            block.append(f"    {levels[i]} := {levels[i - 1]}")
-            block.append(f"    {ishigh[i]} := {ishigh[i - 1]}")
-        block.append(f"    {levels[0]} := {raw_var}")
-        block.append(f"    {ishigh[0]} := {is_high_literal}")
-        return block
-
-    lines.append(f"if not na({hraw})")
-    lines += push_block(hraw, "true")
-    lines.append(f"if not na({lraw})")
-    lines += push_block(lraw, "false")
-    just_confirmed = f"(not na({hraw})) or (not na({lraw}))"
-    return lines, {"levels": levels, "ishigh": ishigh, "just_confirmed": just_confirmed}
-
-
-def _b_harmonic_pattern(
-    is_bullish: bool,
-    ab_xa_range: tuple[float, float],
-    d_xa_range: tuple[float, float],
-    bc_ab_range: tuple[float, float] = (0.30, 0.95),
-    cd_bc_range: tuple[float, float] = (1.00, 8.00),
-):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        tolerance = float(params.get("tolerance", 0.1))
-        lines, names = _b_harmonic_state(suffix, params)
-        levels, ishigh, just_confirmed = names["levels"], names["ishigh"], names["just_confirmed"]
-        x, a, b, c, d = levels[4], levels[3], levels[2], levels[1], levels[0]
-        xh, ah, bh, ch, dh = ishigh[4], ishigh[3], ishigh[2], ishigh[1], ishigh[0]
-        var = f"harm{suffix}"
-        if is_bullish:
-            alternating = f"(not {xh}) and ({ah}) and (not {bh}) and ({ch}) and (not {dh})"
-            xa, ab, bc, cd = f"({a} - {x})", f"({a} - {b})", f"({c} - {b})", f"({c} - {d})"
-            d_retrace = f"(({a} - {d}) / {xa})"
-        else:
-            alternating = f"({xh}) and (not {ah}) and ({bh}) and (not {ch}) and ({dh})"
-            xa, ab, bc, cd = f"({x} - {a})", f"({b} - {a})", f"({b} - {c})", f"({d} - {c})"
-            d_retrace = f"(({d} - {a}) / {xa})"
-        ab_xa = f"({ab} / {xa})"
-        bc_ab = f"({bc} / {ab})"
-        cd_bc = f"({cd} / {bc})"
-        valid_legs = f"({xa} > 0) and ({ab} > 0) and ({bc} > 0) and ({cd} > 0)"
-
-        def within(expr: str, lo: float, hi: float) -> str:
-            return f"(({expr} >= {_pine_num(lo - tolerance)}) and ({expr} <= {_pine_num(hi + tolerance)}))"
-
-        ratios_match = (
-            f"{within(ab_xa, *ab_xa_range)} and {within(bc_ab, *bc_ab_range)} and "
-            f"{within(cd_bc, *cd_bc_range)} and {within(d_retrace, *d_xa_range)}"
-        )
-        cond = f"({just_confirmed}) and ({alternating}) and ({valid_legs}) and ({ratios_match})"
-        lines.append(f"{var} = {cond}")
-        return lines, var
-
-    return _builder
-
-
-def _b_ab_cd(bullish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        tolerance = float(params.get("tolerance", 0.15))
-        lines, names = _b_harmonic_state(suffix, params)
-        levels, ishigh, just_confirmed = names["levels"], names["ishigh"], names["just_confirmed"]
-        a, b, c, d = levels[3], levels[2], levels[1], levels[0]
-        ah, bh, ch, dh = ishigh[3], ishigh[2], ishigh[1], ishigh[0]
-        var = f"abcd{suffix}"
-        if bullish:
-            alternating = f"({ah}) and (not {bh}) and ({ch}) and (not {dh})"
-            ab, bc, cd = f"({a} - {b})", f"({c} - {b})", f"({c} - {d})"
-        else:
-            alternating = f"(not {ah}) and ({bh}) and (not {ch}) and ({dh})"
-            ab, bc, cd = f"({b} - {a})", f"({b} - {c})", f"({d} - {c})"
-        valid = f"({ab} > 0) and ({bc} > 0) and ({cd} > 0)"
-        bc_ab = f"({bc} / {ab})"
-        cd_ab = f"({cd} / {ab})"
-
-        def within(expr: str, lo: float, hi: float) -> str:
-            return f"(({expr} >= {_pine_num(lo - tolerance)}) and ({expr} <= {_pine_num(hi + tolerance)}))"
-
-        ratios_match = f"{within(bc_ab, 0.382, 0.886)} and {within(cd_ab, 0.85, 1.15)}"
-        cond = f"({just_confirmed}) and ({alternating}) and ({valid}) and ({ratios_match})"
-        lines.append(f"{var} = {cond}")
-        return lines, var
-
-    return _builder
-
-
-def _b_three_drives(is_bearish: bool):
-    def _builder(suffix: str, params: dict[str, Any]) -> tuple[list[str], str]:
-        tolerance = float(params.get("tolerance", 0.15))
-        lines, names = _b_harmonic_state(suffix, params)
-        levels, ishigh, just_confirmed = names["levels"], names["ishigh"], names["just_confirmed"]
-        p0, p1, p2, p3, p4, p5 = levels[5], levels[4], levels[3], levels[2], levels[1], levels[0]
-        p0h, p1h, p2h, p3h, p4h, p5h = ishigh[5], ishigh[4], ishigh[3], ishigh[2], ishigh[1], ishigh[0]
-        var = f"td{suffix}"
-        if is_bearish:
-            alternating = f"(not {p0h}) and ({p1h}) and (not {p2h}) and ({p3h}) and (not {p4h}) and ({p5h})"
-            drive1, correction1 = f"({p1} - {p0})", f"({p1} - {p2})"
-            drive2, correction2 = f"({p3} - {p2})", f"({p3} - {p4})"
-            drive3 = f"({p5} - {p4})"
-            ascending = f"({p2} > {p0}) and ({p3} > {p1}) and ({p4} > {p2}) and ({p5} > {p3})"
-        else:
-            alternating = f"({p0h}) and (not {p1h}) and ({p2h}) and (not {p3h}) and ({p4h}) and (not {p5h})"
-            drive1, correction1 = f"({p0} - {p1})", f"({p2} - {p1})"
-            drive2, correction2 = f"({p2} - {p3})", f"({p4} - {p3})"
-            drive3 = f"({p4} - {p5})"
-            ascending = f"({p2} < {p0}) and ({p3} < {p1}) and ({p4} < {p2}) and ({p5} < {p3})"
-        valid = f"({drive1} > 0) and ({correction1} > 0) and ({drive2} > 0) and ({correction2} > 0) and ({drive3} > 0)"
-        correction1_ratio = f"({correction1} / {drive1})"
-        drive2_ratio = f"({drive2} / {correction1})"
-        correction2_ratio = f"({correction2} / {drive2})"
-        drive3_ratio = f"({drive3} / {correction2})"
-
-        def within(expr: str, lo: float, hi: float) -> str:
-            return f"(({expr} >= {_pine_num(lo - tolerance)}) and ({expr} <= {_pine_num(hi + tolerance)}))"
-
-        ratios_match = (
-            f"{within(correction1_ratio, 0.618, 0.786)} and {within(drive2_ratio, 1.13, 1.618)} and "
-            f"{within(correction2_ratio, 0.618, 0.786)} and {within(drive3_ratio, 1.13, 1.618)}"
-        )
-        cond = f"({just_confirmed}) and ({alternating}) and ({ascending}) and ({valid}) and ({ratios_match})"
-        lines.append(f"{var} = {cond}")
-        return lines, var
-
-    return _builder
 
 
 # ---------------------------------------------------------------------------
@@ -3833,51 +3196,6 @@ SUPPORTED_CONDITION_INDICATORS: dict[str, tuple[bool, Any]] = {
     "ha_bearish": (True, _b_ha_bearish),
     "ha_strong_bullish": (True, _b_ha_strong(True)),
     "ha_strong_bearish": (True, _b_ha_strong(False)),
-    # --- chart_patternカテゴリ(44件) ---
-    "triple_top_breakdown": (True, _b_triple_top_bottom(False)),
-    "triple_bottom_breakout": (True, _b_triple_top_bottom(True)),
-    "head_and_shoulders_breakdown": (True, _b_head_shoulders(False)),
-    "inverse_head_and_shoulders_breakout": (True, _b_head_shoulders(True)),
-    "ascending_triangle_breakout": (True, _b_ascending_triangle),
-    "descending_triangle_breakdown": (True, _b_descending_triangle),
-    "symmetrical_triangle_breakout_bullish": (True, _b_symmetrical_triangle(True)),
-    "symmetrical_triangle_breakout_bearish": (True, _b_symmetrical_triangle(False)),
-    "rising_wedge_breakdown": (True, _b_wedge(True)),
-    "falling_wedge_breakout": (True, _b_wedge(False)),
-    "bull_flag_breakout": (True, _b_flag_pennant(True, False)),
-    "bear_flag_breakdown": (True, _b_flag_pennant(False, False)),
-    "bullish_pennant_breakout": (True, _b_flag_pennant(True, True)),
-    "bearish_pennant_breakdown": (True, _b_flag_pennant(False, True)),
-    "in_range_box": (True, _b_in_range_box),
-    "range_box_breakout_bullish": (True, _b_range_box_breakout(True)),
-    "range_box_breakdown_bearish": (True, _b_range_box_breakout(False)),
-    "uptrend_line_break": (True, _b_trendline_break(True)),
-    "downtrend_line_break": (True, _b_trendline_break(False)),
-    "ascending_channel_break": (True, _b_channel_break(True)),
-    "descending_channel_break": (True, _b_channel_break(False)),
-    "false_breakout_bullish_reversal": (True, _b_false_breakout(True)),
-    "false_breakout_bearish_reversal": (True, _b_false_breakout(False)),
-    "saucer_top": (True, _b_saucer(True)),
-    "saucer_bottom": (True, _b_saucer(False)),
-    "ascending_rectangle_breakout": (True, _b_rectangle(True)),
-    "descending_rectangle_breakdown": (True, _b_rectangle(False)),
-    "broadening_formation_breakout_bullish": (True, _b_broadening(True)),
-    "broadening_formation_breakout_bearish": (True, _b_broadening(False)),
-    "diamond_formation_breakout_bullish": (True, _b_diamond(True)),
-    "diamond_formation_breakout_bearish": (True, _b_diamond(False)),
-    "cup_with_handle_breakout": (True, _b_cup_with_handle),
-    "gartley_bullish": (True, _b_harmonic_pattern(True, (0.55, 0.68), (0.70, 0.85))),
-    "gartley_bearish": (True, _b_harmonic_pattern(False, (0.55, 0.68), (0.70, 0.85))),
-    "bat_bullish": (True, _b_harmonic_pattern(True, (0.35, 0.55), (0.82, 0.93))),
-    "bat_bearish": (True, _b_harmonic_pattern(False, (0.35, 0.55), (0.82, 0.93))),
-    "butterfly_bullish": (True, _b_harmonic_pattern(True, (0.72, 0.85), (1.13, 1.71))),
-    "butterfly_bearish": (True, _b_harmonic_pattern(False, (0.72, 0.85), (1.13, 1.71))),
-    "crab_bullish": (True, _b_harmonic_pattern(True, (0.35, 0.68), (1.50, 1.75))),
-    "crab_bearish": (True, _b_harmonic_pattern(False, (0.35, 0.68), (1.50, 1.75))),
-    "ab_cd_bullish": (True, _b_ab_cd(True)),
-    "ab_cd_bearish": (True, _b_ab_cd(False)),
-    "three_drives_bullish": (True, _b_three_drives(False)),
-    "three_drives_bearish": (True, _b_three_drives(True)),
     # --- ictカテゴリ(28件) ---
     "fvg_bullish": (True, _b_fvg(True)),
     "fvg_bearish": (True, _b_fvg(False)),
@@ -4175,7 +3493,7 @@ fibS3 = fibPivot - 1.0 * dayRange'''
         short_expr = translator.translate(short_tree) if short_tree is not None else "false"
         decl_block = "\n".join(translator.decl_lines)
 
-        title = strategy_title or f"StrategyLab {symbol} {timeframe} (condition_tree, long+short)"
+        title = strategy_title or f"StrategyX {symbol} {timeframe} (condition_tree, long+short)"
 
         if sl_basis == "signal_candle":
             # シグナルが出たこの足自身の高値/安値が基準 - エントリー価格に
@@ -4209,7 +3527,7 @@ fibS3 = fibPivot - 1.0 * dayRange'''
             tp_refine_expr_short = "strategy.position_avg_price - tpFixedPips * pipSize"
 
         return f'''//@version=5
-// Auto-generated by Strategy Lab (engine/pine_generator.py::generate_pine_script_from_condition_tree)
+// Auto-generated by StrategyX (engine/pine_generator.py::generate_pine_script_from_condition_tree)
 // condition_tree(AND/OR/NOT)から生成、Long+Short同時運用版 - 対応範囲・
 // 既知の非互換点はengine/pine_generator.pyのモジュールdocstring/コメントを
 // 参照。
@@ -4311,9 +3629,9 @@ prevClosedTrades := strategy.closedtrades
 plotshape(longSignal, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny)
 plotshape(shortSignal, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny)
 if longSignal and not shortSignal
-    alert("StrategyLab: " + syminfo.ticker + " long signal", alert.freq_once_per_bar_close)
+    alert("StrategyX: " + syminfo.ticker + " long signal", alert.freq_once_per_bar_close)
 if shortSignal and not longSignal
-    alert("StrategyLab: " + syminfo.ticker + " short signal", alert.freq_once_per_bar_close)
+    alert("StrategyX: " + syminfo.ticker + " short signal", alert.freq_once_per_bar_close)
 '''
 
     direction = str(p.get("direction", "short")).lower()
@@ -4331,7 +3649,7 @@ if shortSignal and not longSignal
         )
     signal_expr = translator.translate(condition_tree)
 
-    title = strategy_title or f"StrategyLab {symbol} {timeframe} (condition_tree, {direction})"
+    title = strategy_title or f"StrategyX {symbol} {timeframe} (condition_tree, {direction})"
     strategy_side = "strategy.long" if direction == "long" else "strategy.short"
     label = "Long" if direction == "long" else "Short"
 
@@ -4380,7 +3698,7 @@ if shortSignal and not longSignal
         )
 
     return f'''//@version=5
-// Auto-generated by Strategy Lab (engine/pine_generator.py::generate_pine_script_from_condition_tree)
+// Auto-generated by StrategyX (engine/pine_generator.py::generate_pine_script_from_condition_tree)
 // condition_tree(AND/OR/NOT)から生成 - 対応範囲・既知の非互換点は
 // engine/pine_generator.pyのモジュールdocstring/コメントを参照。
 // Source: {symbol} {timeframe}, direction={direction}
@@ -4465,7 +3783,7 @@ prevClosedTrades := strategy.closedtrades
 
 plotshape(candidateSignal, title="Signal", style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny)
 if candidateSignal
-    alert("StrategyLab: " + syminfo.ticker + " {direction} signal", alert.freq_once_per_bar_close)
+    alert("StrategyX: " + syminfo.ticker + " {direction} signal", alert.freq_once_per_bar_close)
 '''
 
 
@@ -4488,7 +3806,7 @@ def generate_pine_script(
             p, symbol=symbol, timeframe=timeframe, strategy_title=strategy_title
         )
 
-    title = strategy_title or f"StrategyLab {symbol} {timeframe} ({p.get('entry_trigger', 'breakout')})"
+    title = strategy_title or f"StrategyX {symbol} {timeframe} ({p.get('entry_trigger', 'breakout')})"
 
     trigger_expr, filter_exprs = _build_signal_expressions(p)
     # Each filter expression is parenthesized before joining - several (e.g.
@@ -4508,13 +3826,13 @@ def generate_pine_script(
     inputs_block = _render_inputs(p)
 
     return f'''//@version=5
-// Auto-generated by Strategy Lab (engine/pine_generator.py) from a
+// Auto-generated by StrategyX (engine/pine_generator.py) from a
 // backtested params dict - see that module's docstring for the known,
 // deliberate departures from exact parity with the Python backtest
 // (daily-level session boundary, Bollinger stdev bias, SMC Tier 3
 // approximations, weekend/daily-exit vs SL/TP same-bar priority).
 // Source: {symbol} {timeframe}, entry_trigger="{p.get('entry_trigger', 'breakout')}"
-// Short-only strategy (matches Strategy Lab's engine/backtest_engine.py convention).
+// Short-only strategy (matches StrategyX's engine/backtest_engine.py convention).
 strategy("{title}", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false)
 
 // ---- Inputs (defaults = the exact backtested values, all live-adjustable) ----
@@ -4591,5 +3909,5 @@ wasInPosition := strategy.position_size != 0
 // ---- Visuals + alert (use TradingView's "Any alert() function call" option) ----
 plotshape(candidateSignal, title="Signal", style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny)
 if candidateSignal
-    alert("StrategyLab: " + syminfo.ticker + " short signal", alert.freq_once_per_bar_close)
+    alert("StrategyX: " + syminfo.ticker + " short signal", alert.freq_once_per_bar_close)
 '''

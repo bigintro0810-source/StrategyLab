@@ -1,6 +1,6 @@
 """Locks in known-good results for the new direction="long" + condition_tree path
 (engine/conditions.py + engine/backtest_engine.py's direction-aware entry/exit
-mechanics), added 2026-07-05 per the Strategy Lab project charter (long/short must be
+mechanics), added 2026-07-05 per the StrategyX project charter (long/short must be
 freely switchable, no hardcoded short-only design).
 
 Not pytest-based (matches this project's other tests/test_*.py convention) - run

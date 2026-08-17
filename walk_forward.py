@@ -140,7 +140,7 @@ def run_optimization(df: pd.DataFrame, params_list: list[dict]) -> pd.DataFrame:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Strategy Lab walk forward")
+    parser = argparse.ArgumentParser(description="StrategyX walk forward")
 
     parser.add_argument(
         "--symbol",

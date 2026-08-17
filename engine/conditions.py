@@ -1,6 +1,6 @@
 """Generic, composable condition engine (AND/OR/NOT trees over indicator comparisons).
 
-Per the project charter (Strategy Lab プロジェクト仕様, 2026-07-05): entry conditions
+Per the project charter (StrategyX プロジェクト仕様, 2026-07-05): entry conditions
 must compose via AND/OR/NOT with no limit on how many, and must not hardcode any
 particular indicator's "direction" (e.g. RSI>70 does NOT inherently mean "short bias" -
 that's a choice the condition's operator/value make explicit, independent of which
@@ -80,7 +80,6 @@ from engine.smc_indicators import (
 import engine.candlestick_patterns as _cdl
 import engine.chart_patterns as _chart
 import engine.derived_indicators as _derived
-import engine.harmonic_patterns as _harmonic
 import engine.heikin_ashi as _ha
 from engine.data_loader import find_data_file, load_price_data
 
@@ -157,7 +156,7 @@ def _donchian_mid(df: pd.DataFrame, length: int = 20) -> np.ndarray:
 # ボリンジャーバンドのSource選択用 - close固定だったのをTradingView同様
 # open/high/low/hl2(Median Price)/hlc3(Typical Price)/ohlc4(Average Price)
 # へも切り替えられるようにする(ユーザー要望: レビューNo.14)。他の指標
-# (EMA/SMA/RSI等)は依然close固定のまま - Strategy Lab全体でSource選択に
+# (EMA/SMA/RSI等)は依然close固定のまま - StrategyX全体でSource選択に
 # 対応するかは別途検討事項(ボリンジャーバンドのみ先行対応)。
 _PRICE_SOURCES: dict[str, Any] = {
     "close": lambda df: df["close"],
@@ -788,28 +787,91 @@ INDICATOR_REGISTRY.update({
 # Classic multi-swing chart patterns (engine/chart_patterns.py) - unlike
 # every other function in this registry, these take (high, low, close, ...)
 # directly rather than the whole df, so each needs a thin unpacking lambda.
+# 2026-08-07、ユーザー判断でダブルトップ/ボトム(形状判定版)以外のチャート
+# パターンは全て削除した - engine/chart_patterns.pyのモジュール冒頭コメント
+# 参照(今後はB方式+共通管理仕様に沿って改めて追加していく)。
 INDICATOR_REGISTRY.update({
     "double_top_shape": lambda df, **p: _chart.double_top_shape(df["high"], df["low"], df["close"], **p),
     "double_bottom_shape": lambda df, **p: _chart.double_bottom_shape(df["high"], df["low"], df["close"], **p),
+    # トリプルトップ/ボトム(形状判定版、B方式実装。
+    # docs/pattern_spec_triple_top_bottom_shape.md) - ダブル(形状判定版)を
+    # 土台に5点構成へ拡張。既存のtriple_top/triple_bottom(多段ZigZag方式)
+    # とは無関係の別indicator。
     "triple_top_shape": lambda df, **p: _chart.triple_top_shape(df["high"], df["low"], df["close"], **p),
     "triple_bottom_shape": lambda df, **p: _chart.triple_bottom_shape(df["high"], df["low"], df["close"], **p),
-    "triple_top_breakdown": lambda df, **p: _chart.triple_top_breakdown(df["high"], df["low"], df["close"], **p),
-    "triple_bottom_breakout": lambda df, **p: _chart.triple_bottom_breakout(df["high"], df["low"], df["close"], **p),
-    "head_and_shoulders_breakdown": lambda df, **p: _chart.head_and_shoulders_breakdown(df["high"], df["low"], df["close"], **p),
-    "inverse_head_and_shoulders_breakout": lambda df, **p: _chart.inverse_head_and_shoulders_breakout(df["high"], df["low"], df["close"], **p),
-    "ascending_triangle_breakout": lambda df, **p: _chart.ascending_triangle_breakout(df["high"], df["low"], df["close"], **p),
-    "descending_triangle_breakdown": lambda df, **p: _chart.descending_triangle_breakdown(df["high"], df["low"], df["close"], **p),
-    "symmetrical_triangle_breakout_bullish": lambda df, **p: _chart.symmetrical_triangle_breakout_bullish(df["high"], df["low"], df["close"], **p),
-    "symmetrical_triangle_breakout_bearish": lambda df, **p: _chart.symmetrical_triangle_breakout_bearish(df["high"], df["low"], df["close"], **p),
-    "rising_wedge_breakdown": lambda df, **p: _chart.rising_wedge_breakdown(df["high"], df["low"], df["close"], **p),
-    "falling_wedge_breakout": lambda df, **p: _chart.falling_wedge_breakout(df["high"], df["low"], df["close"], **p),
-    "bull_flag_breakout": lambda df, **p: _chart.bull_flag_breakout(df["high"], df["low"], df["close"], **p),
-    "bear_flag_breakdown": lambda df, **p: _chart.bear_flag_breakdown(df["high"], df["low"], df["close"], **p),
-    "bullish_pennant_breakout": lambda df, **p: _chart.bullish_pennant_breakout(df["high"], df["low"], df["close"], **p),
-    "bearish_pennant_breakdown": lambda df, **p: _chart.bearish_pennant_breakdown(df["high"], df["low"], df["close"], **p),
-    "in_range_box": lambda df, **p: _chart.in_range_box(df["high"], df["low"], df["close"], **p),
-    "range_box_breakout_bullish": lambda df, **p: _chart.range_box_breakout_bullish(df["high"], df["low"], df["close"], **p),
-    "range_box_breakdown_bearish": lambda df, **p: _chart.range_box_breakdown_bearish(df["high"], df["low"], df["close"], **p),
+    # ヘッド・アンド・ショルダーズ(形状判定版、B方式実装。
+    # docs/pattern_spec_head_and_shoulders_shape.md) - トリプルSTの拡張。
+    # 既存のhead_and_shoulders(多段ZigZag方式)とは無関係の別indicator。
+    "head_and_shoulders_shape": lambda df, **p: _chart.head_and_shoulders_shape(df["high"], df["low"], df["close"], **p),
+    "inverse_head_and_shoulders_shape": lambda df, **p: _chart.inverse_head_and_shoulders_shape(df["high"], df["low"], df["close"], **p),
+    # チャネル系(形状判定版、B方式実装。
+    # docs/pattern_spec_channel_patterns_shape.md) - レクタングル/トライ
+    # アングル/ウェッジ/ペナント/フラッグ、共通コアを10関数で共有。
+    # 既存のACP(13種)/FNP(4種)とは無関係の別indicator。
+    "ascending_box_shape": lambda df, **p: _chart.ascending_box_shape(df["high"], df["low"], df["close"], **p),
+    "descending_box_shape": lambda df, **p: _chart.descending_box_shape(df["high"], df["low"], df["close"], **p),
+    # 旧版(4点固定・共通チャネルコア方式、2026-08-15にv2へ全面置き換えた際
+    # 比較用に温存)。
+    "ascending_box_shape_legacy": lambda df, **p: _chart.ascending_box_shape_legacy(df["high"], df["low"], df["close"], **p),
+    "descending_box_shape_legacy": lambda df, **p: _chart.descending_box_shape_legacy(df["high"], df["low"], df["close"], **p),
+    "ascending_triangle_shape": lambda df, **p: _chart.ascending_triangle_shape(df["high"], df["low"], df["close"], **p),
+    "descending_triangle_shape": lambda df, **p: _chart.descending_triangle_shape(df["high"], df["low"], df["close"], **p),
+    # 旧版(4点固定・共通チャネルコア方式、2026-08-18にv2へ全面置き換えた際
+    # 比較用に温存)。
+    "ascending_triangle_shape_legacy": lambda df, **p: _chart.ascending_triangle_shape_legacy(df["high"], df["low"], df["close"], **p),
+    "descending_triangle_shape_legacy": lambda df, **p: _chart.descending_triangle_shape_legacy(df["high"], df["low"], df["close"], **p),
+    "rising_wedge_shape": lambda df, **p: _chart.rising_wedge_shape(df["high"], df["low"], df["close"], **p),
+    "rising_wedge_shape_x": lambda df, **p: _chart.rising_wedge_shape_x(df["high"], df["low"], df["close"], **p),
+    "falling_wedge_shape": lambda df, **p: _chart.falling_wedge_shape(df["high"], df["low"], df["close"], **p),
+    "bullish_pennant_shape": lambda df, **p: _chart.bullish_pennant_shape(df["high"], df["low"], df["close"], **p),
+    "bearish_pennant_shape": lambda df, **p: _chart.bearish_pennant_shape(df["high"], df["low"], df["close"], **p),
+    "bullish_flag_shape": lambda df, **p: _chart.bullish_flag_shape(df["high"], df["low"], df["close"], **p),
+    "bearish_flag_shape": lambda df, **p: _chart.bearish_flag_shape(df["high"], df["low"], df["close"], **p),
+    # ZigZag方式(B方式実装、docs/pattern_spec_double_top_bottom_zigzag.md)。
+    # 上の形状判定版とは完全に独立した別indicator。
+    "double_top_zigzag": lambda df, **p: _chart.double_top_zigzag(df["high"], df["low"], df["close"], **p),
+    "double_bottom_zigzag": lambda df, **p: _chart.double_bottom_zigzag(df["high"], df["low"], df["close"], **p),
+    # 多段ZigZag方式(B方式実装、docs/pattern_spec_reversal_chart_patterns_
+    # recursive.md)。6種類とも共通の多段ZigZagから同時に検出される。
+    "triple_top": lambda df, **p: _chart.triple_top(df["high"], df["low"], df["close"], **p),
+    "triple_bottom": lambda df, **p: _chart.triple_bottom(df["high"], df["low"], df["close"], **p),
+    "cup_and_handle": lambda df, **p: _chart.cup_and_handle(df["high"], df["low"], df["close"], **p),
+    "inverted_cup_and_handle": lambda df, **p: _chart.inverted_cup_and_handle(df["high"], df["low"], df["close"], **p),
+    "head_and_shoulders": lambda df, **p: _chart.head_and_shoulders(df["high"], df["low"], df["close"], **p),
+    "inverse_head_and_shoulders": lambda df, **p: _chart.inverse_head_and_shoulders(df["high"], df["low"], df["close"], **p),
+    # ABCDパターン(投影型、B方式実装。docs/pattern_spec_abcd_projection.md)。
+    "abcd_bullish": lambda df, **p: _chart.abcd_bullish(df["high"], df["low"], df["close"], **p),
+    "abcd_bearish": lambda df, **p: _chart.abcd_bearish(df["high"], df["low"], df["close"], **p),
+    # ABCパターン(多段ZigZag、B方式実装。docs/pattern_spec_abc_recursive.md)。
+    "abc_bullish": lambda df, **p: _chart.abc_bullish(df["high"], df["low"], df["close"], **p),
+    "abc_bearish": lambda df, **p: _chart.abc_bearish(df["high"], df["low"], df["close"], **p),
+    # エリオット推進波(多段ZigZag、B方式実装。docs/pattern_spec_motive_wave.md)。
+    # 参考元は収束/拡大ダイアゴナルも分類するが、そちらは参考元の条件が
+    # 構造上決して成立しないため公開指標にしていない(仕様書6.6)。
+    "impulse_wave_bullish": lambda df, **p: _chart.impulse_wave_bullish(df["high"], df["low"], df["close"], **p),
+    "impulse_wave_bearish": lambda df, **p: _chart.impulse_wave_bearish(df["high"], df["low"], df["close"], **p),
+    # フラッグ/ペナント(4本のZigZag、B方式実装。docs/pattern_spec_flags_pennants.md)。
+    # 実体の突き抜け判定に始値・終値も使うため、始値も渡す。
+    "bullish_flag": lambda df, **p: _chart.bullish_flag(df["open"], df["high"], df["low"], df["close"], **p),
+    "bearish_flag": lambda df, **p: _chart.bearish_flag(df["open"], df["high"], df["low"], df["close"], **p),
+    "bullish_pennant": lambda df, **p: _chart.bullish_pennant(df["open"], df["high"], df["low"], df["close"], **p),
+    "bearish_pennant": lambda df, **p: _chart.bearish_pennant(df["open"], df["high"], df["low"], df["close"], **p),
+    # チャネル/ウェッジ/トライアングル13種(4本のZigZag、B方式実装。
+    # docs/pattern_spec_auto_chart_patterns.md)。フラッグ/ペナントとは
+    # 検出条件が違うので別実装(仕様書0.4)。
+    "ascending_channel": lambda df, **p: _chart.ascending_channel(df["open"], df["high"], df["low"], df["close"], **p),
+    "descending_channel": lambda df, **p: _chart.descending_channel(df["open"], df["high"], df["low"], df["close"], **p),
+    "ranging_channel": lambda df, **p: _chart.ranging_channel(df["open"], df["high"], df["low"], df["close"], **p),
+    "rising_wedge_expanding": lambda df, **p: _chart.rising_wedge_expanding(df["open"], df["high"], df["low"], df["close"], **p),
+    "falling_wedge_expanding": lambda df, **p: _chart.falling_wedge_expanding(df["open"], df["high"], df["low"], df["close"], **p),
+    "diverging_triangle": lambda df, **p: _chart.diverging_triangle(df["open"], df["high"], df["low"], df["close"], **p),
+    "ascending_triangle_expanding": lambda df, **p: _chart.ascending_triangle_expanding(df["open"], df["high"], df["low"], df["close"], **p),
+    "descending_triangle_expanding": lambda df, **p: _chart.descending_triangle_expanding(df["open"], df["high"], df["low"], df["close"], **p),
+    "rising_wedge_contracting": lambda df, **p: _chart.rising_wedge_contracting(df["open"], df["high"], df["low"], df["close"], **p),
+    "falling_wedge_contracting": lambda df, **p: _chart.falling_wedge_contracting(df["open"], df["high"], df["low"], df["close"], **p),
+    "converging_triangle": lambda df, **p: _chart.converging_triangle(df["open"], df["high"], df["low"], df["close"], **p),
+    "descending_triangle_contracting": lambda df, **p: _chart.descending_triangle_contracting(df["open"], df["high"], df["low"], df["close"], **p),
+    "ascending_triangle_contracting": lambda df, **p: _chart.ascending_triangle_contracting(df["open"], df["high"], df["low"], df["close"], **p),
 })
 
 # 2026-07-08追加(3巡目): 定番オシレーター/トレンド系 + ボリューム系 +
@@ -889,52 +951,17 @@ INDICATOR_REGISTRY.update({
     "ha_bearish": _ha.ha_bearish,
     "ha_strong_bullish": _ha.ha_strong_bullish,
     "ha_strong_bearish": _ha.ha_strong_bearish,
-    # Harmonic patterns (engine/harmonic_patterns.py) - take (high, low)
-    # directly rather than the whole df, like engine/chart_patterns.py's
-    # functions do, so each needs a thin unpacking lambda.
-    "gartley_bullish": lambda df, **p: _harmonic.gartley_bullish(df["high"], df["low"], **p),
-    "gartley_bearish": lambda df, **p: _harmonic.gartley_bearish(df["high"], df["low"], **p),
-    "bat_bullish": lambda df, **p: _harmonic.bat_bullish(df["high"], df["low"], **p),
-    "bat_bearish": lambda df, **p: _harmonic.bat_bearish(df["high"], df["low"], **p),
-    "butterfly_bullish": lambda df, **p: _harmonic.butterfly_bullish(df["high"], df["low"], **p),
-    "butterfly_bearish": lambda df, **p: _harmonic.butterfly_bearish(df["high"], df["low"], **p),
-    "crab_bullish": lambda df, **p: _harmonic.crab_bullish(df["high"], df["low"], **p),
-    "crab_bearish": lambda df, **p: _harmonic.crab_bearish(df["high"], df["low"], **p),
-    "ab_cd_bullish": lambda df, **p: _harmonic.ab_cd_bullish(df["high"], df["low"], **p),
-    "ab_cd_bearish": lambda df, **p: _harmonic.ab_cd_bearish(df["high"], df["low"], **p),
-    "three_drives_bullish": lambda df, **p: _harmonic.three_drives_bullish(df["high"], df["low"], **p),
-    "three_drives_bearish": lambda df, **p: _harmonic.three_drives_bearish(df["high"], df["low"], **p),
 })
 
-# 2026-07-08追加(4巡目): トレンドライン/平行チャネル/フェイクブレイク
-# (engine/chart_patterns.py) + NR4/NR7/出来高クライマックス
-# (engine/derived_indicators.py)
+# 2026-07-08追加(4巡目): NR4/NR7/出来高クライマックス
+# (engine/derived_indicators.py)。同時に追加していたトレンドライン/平行
+# チャネル/フェイクブレイクは2026-08-07に削除(上のチャートパターンの
+# コメント参照)。
 INDICATOR_REGISTRY.update({
-    "uptrend_line_break": lambda df, **p: _chart.uptrend_line_break(df["high"], df["low"], df["close"], **p),
-    "downtrend_line_break": lambda df, **p: _chart.downtrend_line_break(df["high"], df["low"], df["close"], **p),
-    "ascending_channel_break": lambda df, **p: _chart.ascending_channel_break(df["high"], df["low"], df["close"], **p),
-    "descending_channel_break": lambda df, **p: _chart.descending_channel_break(df["high"], df["low"], df["close"], **p),
-    "false_breakout_bullish_reversal": lambda df, **p: _chart.false_breakout_bullish_reversal(df["high"], df["low"], df["close"], **p),
-    "false_breakout_bearish_reversal": lambda df, **p: _chart.false_breakout_bearish_reversal(df["high"], df["low"], df["close"], **p),
     "nr4": _derived.nr4,
     "nr7": _derived.nr7,
     "volume_climax_bullish": _derived.volume_climax_bullish,
     "volume_climax_bearish": _derived.volume_climax_bearish,
-})
-
-# 2026-07-08追加(5巡目、HFM記事の未実装分): ソーサートップ/ボトム、上昇/下降
-# レクタングル、ブロードニングフォーメーション、ダイヤモンドフォーメーション、
-# カップウィズハンドル (engine/chart_patterns.py)
-INDICATOR_REGISTRY.update({
-    "saucer_top": lambda df, **p: _chart.saucer_top(df["high"], df["low"], df["close"], **p),
-    "saucer_bottom": lambda df, **p: _chart.saucer_bottom(df["high"], df["low"], df["close"], **p),
-    "ascending_rectangle_breakout": lambda df, **p: _chart.ascending_rectangle_breakout(df["high"], df["low"], df["close"], **p),
-    "descending_rectangle_breakdown": lambda df, **p: _chart.descending_rectangle_breakdown(df["high"], df["low"], df["close"], **p),
-    "broadening_formation_breakout_bullish": lambda df, **p: _chart.broadening_formation_breakout_bullish(df["high"], df["low"], df["close"], **p),
-    "broadening_formation_breakout_bearish": lambda df, **p: _chart.broadening_formation_breakout_bearish(df["high"], df["low"], df["close"], **p),
-    "diamond_formation_breakout_bullish": lambda df, **p: _chart.diamond_formation_breakout_bullish(df["high"], df["low"], df["close"], **p),
-    "diamond_formation_breakout_bearish": lambda df, **p: _chart.diamond_formation_breakout_bearish(df["high"], df["low"], df["close"], **p),
-    "cup_with_handle_breakout": lambda df, **p: _chart.cup_with_handle_breakout(df["high"], df["low"], df["close"], **p),
 })
 
 # 2026-07-19追加(レビュー対応、未実装だった指標): Bull Bear Power/Chaikin
@@ -980,6 +1007,20 @@ INDICATOR_REGISTRY.update({
         df["open"], df["high"], df["low"], df["close"]
     ).to_numpy(dtype=float),
 })
+
+# ユーザーが作ったカスタムパターン(engine/custom_patterns.py)。
+# バックテストは api_server とは別プロセスで走るため、ここで import 時に
+# 読み込まないとバックテスト側から一切見えなくなる。読み込みに失敗した
+# ものはスタブとして登録され、実際に使われた時だけ日本語で理由を出して
+# 止まる(1件壊れただけでアプリ全体が起動しなくなるのを避けるため)。
+try:
+    from engine import custom_patterns as _custom_patterns
+
+    INDICATOR_REGISTRY.update(_custom_patterns.registry_entries())
+except Exception as _custom_exc:  # pragma: no cover - 保険
+    import sys as _sys
+
+    print(f"[custom_patterns] 読み込みに失敗しました: {_custom_exc}", file=_sys.stderr)
 
 _OPERATORS = {">", "<", ">=", "<=", "==", "crosses_above", "crosses_below"}
 _OFFSET_MODES = {"pips", "price_pct", "atr_pct"}

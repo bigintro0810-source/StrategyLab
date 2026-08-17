@@ -75,7 +75,7 @@ def main() -> None:
         params = entry["params"]
         symbol = entry.get("symbol", "USDJPY")
         timeframe = entry.get("timeframe", "15m")
-        title = f"StrategyLab {entry['name']}"
+        title = f"StrategyX {entry['name']}"
     elif args.ranking_csv:
         df = pd.read_csv(args.ranking_csv)
 

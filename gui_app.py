@@ -1,4 +1,4 @@
-"""Streamlit GUI for Strategy Lab (V4.0 GUI化).
+"""Streamlit GUI for StrategyX (V4.0 GUI化).
 
 Wraps the existing main.py CLI via subprocess rather than importing its
 run loop directly. main.py's optimization loop uses ProcessPoolExecutor,
@@ -28,8 +28,8 @@ from engine.conditions import Condition, ConditionGroup
 from engine.strategy_registry import get_strategy, list_strategies, update_strategy
 from main import resolve_output_dir
 
-st.set_page_config(page_title="Strategy Lab", layout="wide")
-st.title("Strategy Lab")
+st.set_page_config(page_title="StrategyX", layout="wide")
+st.title("StrategyX")
 
 with st.sidebar:
     st.warning(
